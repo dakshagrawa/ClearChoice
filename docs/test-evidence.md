@@ -22,7 +22,7 @@ unzip -Z1 ClearChoice-mvp-unpacked.zip | python3 -c "import sys; names=sys.stdin
 
 Observed results:
 
-- `npm test`: passed — 6 test files and 38 tests passed. This includes 13 detector tests, popup/panel/storage/message tests, and 15 package-contract tests.
+- Before the manual fixture server was started, `npm test` passed — 6 test files and 38 tests passed. This historical result includes 13 detector tests, popup/panel/storage/message tests, and 15 package-contract tests.
 - `npm run lint`: passed — `eslint .` exited `0` with no diagnostics.
 - `npm run build`: passed — TypeScript completed, Vite emitted `dist/`, and `npm run verify:package` reported `artifact policy check passed (static package policy only; does not prove all runtime behavior)`.
 - `npm run e2e`: passed — 1 Playwright test passed. It starts a self-created `127.0.0.1` fixture, loads `dist/` as an unpacked Chromium extension, clicks **Analyze**, verifies two displayed findings, dismisses the panel, reloads the fixture, confirms dismissal persistence, and asserts no observed popup/fixture console or page errors.
