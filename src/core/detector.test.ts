@@ -54,6 +54,15 @@ describe('detectRecurringCharges', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]?.evidence).toBe('$12 per month');
   });
+
+  it('keeps the most specific recurring signal when its ancestor has unrelated visible text', () => {
+    const findings = detectRecurringCharges(root(
+      '<div><section>$12 per month</section><label><input checked type="checkbox"> Protection $5</label></div>',
+    ));
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.evidence).toBe('$12 per month');
+  });
 });
 
 describe('detectPreselectedAddons', () => {
