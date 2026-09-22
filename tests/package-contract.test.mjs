@@ -36,11 +36,13 @@ function verify(manifest) {
   }
 }
 
-test('package verifier accepts only the safe MV3 manifest contract', () => {
+test('package verifier accepts the safe MV3 manifest with optional HTTP hosts', () => {
   const safe = verify(safeManifest);
   expect(safe.status, safe.stderr).toBe(0);
   expect(safe.stdout).toBe('manifest contract passed\n');
+});
 
+test('package verifier rejects unsafe MV3 manifest capabilities', () => {
   for (const [label, manifest] of [
     ['all URLs', { ...safeManifest, host_permissions: ['<all_urls>'] }],
     ['tabs', { ...safeManifest, permissions: [...safeManifest.permissions, 'tabs'] }],
@@ -51,4 +53,28 @@ test('package verifier accepts only the safe MV3 manifest contract', () => {
     const result = verify(manifest);
     expect(result.status, `${label} manifest unexpectedly passed`).not.toBe(0);
   }
+});
+
+test('package verifier rejects background service workers', () => {
+  const result = verify({ ...safeManifest, background: { service_worker: 'worker.js' } });
+
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('background.service_worker is not allowed');
+});
+
+test('package verifier rejects remote executable URLs', () => {
+  const result = verify({
+    ...safeManifest,
+    content_scripts: [{ matches: ['https://example.test/*'], js: ['https://example.test/worker.js'] }],
+  });
+
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('remote executable URL');
+});
+
+test.each(['api_key', 'apiKey', 'token', 'secret', 'password'])('package verifier rejects %s manifest keys', (key) => {
+  const result = verify({ ...safeManifest, [key]: 'not-a-secret' });
+
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain(`manifest key ${key} is not allowed`);
 });
