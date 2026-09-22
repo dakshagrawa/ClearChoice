@@ -27,7 +27,7 @@ Findings are heuristic notices, not facts or advice. See [PRIVACY.md](PRIVACY.md
 1. Run `npm ci` and `npm run build` from the repository root.
 2. In terminal A, run `npm run serve:fixtures` and leave it running.
 3. In Chrome, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `~/ClearChoice/dist`.
-4. In terminal or browser B, visit `http://127.0.0.1:4173/checkout`. For a private Tailnet demo, put one exact HTTP Tailnet origin in `.demo-origin.local`, run `npm run build:demo`, and load `~/ClearChoice/demo-dist` instead.
+4. In terminal or browser B, visit one controlled scenario: `http://127.0.0.1:4173/checkout/clean`, `/checkout/recurring`, `/checkout/addon`, or `/checkout/mixed`. For a private Tailnet demo, put one exact HTTP Tailnet origin in `.demo-origin.local`, run `npm run build:demo`, and load `~/ClearChoice/demo-dist` instead.
 5. Open the ClearChoice extension popup and click **Analyze**.
 6. Stop the local mock-checkout server with **Ctrl+C** in terminal A when finished.
 

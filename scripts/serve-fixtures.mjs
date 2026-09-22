@@ -2,20 +2,47 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-const fixturePath = fileURLToPath(new globalThis.URL('../fixtures/mock-checkout.html', import.meta.url));
-const checkoutFixture = await readFile(fixturePath, 'utf8');
+const ROUTES = new Map([
+  ['/checkout/clean', 'clean-checkout.html'],
+  ['/checkout/recurring', 'recurring-checkout.html'],
+  ['/checkout/addon', 'paid-addon-checkout.html'],
+  ['/checkout/mixed', 'mixed-checkout.html'],
+]);
+
+function configuredPort(value) {
+  if (value === undefined) return 4173;
+  if (!/^(?:0|[1-9]\d{0,4})$/.test(value)) throw new Error('PORT must be an integer from 0 through 65535.');
+  const port = Number(value);
+  if (port > 65535) throw new Error('PORT must be an integer from 0 through 65535.');
+  return port;
+}
+
+const fixtures = new Map(await Promise.all(
+  Array.from(ROUTES, async ([route, filename]) => [
+    route,
+    await readFile(fileURLToPath(new globalThis.URL(`../fixtures/${filename}`, import.meta.url)), 'utf8'),
+  ]),
+));
 
 const server = createServer((request, response) => {
-  if (request.method !== 'GET' || request.url !== '/checkout') {
+  const fixture = request.method === 'GET' ? fixtures.get(request.url) : undefined;
+  if (fixture === undefined) {
     response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     response.end('Not found');
     return;
   }
 
   response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-  response.end(checkoutFixture);
+  response.end(fixture);
 });
 
-server.listen(4173, '127.0.0.1', () => {
-  console.log('Mock checkout: http://127.0.0.1:4173/checkout');
+server.once('error', (error) => {
+  console.error(error.message);
+  process.exitCode = 1;
+});
+
+server.listen(configuredPort(process.env.PORT), '127.0.0.1', () => {
+  const address = server.address();
+  if (!address || typeof address === 'string') throw new Error('Fixture server did not expose a TCP port.');
+  console.log(`Mock checkout: http://127.0.0.1:${address.port}`);
 });
