@@ -22,14 +22,16 @@ This MVP does **not**:
 
 Findings are heuristic notices, not facts or advice. See [PRIVACY.md](PRIVACY.md) and [docs/threat-model.md](docs/threat-model.md).
 
-## Load locally in Chromium
+## Manual test in Chromium
 
-1. Run `npm ci`.
-2. Run `npm run build`.
-3. In Chromium, open `chrome://extensions`.
-4. Enable **Developer mode**.
-5. Choose **Load unpacked** and select this repository's `dist/` directory.
-6. Open a mock checkout at `http://127.0.0.1/...`, open the ClearChoice popup, and click **Analyze**.
+1. Run `npm ci` and `npm run build` from the repository root.
+2. In terminal A, run `npm run serve:fixtures` and leave it running.
+3. In Chrome, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `~/ClearChoice/dist`.
+4. In terminal or browser B, visit `http://127.0.0.1:4173/checkout`.
+5. Open the ClearChoice extension popup and click **Analyze**.
+6. Stop the local mock-checkout server with **Ctrl+C** in terminal A when finished.
+
+The current content script is only registered for `127.0.0.1`; it does not run on real checkout sites.
 
 `dist/` is a generated local unpacked-extension directory; it is not a store package.
 

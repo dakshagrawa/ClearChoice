@@ -8,7 +8,7 @@
     "test": "vitest",
     "build": "tsc --noEmit && npm run build:assets && npm run verify:package",
     "build:assets": "vite build",
-    "serve:fixtures": "vite --host 127.0.0.1 --port 4173",
+    "serve:fixtures": "node scripts/serve-fixtures.mjs",
     "verify:package": "node scripts/verify-package.mjs --dist dist",
     "package:unpacked": "npm run build && node scripts/package-unpacked.mjs",
     "e2e": "playwright test"
