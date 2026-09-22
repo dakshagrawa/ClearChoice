@@ -4,7 +4,8 @@ import { join } from 'node:path';
 const allowedPermissions = ['activeTab', 'scripting', 'storage'];
 const secretManifestKeys = new Set(['api_key', 'apiKey', 'token', 'secret', 'password']);
 const executableManifestKeys = new Set(['service_worker', 'js']);
-const runtimeAssetExtension = /\.(?:css|html|js|json)$/i;
+// Extension runtime modules may be emitted as .mjs or .cjs as well as .js.
+const runtimeAssetExtension = /\.(?:css|html|js|mjs|cjs|json)$/i;
 const forbiddenArtifactPatterns = [
   ['network API', /\b(?:fetch|XMLHttpRequest|WebSocket)\b/],
   ['remote executable URL', /(?:\b(?:import|importScripts)\s*\(?\s*["']https?:\/\/|<script\b[^>]*\bsrc\s*=\s*["']https?:\/\/|https?:\/\/[^\s"'`<>]+\.(?:m?js|cjs)(?:[?#][^\s"'`<>]*)?)/i],

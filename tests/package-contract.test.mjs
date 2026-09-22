@@ -49,7 +49,7 @@ function runtimeAssetContents(directory) {
     for (const entry of readdirSync(path, { withFileTypes: true })) {
       const entryPath = join(path, entry.name);
       if (entry.isDirectory()) visit(entryPath);
-      else if (/\.(?:css|html|js|json)$/i.test(entry.name)) files.push(readFileSync(entryPath, 'utf8'));
+      else if (/\.(?:css|html|js|mjs|cjs|json)$/i.test(entry.name)) files.push(readFileSync(entryPath, 'utf8'));
     }
   };
 
