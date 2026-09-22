@@ -1,0 +1,1 @@
+ClearChoice v1 is a local, user-initiated mock-checkout research tool. It identifies possible recurring-charge language and preselected paid options from visible page evidence. It does not access real checkout sites, collect study data, transmit page data, change checkout controls, make legal determinations, or automate purchases/cancellations.

@@ -2,6 +2,10 @@
 
 This document records verification performed on the documented MVP working tree. It is evidence for the current local artifact, not a claim of production readiness or a security audit.
 
+## Baseline observation
+
+At the frozen baseline, `npm run lint`, `npm run build`, and `npm run e2e` pass. The full `npm test -- --run` suite currently fails because `tests/serve-fixtures.test.mjs` encounters `EADDRINUSE` on `127.0.0.1:4173` while the manual fixture server is running. This is an environment/parallelism defect slated for Task 2, not a passing claim.
+
 ## Commands and observed outcomes
 
 All commands were run from the repository root with `PATH="$HOME/.local/bin:$PATH"`.
