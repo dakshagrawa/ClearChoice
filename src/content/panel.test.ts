@@ -23,7 +23,7 @@ afterEach(() => {
   document.querySelector('[data-clearchoice-panel]')?.remove();
 });
 
-it('renders an accessible non-modal panel with exact detector evidence', () => {
+it('renders an accessible non-modal panel with auditable finding evidence and reason', () => {
   renderPanel(result, vi.fn());
 
   const panel = document.querySelector<HTMLElement>('aside[data-clearchoice-panel]');
@@ -34,10 +34,12 @@ it('renders an accessible non-modal panel with exact detector evidence', () => {
   expect(content?.textContent).toContain('Preselected paid option');
   expect(content?.textContent).toContain('This option is already selected and may add a cost. Review it before continuing.');
   expect(content?.textContent).toContain('Add protection for $5');
-  expect(content).toBeTruthy();
+  expect(content?.textContent).toContain('Why this was flagged');
+  expect(content?.textContent).toContain('It was already selected and describes a paid option.');
 
   const dismiss = panel?.shadowRoot?.querySelector<HTMLButtonElement>('button') ?? panel?.querySelector('button');
   expect(dismiss?.getAttribute('aria-label')).toBe('Dismiss ClearChoice findings');
+  expect(dismiss?.getAttribute('data-clearchoice-dismiss')).toBe('');
 });
 
 it('removes the panel through its dismiss button without touching checkout controls', () => {
@@ -56,4 +58,19 @@ it('removes the panel through its dismiss button without touching checkout contr
   expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
   expect(control.checked).toBe(true);
   control.remove();
+});
+
+it('dismisses only its own panel when Escape is pressed', () => {
+  const onDismiss = vi.fn();
+  const unrelated = document.createElement('aside');
+  unrelated.dataset.unrelatedPanel = '';
+  document.body.append(unrelated);
+
+  renderPanel(result, onDismiss);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+  expect(onDismiss).toHaveBeenCalledTimes(1);
+  expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
+  expect(document.querySelector('[data-unrelated-panel]')).toBe(unrelated);
+  unrelated.remove();
 });

@@ -28,6 +28,7 @@ describe('detectRecurringCharges', () => {
     expect(findings[0]).toMatchObject({
       kind: 'recurring-charge',
       severity: 'notice',
+      reason: 'price-cadence',
       title: 'Possible recurring charge',
       explanation:
         'This page includes language that may describe a charge that repeats. Check the schedule and amount before continuing.',
@@ -40,6 +41,22 @@ describe('detectRecurringCharges', () => {
 
     expect(findings).toHaveLength(1);
     expect(findings[0]?.evidence).toBe('Membership renews automatically every year.');
+    expect(findings[0]?.reason).toBe('renewal-language');
+  });
+
+  it('does not flag a one-time price without recurrence evidence', () => {
+    expect(detectRecurringCharges(root('<section>One-time purchase: $12</section>'))).toEqual([]);
+  });
+
+  it('reports bare subscription language as informational evidence', () => {
+    const findings = detectRecurringCharges(root('<section>Compare subscription options</section>'));
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      severity: 'info',
+      reason: 'subscription-language',
+      evidence: 'Compare subscription options',
+    });
   });
 
   it('excludes hidden recurring-charge text', () => {
@@ -63,6 +80,30 @@ describe('detectRecurringCharges', () => {
     expect(findings).toHaveLength(1);
     expect(findings[0]?.evidence).toBe('$12 per month');
   });
+
+  it('keeps sibling recurring controls as separate findings in DOM order', () => {
+    const findings = detectRecurringCharges(root(`
+      <form>
+        <label><input type="radio" name="plan"> Basic $4 per month</label>
+        <label><input type="radio" name="plan"> Plus $8 per month</label>
+      </form>
+    `));
+
+    expect(findings.map((finding) => finding.evidence)).toEqual([
+      'Basic $4 per month',
+      'Plus $8 per month',
+    ]);
+  });
+
+  it('uses deterministic IDs and no duplicate explanations for equivalent analysis', () => {
+    const html = '<section>Membership renews automatically every year.</section>';
+
+    const first = detectRecurringCharges(root(html));
+    const second = detectRecurringCharges(root(html));
+
+    expect(first.map((finding) => finding.id)).toEqual(second.map((finding) => finding.id));
+    expect(new Set(first.map((finding) => finding.explanation)).size).toBe(first.length);
+  });
 });
 
 describe('detectPreselectedAddons', () => {
@@ -73,6 +114,7 @@ describe('detectPreselectedAddons', () => {
     expect(findings[0]).toMatchObject({
       kind: 'preselected-addon',
       severity: 'notice',
+      reason: 'checked-paid-control',
       title: 'Preselected paid option',
       explanation: 'This option is already selected and may add a cost. Review it before continuing.',
       evidence: 'Add protection for $5',
@@ -116,5 +158,19 @@ describe('detectPreselectedAddons', () => {
     `));
 
     expect(findings).toEqual([]);
+  });
+
+  it('uses the exact paid control label as evidence', () => {
+    const findings = detectPreselectedAddons(root(`
+      <label for="protection">Add protection for $5</label>
+      <input id="protection" type="checkbox" checked>
+      <p>Other checkout copy is not evidence.</p>
+    `));
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({
+      evidence: 'Add protection for $5',
+      reason: 'checked-paid-control',
+    });
   });
 });
