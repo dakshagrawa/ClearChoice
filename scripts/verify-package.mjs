@@ -87,6 +87,18 @@ function validateManifest(manifest) {
   if (!Array.isArray(manifest.host_permissions) || manifest.host_permissions.length !== 0) {
     return 'host_permissions must be exactly []';
   }
+  if (Object.hasOwn(manifest, 'optional_host_permissions') &&
+    (!Array.isArray(manifest.optional_host_permissions) || manifest.optional_host_permissions.length !== 0)) {
+    return 'optional_host_permissions must be absent or exactly []';
+  }
+  const remoteExecutableError = findRemoteExecutableUrl(manifest);
+  if (remoteExecutableError) return remoteExecutableError;
+  if (!Array.isArray(manifest.content_scripts) || manifest.content_scripts.length !== 1 ||
+    manifest.content_scripts[0]?.matches?.length !== 1 ||
+    manifest.content_scripts[0].matches[0] !== 'http://127.0.0.1/*' ||
+    manifest.content_scripts[0]?.js?.length !== 1 || manifest.content_scripts[0].js[0] !== 'content.js') {
+    return 'content_scripts must contain only the local content.js fixture script';
+  }
   if (Object.hasOwn(manifest, 'optional_permissions') &&
     (!Array.isArray(manifest.optional_permissions) || manifest.optional_permissions.length !== 0)) {
     return 'optional_permissions must be absent or exactly []';

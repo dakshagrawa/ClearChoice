@@ -1,0 +1,44 @@
+:host {
+  all: initial;
+}
+
+.clearchoice-panel {
+  position: fixed;
+  z-index: 2147483647;
+  right: 16px;
+  bottom: 16px;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(70vh, 540px);
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 16px;
+  border: 1px solid #9a6700;
+  border-radius: 12px;
+  background: #fffdf5;
+  color: #24292f;
+  box-shadow: 0 8px 24px rgb(31 35 40 / 18%);
+  font: 14px/1.45 system-ui, sans-serif;
+}
+
+.clearchoice-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+h2, h3, p { margin: 0; }
+h2 { font-size: 16px; }
+h3 { font-size: 14px; margin-top: 14px; }
+p { margin-top: 6px; }
+button {
+  border: 1px solid #57606a;
+  border-radius: 6px;
+  background: #fff;
+  color: #24292f;
+  cursor: pointer;
+  padding: 5px 8px;
+  font: inherit;
+}
+button:focus-visible { outline: 3px solid #0969da; outline-offset: 2px; }
+.evidence { padding: 8px; border-left: 3px solid #9a6700; background: #fff8c5; }

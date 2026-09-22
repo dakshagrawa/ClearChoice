@@ -14,8 +14,8 @@ const safeManifest = {
   description: 'A local extension popup.',
   action: { default_popup: 'popup/index.html' },
   permissions: ['activeTab', 'scripting', 'storage'],
-  optional_host_permissions: ['http://*/*', 'https://*/*'],
   host_permissions: [],
+  content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['content.js'] }],
 };
 
 function verify(manifest) {
@@ -57,7 +57,7 @@ function runtimeAssetContents(directory) {
   return files.join('\n');
 }
 
-test('package verifier accepts the safe MV3 manifest with optional HTTP hosts', () => {
+test('package verifier accepts the safe MV3 manifest with the local content script', () => {
   const safe = verify(safeManifest);
   expect(safe.status, safe.stderr).toBe(0);
   expect(safe.stdout).toBe('manifest contract passed\n');
@@ -141,6 +141,8 @@ test('package verifier rejects unsafe MV3 manifest capabilities', () => {
     ['all URLs', { ...safeManifest, host_permissions: ['<all_urls>'] }],
     ['tabs', { ...safeManifest, permissions: [...safeManifest.permissions, 'tabs'] }],
     ['webRequest', { ...safeManifest, permissions: [...safeManifest.permissions, 'webRequest'] }],
+    ['optional host grant', { ...safeManifest, optional_host_permissions: ['https://example.test/*'] }],
+    ['non-local content script', { ...safeManifest, content_scripts: [{ matches: ['https://example.test/*'], js: ['content.js'] }] }],
     ['nonempty host permissions', { ...safeManifest, host_permissions: ['https://example.test/*'] }],
     ['externally connectable', { ...safeManifest, externally_connectable: { matches: ['https://example.test/*'] } }],
   ]) {

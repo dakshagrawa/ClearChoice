@@ -12,7 +12,13 @@ export default defineConfig({
     emptyOutDir: true,
     modulePreload: false,
     rollupOptions: {
-      input: resolve(projectRoot, 'src/popup/index.html'),
+      input: {
+        popup: resolve(projectRoot, 'src/popup/index.html'),
+        content: resolve(projectRoot, 'src/content/index.ts'),
+      },
+      output: {
+        entryFileNames: (chunk) => (chunk.name === 'content' ? 'content.js' : 'assets/[name]-[hash].js'),
+      },
     },
   },
   plugins: [

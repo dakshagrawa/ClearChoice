@@ -30,10 +30,11 @@ it('renders an accessible non-modal panel with exact detector evidence', () => {
   expect(panel).not.toBeNull();
   expect(panel?.getAttribute('role')).not.toBe('dialog');
   expect(panel?.getAttribute('aria-live')).toBe('polite');
-  expect(panel?.textContent).toContain('Preselected paid option');
-  expect(panel?.textContent).toContain('This option is already selected and may add a cost. Review it before continuing.');
-  expect(panel?.textContent).toContain('Add protection for $5');
-  expect(panel?.shadowRoot ?? panel).toBeTruthy();
+  const content = panel?.shadowRoot ?? panel;
+  expect(content?.textContent).toContain('Preselected paid option');
+  expect(content?.textContent).toContain('This option is already selected and may add a cost. Review it before continuing.');
+  expect(content?.textContent).toContain('Add protection for $5');
+  expect(content).toBeTruthy();
 
   const dismiss = panel?.shadowRoot?.querySelector<HTMLButtonElement>('button') ?? panel?.querySelector('button');
   expect(dismiss?.getAttribute('aria-label')).toBe('Dismiss ClearChoice findings');
