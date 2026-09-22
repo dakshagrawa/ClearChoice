@@ -1,10 +1,10 @@
 # ClearChoice MVP
 
-ClearChoice is an **unpublished, non-production Chromium Manifest V3 MVP**. It provides a local, user-initiated analysis of a mock checkout page served from `127.0.0.1`.
+ClearChoice is an **unpublished, non-production Chromium Manifest V3 MVP**. It provides a local, user-initiated analysis of mock checkout pages served from `127.0.0.1` or the user-specific Tailscale development bridge.
 
 ## Scope
 
-- The content script is registered only for `http://127.0.0.1/*`.
+- The content script is registered only for `http://127.0.0.1/*` and `http://penguin-brox.tailcd2f8e.ts.net:4173/*`. The latter is a user-specific Tailscale local development bridge for the mock demo, not product browsing scope.
 - Open the extension popup and click **Analyze** to request analysis of an available local mock-checkout tab.
 - The analysis reads visible page text and checked checkbox/radio labels, then displays informational findings in a dismissible panel.
 - The current rules are documented in [docs/rule-catalog.md](docs/rule-catalog.md).
@@ -27,11 +27,11 @@ Findings are heuristic notices, not facts or advice. See [PRIVACY.md](PRIVACY.md
 1. Run `npm ci` and `npm run build` from the repository root.
 2. In terminal A, run `npm run serve:fixtures` and leave it running.
 3. In Chrome, open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select `~/ClearChoice/dist`.
-4. In terminal or browser B, visit `http://127.0.0.1:4173/checkout`.
+4. In terminal or browser B, visit either `http://127.0.0.1:4173/checkout` or the user-specific Tailscale bridge `http://penguin-brox.tailcd2f8e.ts.net:4173/checkout` when accessing the same local mock server remotely.
 5. Open the ClearChoice extension popup and click **Analyze**.
 6. Stop the local mock-checkout server with **Ctrl+C** in terminal A when finished.
 
-The current content script is only registered for `127.0.0.1`; it does not run on real checkout sites.
+The content script is registered only for the local `127.0.0.1` mock target and the exact user-specific Tailscale mock-demo bridge; it does not run on real checkout sites or arbitrary network hosts.
 
 `dist/` is a generated local unpacked-extension directory; it is not a store package.
 

@@ -1,6 +1,6 @@
 # ClearChoice MVP Privacy Notice
 
-ClearChoice is a local, unpublished Chromium MVP for mock checkout pages at `http://127.0.0.1/*` only.
+ClearChoice is a local, unpublished Chromium MVP for mock checkout pages at `http://127.0.0.1/*` and the user-specific Tailscale development bridge `http://penguin-brox.tailcd2f8e.ts.net:4173/*`. The Tailscale origin is only a local development bridge for mock-demo testing, not product browsing scope.
 
 ## Data handling
 
@@ -14,7 +14,7 @@ If the user dismisses the findings panel, ClearChoice records that dismissal usi
 
 ## What ClearChoice does not access or do
 
-- It is registered only for `http://127.0.0.1/*`, not real checkout sites.
+- It is registered only for `http://127.0.0.1/*` and the exact user-specific Tailscale mock-demo bridge `http://penguin-brox.tailcd2f8e.ts.net:4173/*`, not real checkout sites or arbitrary network hosts.
 - It does not access accounts or account credentials.
 - It does not access, collect, or act on payment data.
 - It does not initiate or perform cancellation, purchase, refund, subscription, or other checkout actions.

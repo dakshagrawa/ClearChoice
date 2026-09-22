@@ -16,7 +16,13 @@ const safeManifest = {
   action: { default_popup: 'popup/index.html' },
   permissions: ['activeTab', 'scripting', 'storage'],
   host_permissions: [],
-  content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['content.js'] }],
+  content_scripts: [{
+    matches: [
+      'http://127.0.0.1/*',
+      'http://penguin-brox.tailcd2f8e.ts.net:4173/*',
+    ],
+    js: ['content.js'],
+  }],
 };
 
 function verify(manifest) {
@@ -58,10 +64,25 @@ function runtimeAssetContents(directory) {
   return files.join('\n');
 }
 
-test('package verifier accepts the safe MV3 manifest with the local content script', () => {
+test('package verifier accepts the safe MV3 manifest with the exact mock-demo content-script matches', () => {
   const safe = verify(safeManifest);
   expect(safe.status, safe.stderr).toBe(0);
   expect(safe.stdout).toBe('manifest contract passed\n');
+});
+
+test('package verifier rejects content-script match sets other than the two approved mock-demo origins', () => {
+  for (const matches of [
+    ['http://127.0.0.1/*'],
+    [...safeManifest.content_scripts[0].matches, 'http://other.tailnet.ts.net:4173/*'],
+    ['http://penguin-brox.tailcd2f8e.ts.net:4173/*', 'http://127.0.0.1/*'],
+  ]) {
+    const result = verify({
+      ...safeManifest,
+      content_scripts: [{ matches, js: ['content.js'] }],
+    });
+    expect(result.status, `${matches.join(', ')} unexpectedly passed`).not.toBe(0);
+    expect(result.stderr).toContain('content_scripts must contain exactly the approved mock-demo content.js matches');
+  }
 });
 
 test('package verifier rejects optional permissions', () => {

@@ -14,7 +14,10 @@
   "host_permissions": [],
   "content_scripts": [
     {
-      "matches": ["http://127.0.0.1/*"],
+      "matches": [
+        "http://127.0.0.1/*",
+        "http://penguin-brox.tailcd2f8e.ts.net:4173/*"
+      ],
       "js": ["content.js"]
     }
   ]

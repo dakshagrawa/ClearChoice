@@ -2,6 +2,10 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const allowedPermissions = ['activeTab', 'scripting', 'storage'];
+const allowedContentScriptMatches = [
+  'http://127.0.0.1/*',
+  'http://penguin-brox.tailcd2f8e.ts.net:4173/*',
+];
 const secretManifestKeys = new Set(['api_key', 'apiKey', 'token', 'secret', 'password']);
 const executableManifestKeys = new Set(['service_worker', 'js']);
 // Extension runtime modules may be emitted as .mjs or .cjs as well as .js.
@@ -93,11 +97,12 @@ function validateManifest(manifest) {
   }
   const remoteExecutableError = findRemoteExecutableUrl(manifest);
   if (remoteExecutableError) return remoteExecutableError;
+  const contentScriptMatches = manifest.content_scripts?.[0]?.matches;
   if (!Array.isArray(manifest.content_scripts) || manifest.content_scripts.length !== 1 ||
-    manifest.content_scripts[0]?.matches?.length !== 1 ||
-    manifest.content_scripts[0].matches[0] !== 'http://127.0.0.1/*' ||
+    !Array.isArray(contentScriptMatches) || contentScriptMatches.length !== allowedContentScriptMatches.length ||
+    !allowedContentScriptMatches.every((match, index) => contentScriptMatches[index] === match) ||
     manifest.content_scripts[0]?.js?.length !== 1 || manifest.content_scripts[0].js[0] !== 'content.js') {
-    return 'content_scripts must contain only the local content.js fixture script';
+    return 'content_scripts must contain exactly the approved mock-demo content.js matches';
   }
   if (Object.hasOwn(manifest, 'optional_permissions') &&
     (!Array.isArray(manifest.optional_permissions) || manifest.optional_permissions.length !== 0)) {
