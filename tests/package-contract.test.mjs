@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test } from 'vitest';
 
 const verifier = resolve(process.cwd(), 'scripts/verify-package.mjs');
+const repositoryRoot = process.cwd();
 
 const safeManifest = {
   manifest_version: 3,
@@ -36,10 +37,69 @@ function verify(manifest) {
   }
 }
 
+function verifyDist(directory) {
+  return spawnSync(process.execPath, [verifier, '--dist', directory], {
+    encoding: 'utf8',
+  });
+}
+
+function runtimeAssetContents(directory) {
+  const files = [];
+  const visit = (path) => {
+    for (const entry of readdirSync(path, { withFileTypes: true })) {
+      const entryPath = join(path, entry.name);
+      if (entry.isDirectory()) visit(entryPath);
+      else if (/\.(?:css|html|js|json)$/i.test(entry.name)) files.push(readFileSync(entryPath, 'utf8'));
+    }
+  };
+
+  visit(directory);
+  return files.join('\n');
+}
+
 test('package verifier accepts the safe MV3 manifest with optional HTTP hosts', () => {
   const safe = verify(safeManifest);
   expect(safe.status, safe.stderr).toBe(0);
   expect(safe.stdout).toBe('manifest contract passed\n');
+});
+
+test('package verifier rejects optional permissions', () => {
+  const result = verify({ ...safeManifest, optional_permissions: ['tabs'] });
+
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('optional_permissions must be absent or exactly []');
+});
+
+test('repository manifest satisfies package validation', () => {
+  const result = verify(JSON.parse(readFileSync(resolve(repositoryRoot, 'manifest.json'), 'utf8')));
+
+  expect(result.status, result.stderr).toBe(0);
+});
+
+test('package verifier rejects forbidden runtime artifact APIs', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clearchoice-dist-'));
+  mkdirSync(join(directory, 'popup'));
+  writeFileSync(join(directory, 'manifest.json'), JSON.stringify(safeManifest));
+  writeFileSync(join(directory, 'popup', 'main.js'), 'fetch("https://example.test");');
+
+  try {
+    const result = verifyDist(directory);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('artifact policy check');
+    expect(result.stderr).toContain('forbidden runtime pattern');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('built dist manifest and runtime assets satisfy package validation', () => {
+  const build = spawnSync('npm', ['run', 'build:assets'], { cwd: repositoryRoot, encoding: 'utf8' });
+  expect(build.status, build.stderr).toBe(0);
+
+  const dist = resolve(repositoryRoot, 'dist');
+  const result = verifyDist(dist);
+  expect(result.status, result.stderr).toBe(0);
+  expect(runtimeAssetContents(dist)).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket)\b/);
 });
 
 test('package verifier rejects unsafe MV3 manifest capabilities', () => {
