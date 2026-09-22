@@ -47,3 +47,25 @@ Observed result: exit status `0`.
 ## Artifact verifier scope
 
 `npm run verify:package` checks the emitted `dist/` manifest and extension runtime assets (`.js`, `.css`, `.html`, and `.json`) for the package policy: disallowed capabilities, remote executable URLs, static network APIs, and secret-bearing token/key/password patterns. It does not scan repository docs, tests, or dependencies, and it is a static artifact policy check—not proof of all runtime behavior.
+
+## Current UI runtime and browser verification
+
+The following results were recorded against the current working tree during the UI runtime typing and local built-extension verification work. They do not claim historical TDD execution for earlier changes.
+
+```sh
+PATH="$HOME/.local/bin:$PATH" npm test -- --run src/content/panel.test.ts src/popup/main.test.ts
+PATH="$HOME/.local/bin:$PATH" npm test
+PATH="$HOME/.local/bin:$PATH" npm run lint
+PATH="$HOME/.local/bin:$PATH" npm run build
+PATH="$HOME/.local/bin:$PATH" npm run verify:package
+PATH="$HOME/.local/bin:$PATH" npm run e2e
+```
+
+Observed results:
+
+- Focused UI tests: 2 test files passed, 5 tests passed. These cover panel rendering/dismissal and popup success, explicit error, and malformed-response behavior.
+- `npm test`: 6 test files passed, 38 tests passed.
+- `npm run lint`: passed with no output.
+- `npm run build`: passed; Vite built `dist/`, and its integrated artifact-policy check passed.
+- `npm run verify:package`: passed (`artifact policy check passed`).
+- `npm run e2e`: 1 Playwright test passed. It starts only a self-created `127.0.0.1` checkout fixture, loads `dist/` as an unpacked Chromium extension, uses page/popup interactions, verifies visible evidence and dismissal persistence after reload, and fails if fixture/popup console or page errors occur.

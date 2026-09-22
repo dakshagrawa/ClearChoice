@@ -21,7 +21,7 @@ async function renderPopup(response: unknown): Promise<HTMLElement> {
   document.body.innerHTML = '<div id="app"></div>';
   vi.stubGlobal('chrome', {
     tabs: {
-      query: vi.fn().mockResolvedValue([{ id: 42 }]),
+      query: vi.fn().mockResolvedValue([{ id: 42, active: true }]),
       sendMessage: vi.fn().mockResolvedValue(response),
     },
   });

@@ -1,8 +1,10 @@
 import { detectPreselectedAddons, detectRecurringCharges } from '../core/detector';
 import type { AnalysisResult } from '../core/types';
-import { CLEARCHOICE_ANALYZE } from '../shared/messages';
+import type { AnalyzeResponse } from '../shared/messages';
 import { getDismissed, setDismissed } from '../shared/storage';
 import { renderPanel } from './panel';
+
+const CLEARCHOICE_ANALYZE = 'CLEARCHOICE_ANALYZE' as const;
 
 function analyzePage(): AnalysisResult {
   return {
@@ -27,10 +29,11 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
         void setDismissed(true).catch((error: unknown) => console.error('ClearChoice could not save dismissal:', error));
       });
     }
-    sendResponse(result);
+    sendResponse({ ok: true, result } satisfies AnalyzeResponse);
   })().catch((error: unknown) => {
     console.error('ClearChoice analysis failed:', error);
-    sendResponse({ error: error instanceof Error ? error.message : 'ClearChoice analysis failed.' });
+    const message = error instanceof Error && error.message !== '' ? error.message : 'ClearChoice analysis failed.';
+    sendResponse({ ok: false, error: message } satisfies AnalyzeResponse);
   });
 
   return true;
