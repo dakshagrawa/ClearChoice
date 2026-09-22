@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -51,7 +52,26 @@ test.each([
 });
 
 test('release source, release dist, and unpacked ZIP have no local demo override', () => {
-  const sourceManifest = JSON.parse(readFileSync(join(repositoryRoot, 'manifest.json'), 'utf8'));
+  const { directory, originPath } = temporaryOriginFile(`${demoOrigin}\n`);
 
-  expect(sourceManifest.content_scripts[0].matches).toEqual([releaseMatch]);
+  try {
+    const sourceManifest = JSON.parse(readFileSync(join(repositoryRoot, 'manifest.json'), 'utf8'));
+    expect(sourceManifest.content_scripts[0].matches).toEqual([releaseMatch]);
+    expect(generateManifest({ mode: 'release', originFile: originPath }).content_scripts[0].matches).toEqual([releaseMatch]);
+
+    const packageResult = spawnSync('npm', ['run', 'package:unpacked'], { cwd: repositoryRoot, encoding: 'utf8' });
+    expect(packageResult.status, packageResult.stderr).toBe(0);
+
+    const distManifest = JSON.parse(readFileSync(join(repositoryRoot, 'dist', 'manifest.json'), 'utf8'));
+    expect(distManifest.content_scripts[0].matches).toEqual([releaseMatch]);
+
+    const archiveManifest = spawnSync('unzip', ['-p', 'ClearChoice-mvp-unpacked.zip', 'manifest.json'], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+    });
+    expect(archiveManifest.status, archiveManifest.stderr).toBe(0);
+    expect(JSON.parse(archiveManifest.stdout).content_scripts[0].matches).toEqual([releaseMatch]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

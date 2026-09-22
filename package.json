@@ -6,8 +6,9 @@
   "scripts": {
     "lint": "eslint .",
     "test": "vitest",
-    "build": "tsc --noEmit && npm run build:assets && npm run verify:package",
+    "build": "tsc --noEmit && node scripts/build-manifest.mjs --release --output .release-manifest.json && npm run build:assets && npm run verify:package",
     "build:assets": "vite build",
+    "build:demo": "tsc --noEmit && node scripts/build-manifest.mjs --demo --output .demo-manifest.json && CLEARCHOICE_MANIFEST_MODE=demo npm run build:assets",
     "serve:fixtures": "node scripts/serve-fixtures.mjs",
     "verify:package": "node scripts/verify-package.mjs --dist dist",
     "package:unpacked": "npm run build && node scripts/package-unpacked.mjs",

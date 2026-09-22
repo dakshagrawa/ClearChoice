@@ -17,10 +17,7 @@ const safeManifest = {
   permissions: ['activeTab', 'scripting', 'storage'],
   host_permissions: [],
   content_scripts: [{
-    matches: [
-      'http://127.0.0.1/*',
-      'http://penguin-brox.tailcd2f8e.ts.net:4173/*',
-    ],
+    matches: ['http://127.0.0.1/*'],
     js: ['content.js'],
   }],
 };
@@ -70,11 +67,10 @@ test('package verifier accepts the safe MV3 manifest with the exact mock-demo co
   expect(safe.stdout).toBe('manifest contract passed\n');
 });
 
-test('package verifier rejects content-script match sets other than the two approved mock-demo origins', () => {
+test('package verifier rejects content-script match sets other than the local mock origin', () => {
   for (const matches of [
-    ['http://127.0.0.1/*'],
-    [...safeManifest.content_scripts[0].matches, 'http://other.tailnet.ts.net:4173/*'],
-    ['http://penguin-brox.tailcd2f8e.ts.net:4173/*', 'http://127.0.0.1/*'],
+    ['http://other.tailnet.ts.net:4173/*'],
+    ['http://127.0.0.1/*', 'http://other.tailnet.ts.net:4173/*'],
   ]) {
     const result = verify({
       ...safeManifest,

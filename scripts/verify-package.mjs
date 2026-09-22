@@ -2,10 +2,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const allowedPermissions = ['activeTab', 'scripting', 'storage'];
-const allowedContentScriptMatches = [
-  'http://127.0.0.1/*',
-  'http://penguin-brox.tailcd2f8e.ts.net:4173/*',
-];
+const allowedContentScriptMatches = ['http://127.0.0.1/*'];
 const secretManifestKeys = new Set(['api_key', 'apiKey', 'token', 'secret', 'password']);
 const executableManifestKeys = new Set(['service_worker', 'js']);
 // Extension runtime modules may be emitted as .mjs or .cjs as well as .js.
