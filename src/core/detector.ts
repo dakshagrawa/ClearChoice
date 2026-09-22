@@ -64,10 +64,13 @@ function controlLabel(control: HTMLInputElement): HTMLLabelElement | null {
 }
 
 export function detectRecurringCharges(root: Element): Finding[] {
-  const findings = elementsIncludingRoot(root, RECURRING_SELECTOR)
+  const candidates = elementsIncludingRoot(root, RECURRING_SELECTOR)
     .filter(isElementVisible)
     .map((element) => ({ element, evidence: visibleText(element) }))
-    .filter(({ evidence }) => evidence !== '' && recurringSignal.test(evidence))
+    .filter(({ evidence }) => evidence !== '' && recurringSignal.test(evidence));
+
+  const findings = candidates
+    .filter(({ element }) => !candidates.some((candidate) => element !== candidate.element && element.contains(candidate.element)))
     .map(({ element, evidence }) =>
       makeFinding(
         'recurring-charge',
