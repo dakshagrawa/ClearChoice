@@ -6,9 +6,10 @@
   "scripts": {
     "lint": "eslint .",
     "test": "vitest",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && npm run build:assets && npm run verify:package",
+    "build:assets": "vite build",
     "serve:fixtures": "vite --host 127.0.0.1 --port 4173",
-    "verify:package": "node scripts/verify-package.mjs --manifest dist/manifest.json",
+    "verify:package": "node scripts/verify-package.mjs --dist dist",
     "e2e": "playwright test"
   },
   "devDependencies": {

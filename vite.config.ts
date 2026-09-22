@@ -10,6 +10,7 @@ export default defineConfig({
   build: {
     outDir: '../dist',
     emptyOutDir: true,
+    modulePreload: false,
     rollupOptions: {
       input: resolve(projectRoot, 'src/popup/index.html'),
     },

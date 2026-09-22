@@ -5,7 +5,7 @@ This is a reproducible pre-implementation simulation of the missing-verifier con
 The verifier was moved to a unique path outside the repository and restored by a shell trap. The focused test was deliberately allowed to return nonzero so its actual output could be recorded.
 
 ```sh
-export PATH=/home/daksh/.local/bin:$PATH; temp_verifier=$(mktemp "$TMPDIR/verify-package.mjs.XXXXXX"); rm "$temp_verifier"; evidence_log=$(mktemp "$TMPDIR/missing-verifier-red.XXXXXX.log"); evidence_status=$(mktemp "$TMPDIR/missing-verifier-red.XXXXXX.status"); restore_verifier() { if [ -e "$temp_verifier" ]; then mv "$temp_verifier" scripts/verify-package.mjs; fi; }; trap restore_verifier EXIT HUP INT TERM; mv scripts/verify-package.mjs "$temp_verifier"; set +e; npm test -- --run tests/package-contract.test.mjs >"$evidence_log" 2>&1; status=$?; set -e; printf '%s\n' "$status" >"$evidence_status"; printf 'log=%s\nstatus_file=%s\nexit_status=%s\n' "$evidence_log" "$evidence_status" "$status"
+PATH="$HOME/.local/bin:$PATH"; temp_verifier=$(mktemp "$TMPDIR/verify-package.mjs.XXXXXX"); rm "$temp_verifier"; evidence_log=$(mktemp "$TMPDIR/missing-verifier-red.XXXXXX.log"); evidence_status=$(mktemp "$TMPDIR/missing-verifier-red.XXXXXX.status"); restore_verifier() { if [ -e "$temp_verifier" ]; then mv "$temp_verifier" scripts/verify-package.mjs; fi; }; trap restore_verifier EXIT HUP INT TERM; mv scripts/verify-package.mjs "$temp_verifier"; set +e; npm test -- --run tests/package-contract.test.mjs >"$evidence_log" 2>&1; status=$?; set -e; printf '%s\n' "$status" >"$evidence_status"; printf 'log=%s\nstatus_file=%s\nexit_status=%s\n' "$evidence_log" "$evidence_status" "$status"
 ```
 
 Observed result: exit status `1`.
@@ -32,7 +32,7 @@ Error: Cannot find module '/home/daksh/ClearChoice/scripts/verify-package.mjs'
 After the trap restored `scripts/verify-package.mjs`, the same focused test was run green:
 
 ```sh
-export PATH=/home/daksh/.local/bin:$PATH; test -f scripts/verify-package.mjs; npm test -- --run tests/package-contract.test.mjs
+PATH="$HOME/.local/bin:$PATH"; test -f scripts/verify-package.mjs; npm test -- --run tests/package-contract.test.mjs
 ```
 
 Observed result: exit status `0`.
@@ -43,3 +43,7 @@ Observed result: exit status `0`.
  Test Files  1 passed (1)
       Tests  9 passed (9)
 ```
+
+## Artifact verifier scope
+
+`npm run verify:package` checks the emitted `dist/` manifest and extension runtime assets (`.js`, `.css`, `.html`, and `.json`) for the package policy: disallowed capabilities, remote executable URLs, static network APIs, and secret-bearing token/key/password patterns. It does not scan repository docs, tests, or dependencies, and it is a static artifact policy check—not proof of all runtime behavior.
