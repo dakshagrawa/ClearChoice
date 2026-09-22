@@ -92,6 +92,23 @@ test('package verifier rejects forbidden runtime artifact APIs', () => {
   }
 });
 
+test('package verifier rejects unsafe popup-referenced module artifacts', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clearchoice-dist-'));
+  mkdirSync(join(directory, 'popup'));
+  writeFileSync(join(directory, 'manifest.json'), JSON.stringify(safeManifest));
+  writeFileSync(join(directory, 'popup', 'index.html'), '<script type="module" src="./main.mjs"></script>');
+  writeFileSync(join(directory, 'popup', 'main.mjs'), 'fetch("https://example.test");');
+
+  try {
+    const result = verifyDist(directory);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('artifact policy check');
+    expect(result.stderr).toContain('forbidden runtime pattern');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('built dist manifest and runtime assets satisfy package validation', () => {
   const build = spawnSync('npm', ['run', 'build:assets'], { cwd: repositoryRoot, encoding: 'utf8' });
   expect(build.status, build.stderr).toBe(0);
