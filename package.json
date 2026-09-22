@@ -1,0 +1,26 @@
+{
+  "name": "clearchoice",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "eslint .",
+    "test": "vitest",
+    "build": "tsc --noEmit && vite build",
+    "serve:fixtures": "vite --host 127.0.0.1 --port 4173",
+    "verify:package": "node scripts/verify-package.mjs --manifest dist/manifest.json",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.1",
+    "@types/chrome": "0.0.327",
+    "@types/node": "22.18.12",
+    "eslint": "9.39.1",
+    "jsdom": "26.1.0",
+    "playwright": "1.56.1",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.46.2",
+    "vite": "7.1.12",
+    "vitest": "3.2.4"
+  }
+}
