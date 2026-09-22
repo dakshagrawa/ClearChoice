@@ -68,7 +68,7 @@ it('dismisses only its own panel when Escape is pressed', () => {
   document.body.append(unrelated);
 
   renderPanel(result, onDismiss);
-  document.dispatchEvent(new KeyboardEvent('keydown', { code: 'Escape' }));
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
 
   expect(onDismiss).toHaveBeenCalledTimes(1);
   expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();

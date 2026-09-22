@@ -49,7 +49,7 @@ export function renderPanel(result: AnalysisResult, onDismiss: () => void): HTML
     onDismiss();
   };
   const onKeydown = (event: KeyboardEvent) => {
-    if (event.code === 'Escape') dismissPanel();
+    if (event.key.localeCompare('Escape') === 0 || event.code === 'Escape') dismissPanel();
   };
   const cleanup = () => {
     document.removeEventListener('keydown', onKeydown);
