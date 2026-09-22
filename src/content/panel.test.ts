@@ -8,6 +8,7 @@ const result: AnalysisResult = {
     {
       id: 'finding-1',
       kind: 'preselected-addon',
+      reason: 'checked-paid-control',
       severity: 'notice',
       title: 'Preselected paid option',
       explanation: 'This option is already selected and may add a cost. Review it before continuing.',
@@ -67,7 +68,7 @@ it('dismisses only its own panel when Escape is pressed', () => {
   document.body.append(unrelated);
 
   renderPanel(result, onDismiss);
-  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+  document.dispatchEvent(new KeyboardEvent('keydown', { code: 'Escape' }));
 
   expect(onDismiss).toHaveBeenCalledTimes(1);
   expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();

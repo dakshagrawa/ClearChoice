@@ -5,6 +5,7 @@ const result = {
     {
       id: 'finding-1',
       kind: 'recurring-charge' as const,
+      reason: 'price-cadence' as const,
       severity: 'notice' as const,
       title: 'Possible recurring charge',
       explanation: 'Check the schedule.',

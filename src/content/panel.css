@@ -27,11 +27,15 @@
   gap: 12px;
 }
 
-h2, h3, p { margin: 0; }
+h2, h3, h4, p { margin: 0; }
 h2 { font-size: 16px; }
 h3 { font-size: 14px; margin-top: 14px; }
+h4 { font-size: 13px; margin-top: 10px; }
 p { margin-top: 6px; }
 button {
+  box-sizing: border-box;
+  min-width: 44px;
+  min-height: 44px;
   border: 1px solid #57606a;
   border-radius: 6px;
   background: #fff;
@@ -42,3 +46,4 @@ button {
 }
 button:focus-visible { outline: 3px solid #0969da; outline-offset: 2px; }
 .evidence { padding: 8px; border-left: 3px solid #9a6700; background: #fff8c5; }
+.reason { color: #424a53; }

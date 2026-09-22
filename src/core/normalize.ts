@@ -21,7 +21,8 @@ export function cssPath(element: Element): string {
 
   while (current) {
     if (current.id) {
-      parts.unshift(`#${CSS.escape(current.id)}`);
+      const escape = globalThis.CSS?.escape ?? ((value: string) => value.replace(/[^a-zA-Z0-9_-]/g, '\\$&'));
+      parts.unshift(`#${escape(current.id)}`);
       break;
     }
 
