@@ -110,6 +110,50 @@ test('package verifier rejects forbidden runtime artifact APIs', () => {
   }
 });
 
+test.each([
+  ['navigator.sendBeacon', 'popup/main.js', 'navigator.sendBeacon("https://example.test/collect", "payload");'],
+  ['EventSource construction', 'popup/main.js', 'new EventSource("https://example.test/events");'],
+  ['Worker construction', 'popup/main.js', 'new Worker("./worker.js");'],
+  ['dynamic import', 'popup/main.js', 'import("./module.js");'],
+  ['absolute HTML URL', 'popup/index.html', '<img src="https://example.test/image.png">'],
+  ['protocol-relative HTML URL', 'popup/index.html', '<link href="//example.test/style.css" rel="stylesheet">'],
+  ['absolute CSS URL', 'popup/style.css', '.logo { background-image: url("https://example.test/image.png"); }'],
+  ['protocol-relative CSS URL', 'popup/style.css', '.logo { background-image: url(//example.test/image.png); }'],
+  ['DOM URL sink', 'popup/main.js', 'document.querySelector("a").href = "https://example.test/next";'],
+  ['DOM URL sink setter', 'popup/main.js', 'document.querySelector("img").setAttribute("src", "//example.test/image.png");'],
+])('package verifier rejects emitted artifact network policy bypass: %s', (_label, relativePath, source) => {
+  const directory = mkdtempSync(join(tmpdir(), 'clearchoice-dist-'));
+  const assetPath = join(directory, relativePath);
+  mkdirSync(join(directory, 'popup'));
+  writeFileSync(join(directory, 'manifest.json'), JSON.stringify(safeManifest));
+  writeFileSync(assetPath, source);
+
+  try {
+    const result = verifyDist(directory);
+    expect(result.status, result.stderr).not.toBe(0);
+    expect(result.stderr).toContain('artifact policy check');
+    expect(result.stderr).toContain('forbidden runtime pattern');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('package verifier accepts ordinary local asset references', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clearchoice-dist-'));
+  mkdirSync(join(directory, 'popup'));
+  writeFileSync(join(directory, 'manifest.json'), JSON.stringify(safeManifest));
+  writeFileSync(join(directory, 'popup', 'index.html'), '<script type="module" src="./main.js"></script><img src="./image.png">');
+  writeFileSync(join(directory, 'popup', 'style.css'), '.logo { background-image: url("./image.png"); }');
+  writeFileSync(join(directory, 'popup', 'main.js'), 'document.querySelector("a").href = "./details.html";');
+
+  try {
+    const result = verifyDist(directory);
+    expect(result.status, result.stderr).toBe(0);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('package verifier rejects unsafe popup-referenced module artifacts', () => {
   const directory = mkdtempSync(join(tmpdir(), 'clearchoice-dist-'));
   mkdirSync(join(directory, 'popup'));

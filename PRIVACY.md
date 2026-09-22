@@ -6,7 +6,7 @@ ClearChoice is a local, unpublished Chromium v0.2.0 release candidate for mock c
 
 When the user clicks **Analyze**, the content script examines visible text and qualifying checked checkbox/radio labels in the local page to generate findings. The result is sent only between the extension popup and its content script through Chromium's local extension messaging.
 
-The MVP has no network API usage or remote service. It does not transmit page content, findings, account information, payment information, or cancellation information to ClearChoice or any third party.
+The release verifier statically rejects emitted runtime assets containing `fetch`, `XMLHttpRequest`, `WebSocket`, `navigator.sendBeacon`, `EventSource` or `Worker` construction, dynamic `import()`, external absolute/protocol-relative HTML or CSS URLs, or external DOM URL sinks. This fail-closed artifact policy is not proof that every possible browser or runtime networking behavior is absent.
 
 ## Local persistence
 

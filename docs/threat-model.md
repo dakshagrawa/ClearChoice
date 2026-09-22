@@ -8,7 +8,7 @@ ClearChoice is a Chromium Manifest V3 MVP with a popup and a content script regi
 
 | Asset / concern | MVP boundary |
 | --- | --- |
-| Page text and findings | Kept in the browser extension/page context; no network transmission or remote service is implemented. |
+| Page text and findings | Kept in the browser extension/page context. The release artifact must pass the static emitted-asset policy described below. |
 | Accounts and credentials | Not accessed; no account permissions, login flows, or account actions exist. |
 | Payment data and checkout actions | Not accessed or acted on; no payment, purchase, refund, subscription, or cancellation operation exists. |
 | Page integrity | ClearChoice does not modify page controls, selections, prices, forms, or content. Its only DOM addition is its own dismissible findings panel. |
@@ -20,7 +20,7 @@ ClearChoice is a Chromium Manifest V3 MVP with a popup and a content script regi
 | Threat | MVP mitigation | Residual risk / limit |
 | --- | --- | --- |
 | Extension analyzes a real checkout site | Content script registration is limited to `127.0.0.1`; package validation rejects non-local content-script matches and host permissions. | A user can host arbitrary content locally. The MVP does not establish that local content is safe or genuine. |
-| Silent or remote data exfiltration | No network API or remote endpoint is implemented; the package verifier scans emitted runtime assets for `fetch`, `XMLHttpRequest`, `WebSocket`, remote executable URLs, and secret-like patterns. | This is a static policy check, not proof of every browser/runtime behavior or future change. |
+| Silent or remote data exfiltration | The package verifier fail-closes emitted runtime assets containing `fetch`, `XMLHttpRequest`, `WebSocket`, `navigator.sendBeacon`, `EventSource` or `Worker` construction, dynamic `import()`, external absolute/protocol-relative HTML or CSS URLs, external DOM URL sinks, remote executable URLs, or secret-like patterns. | This static policy checks these specific patterns only; it does not prove every browser/runtime networking behavior or future change is absent. |
 | Excessive extension capabilities | Manifest validation requires exactly `activeTab`, `scripting`, and `storage`; it rejects optional permissions, background workers, external connections, remote executable URLs, and non-empty host grants. | The permitted APIs remain capable of local extension behavior needed by this MVP. Future permission changes require review. |
 | Unwanted checkout mutation | Analysis reads DOM text/control state and panel dismissal tests verify the checkbox remains checked. | The extension deliberately adds/removes its own panel. It does not prove immunity to every hostile page/CSS interaction. |
 | Misleading detection result | Findings use `Possible` / `may` language and are documented as heuristics with false positives and negatives. | Heuristics can be wrong; they are not legal, billing, or compliance conclusions. |
