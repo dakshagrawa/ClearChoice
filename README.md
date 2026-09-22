@@ -1,6 +1,6 @@
-# ClearChoice MVP
+# ClearChoice v0.2.0
 
-ClearChoice is an **unpublished, non-production Chromium Manifest V3 MVP**. It provides a local, user-initiated analysis of mock checkout pages served from `127.0.0.1`.
+ClearChoice is an **unpublished, non-production Chromium Manifest V3 v0.2.0 release candidate**. It provides a local, user-initiated analysis of mock checkout pages served from `127.0.0.1`.
 
 ## Scope
 
@@ -39,10 +39,10 @@ The release content script is registered only for the local `127.0.0.1` mock tar
 
 ```sh
 npm run package:unpacked
-unzip -l ClearChoice-mvp-unpacked.zip
+unzip -l ClearChoice-v0.2.0-unpacked.zip
 ```
 
-The command rebuilds and verifies `dist/`, then creates `ClearChoice-mvp-unpacked.zip`. `manifest.json` is at the archive root, so extracting the archive yields a directory suitable for Chromium's **Load unpacked** flow. The ZIP is local-only and is not published or uploaded.
+The command rebuilds and verifies `dist/`, then creates `ClearChoice-v0.2.0-unpacked.zip`. `manifest.json` is at the archive root, so extracting the archive yields a directory suitable for Chromium's **Load unpacked** flow. The ZIP is local-only and is not published or uploaded.
 
 ## Verification
 
@@ -52,7 +52,7 @@ npm run lint
 npm run build
 npm run e2e
 npm run package:unpacked
-unzip -l ClearChoice-mvp-unpacked.zip
+unzip -l ClearChoice-v0.2.0-unpacked.zip
 ```
 
 Current reproducible evidence and limitations are in [docs/test-evidence.md](docs/test-evidence.md).

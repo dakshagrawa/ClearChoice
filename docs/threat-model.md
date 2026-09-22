@@ -1,4 +1,4 @@
-# ClearChoice MVP threat model
+# ClearChoice v0.2.0 threat model
 
 ## System boundary
 

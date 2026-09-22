@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const dist = resolve(repositoryRoot, 'dist');
-const archive = resolve(repositoryRoot, 'ClearChoice-mvp-unpacked.zip');
+const archive = resolve(repositoryRoot, 'ClearChoice-v0.2.0-unpacked.zip');
 
 if (!existsSync(resolve(dist, 'manifest.json'))) {
   throw new Error('dist/manifest.json is missing; run npm run build first.');

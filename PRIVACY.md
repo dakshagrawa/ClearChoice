@@ -1,6 +1,6 @@
-# ClearChoice MVP Privacy Notice
+# ClearChoice v0.2.0 Privacy Notice
 
-ClearChoice is a local, unpublished Chromium MVP for mock checkout pages at `http://127.0.0.1/*`. A private developer may use `npm run build:demo` to add one exact HTTP Tailnet origin from the gitignored `.demo-origin.local` file to a separate demo-only output.
+ClearChoice is a local, unpublished Chromium v0.2.0 release candidate for mock checkout pages at `http://127.0.0.1/*`. A private developer may use `npm run build:demo` to add one exact HTTP Tailnet origin from the gitignored `.demo-origin.local` file to a separate demo-only output.
 
 ## Data handling
 

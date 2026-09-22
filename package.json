@@ -1,6 +1,6 @@
 {
   "name": "clearchoice",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -12,7 +12,8 @@
     "serve:fixtures": "node scripts/serve-fixtures.mjs",
     "verify:package": "node scripts/verify-package.mjs --dist dist",
     "package:unpacked": "npm run build && node scripts/package-unpacked.mjs",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "check:release": "node scripts/check-release.mjs"
   },
   "devDependencies": {
     "@eslint/js": "9.39.1",

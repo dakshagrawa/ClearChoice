@@ -11,7 +11,7 @@ const repositoryRoot = process.cwd();
 const safeManifest = {
   manifest_version: 3,
   name: 'ClearChoice',
-  version: '0.1.0',
+  version: '0.2.0',
   description: 'A local extension popup.',
   action: { default_popup: 'popup/index.html' },
   permissions: ['activeTab', 'scripting', 'storage'],

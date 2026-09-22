@@ -1,4 +1,4 @@
-# ClearChoice MVP rule catalog
+# ClearChoice v0.2.0 rule catalog
 
 All findings are informational `notice`-severity heuristics. They run only after the user clicks **Analyze** on the local `http://127.0.0.1/*` mock checkout target. They are not legal, compliance, or billing determinations.
 

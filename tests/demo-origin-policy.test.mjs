@@ -65,7 +65,7 @@ test('release source, release dist, and unpacked ZIP have no local demo override
     const distManifest = JSON.parse(readFileSync(join(repositoryRoot, 'dist', 'manifest.json'), 'utf8'));
     expect(distManifest.content_scripts[0].matches).toEqual([releaseMatch]);
 
-    const archiveManifest = spawnSync('unzip', ['-p', 'ClearChoice-mvp-unpacked.zip', 'manifest.json'], {
+    const archiveManifest = spawnSync('unzip', ['-p', 'ClearChoice-v0.2.0-unpacked.zip', 'manifest.json'], {
       cwd: repositoryRoot,
       encoding: 'utf8',
     });

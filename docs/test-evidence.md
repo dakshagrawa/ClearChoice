@@ -1,42 +1,29 @@
-# ClearChoice MVP test evidence
+# ClearChoice v0.2.0 test evidence
 
-This document records verification performed on the documented MVP working tree. It is evidence for the current local artifact, not a claim of production readiness or a security audit.
+This document records commands that must be rerun for the v0.2.0 local release artifact. It is not a production-readiness claim or a security audit.
 
-## Baseline observation
-
-At the frozen baseline, `npm run lint`, `npm run build`, and `npm run e2e` pass. The full `npm test -- --run` suite currently fails because `tests/serve-fixtures.test.mjs` encounters `EADDRINUSE` on `127.0.0.1:4173` while the manual fixture server is running. This is an environment/parallelism defect slated for Task 2, not a passing claim.
-
-## Commands and observed outcomes
-
-All commands were run from the repository root with `PATH="$HOME/.local/bin:$PATH"`.
+## Required release commands
 
 ```sh
-npm test
-npm run lint
-npm run build
-npm run e2e
-npm run package:unpacked
-unzip -l ClearChoice-mvp-unpacked.zip
-unzip -Z1 ClearChoice-mvp-unpacked.zip | python3 -c "import sys; names=sys.stdin.read().splitlines(); assert 'manifest.json' in names, names; assert all(not name.startswith('dist/') for name in names), names; print('ZIP inspection passed: manifest.json is at archive root; %d entries' % len(names))"
+npm run check:release
+npm audit --omit=dev
 ```
 
-Observed results:
+`npm run check:release` runs the complete Vitest suite, ESLint, release build, five built-extension Playwright cases, package creation, and ZIP inspection. Its ZIP inspection parses the root `manifest.json` and fails if the ZIP contains a Tailnet hostname; optional permissions; non-empty host permissions; an external connection declaration; a service worker; or content-script matches other than `http://127.0.0.1/*`.
 
-- Before the manual fixture server was started, `npm test` passed — 6 test files and 38 tests passed. This historical result includes 13 detector tests, popup/panel/storage/message tests, and 15 package-contract tests.
-- `npm run lint`: passed — `eslint .` exited `0` with no diagnostics.
-- `npm run build`: passed — TypeScript completed, Vite emitted `dist/`, and `npm run verify:package` reported `artifact policy check passed (static package policy only; does not prove all runtime behavior)`.
-- `npm run e2e`: passed — 1 Playwright test passed. It starts a self-created `127.0.0.1` fixture, loads `dist/` as an unpacked Chromium extension, clicks **Analyze**, verifies two displayed findings, dismisses the panel, reloads the fixture, confirms dismissal persistence, and asserts no observed popup/fixture console or page errors.
-- `npm run package:unpacked`: passed — rebuilt and rechecked `dist/`, then created `ClearChoice-mvp-unpacked.zip` locally.
-- ZIP inspection: passed — archive contained 6 entries and `manifest.json` at its root (not under `dist/`).
+The Playwright suite starts an ephemeral `127.0.0.1` fixture server on port `0`, uses a built unpacked extension, makes actual popup pointer clicks, and captures page/console errors. The scenarios assert: clean checkout has zero finding types; recurring has one recurring type; paid add-on has one add-on type; mixed has two types; and dismiss/reload/Restore retains the fixture URL and checked checkbox.
 
-## Package-policy verifier scope
+## Observed v0.2.0 results
 
-`npm run verify:package` validates the emitted `dist/` manifest and scans emitted `.js`, `.mjs`, `.cjs`, `.css`, `.html`, and `.json` assets. It requires MV3; exactly `activeTab`, `scripting`, and `storage`; no host permissions; and exactly one content script matching `http://127.0.0.1/*` with `content.js`. It rejects optional permissions/hosts, external connections, background service workers, remote executable URLs, static network API patterns (`fetch`, `XMLHttpRequest`, `WebSocket`), and secret-like key/token/password patterns.
+From the final local release-gate run:
 
-The verifier is a static package-policy control. It does not prove all runtime behavior, every browser capability, future changes, or absence of every possible data flow.
+- `npm run check:release` exited `0`.
+- Vitest: 8 files and 57 tests passed.
+- ESLint exited `0` with no diagnostics.
+- Playwright: 5 tests passed.
+- The package verifier passed and the ZIP integrity check reported 6 entries with parsed manifest version `0.2.0`.
+- `npm audit --omit=dev` exited `0` and reported `found 0 vulnerabilities`.
 
-## Browser and scope limitations
+## Scope limitations
 
-The E2E test is limited to Chromium and a test-created local mock checkout. It does not test Firefox, browser-store installation, publication, real checkout sites, account workflows, payment flows, cancellation flows, legal claims, or production security operations.
-
-ClearChoice remains an unpublished, non-production MVP. The generated ZIP is a local unpacked-loading convenience artifact only; it was not uploaded or published.
+The checks are limited to Chromium and controlled local mock fixtures. They do not test Firefox, browser-store publication, real checkout sites, accounts, payment flows, cancellation flows, legal conclusions, or production security operations. The generated ZIP is local-only and is not uploaded or published.
