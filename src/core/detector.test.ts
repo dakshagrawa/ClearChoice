@@ -180,6 +180,17 @@ describe('detectRecurringCharges', () => {
     expectSensitiveCandidateSuppressed(findings, card);
   });
 
+  it.each([
+    'SKU-xxxx 4242',
+    'https://example.test/xxxx 4242',
+    'note/xxxx 4242',
+  ])('keeps ordinary recurring evidence containing non-card punctuation text: %s', (text) => {
+    const findings = detectRecurringCharges(root(`<section>Membership renews automatically every month for $5. ${text}</section>`));
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.evidence).toContain(text);
+  });
+
   it('uses deterministic IDs and no duplicate explanations for equivalent analysis', () => {
     const html = '<section>Membership renews automatically every year.</section>';
 
@@ -282,6 +293,17 @@ describe('detectPreselectedAddons', () => {
     const findings = detectPreselectedAddons(root(`<label><input type="checkbox" checked> ${card} Add recurring protection for $5</label>`));
 
     expectSensitiveCandidateSuppressed(findings, card);
+  });
+
+  it.each([
+    'SKU-xxxx 4242',
+    'https://example.test/xxxx 4242',
+    'note/xxxx 4242',
+  ])('keeps ordinary checked add-on evidence containing non-card punctuation text: %s', (text) => {
+    const findings = detectPreselectedAddons(root(`<label><input type="checkbox" checked> Add recurring protection for $5. ${text}</label>`));
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.evidence).toContain(text);
   });
 
   it('finds a checked paid radio', () => {
