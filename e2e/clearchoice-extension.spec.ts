@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -9,9 +10,10 @@ const extensionPath = resolve(repositoryRoot, 'dist');
 
 function startFixtureServer(): Promise<{ server: Server; origin: string }> {
   return new Promise((resolveServer, reject) => {
-    const server = createServer(async (_request, response) => {
+    const server = createServer(async (request, response) => {
+      const fixtureName = request.url === '/checkout/dynamic-beta' ? 'beta-dynamic-checkout.html' : 'clean-checkout.html';
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      response.end(await readFile(resolve(repositoryRoot, 'fixtures/clean-checkout.html')));
+      response.end(await readFile(resolve(repositoryRoot, `fixtures/${fixtureName}`)));
     });
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => {
@@ -69,6 +71,47 @@ test('packaged direct-popup automation does not claim an activeTab grant', async
 
     await expect(fixture.locator('aside[data-clearchoice-panel]')).toHaveCount(0);
     await expect(popup.getByRole('status')).toHaveText('ClearChoice could not analyze this tab. Reload it and try again.');
+  } finally {
+    await closeExtension(context, userDataDir);
+    await closeServer(server);
+  }
+});
+
+test('built content analysis preserves the dynamic checkout host across repeated user requests', async () => {
+  const { server, origin } = await startFixtureServer();
+  const userDataDir = await mkdtemp(resolve(tmpdir(), 'clearchoice-integrity-'));
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: 'chromium', headless: false, args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+  try {
+    const fixture = await context.newPage();
+    await fixture.addInitScript(() => {
+      (window as any).chrome = { runtime: { onMessage: { addListener: (listener: unknown) => { (window as any).__clearchoiceListener = listener; } } }, storage: { local: { get: async () => ({ dismissed: false }), set: async () => undefined } } };
+    });
+    await fixture.goto(`${origin}/checkout/dynamic-beta#checkout`);
+    await fixture.addScriptTag({ path: resolve(extensionPath, 'content.js') });
+    const snapshot = () => fixture.evaluate(() => {
+      const owned = (node: Element) => node.closest('[data-clearchoice-panel]') !== null;
+      const nodes = Array.from(document.querySelectorAll('input, button, a')).filter((node) => !owned(node));
+      (window as any).__hostNodes ??= nodes;
+      return { href: location.href, forms: Array.from(document.forms, (form) => form.action), controls: Array.from(document.querySelectorAll('input, select')).filter((node) => !owned(node)).map((node: any) => [node.tagName, node.name, node.type, node.value, node.checked, node.disabled]), sameNodes: nodes.every((node, index) => node === (window as any).__hostNodes[index]) };
+    });
+    const request = (type: string) => fixture.evaluate(async (messageType) => await new Promise((resolveResponse) => (window as any).__clearchoiceListener({ type: messageType }, {}, resolveResponse)), type);
+    const before = await snapshot();
+    await request('CLEARCHOICE_ANALYZE');
+    await expect(fixture.locator('[data-clearchoice-panel]')).toHaveCount(1);
+    expect(await snapshot()).toEqual(before);
+    await fixture.locator('[data-clearchoice-panel]').evaluate((panel) => (panel.shadowRoot?.querySelector('button') as HTMLButtonElement).click());
+    await expect(fixture.locator('[data-clearchoice-panel]')).toHaveCount(0);
+    expect(await snapshot()).toEqual(before);
+    await request('CLEARCHOICE_RESTORE');
+    await request('CLEARCHOICE_ANALYZE');
+    await request('CLEARCHOICE_ANALYZE');
+    await expect(fixture.locator('[data-clearchoice-panel]')).toHaveCount(1);
+    await fixture.locator('#replace-order-summary').click();
+    await expect(fixture.locator('#fake-order-summary')).toContainText('updated');
+    await expect(fixture.locator('[data-clearchoice-panel]')).toHaveCount(1);
+    expect(await snapshot()).toEqual(before);
   } finally {
     await closeExtension(context, userDataDir);
     await closeServer(server);

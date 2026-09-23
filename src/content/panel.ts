@@ -95,7 +95,7 @@ export function renderPanel(result: AnalysisResult, onDismiss: () => void): HTML
   removalObserver = new MutationObserver((records) => {
     if (records.some((record) => Array.from(record.removedNodes).includes(panel))) cleanup();
   });
-  removalObserver.observe(document.documentElement, { childList: true, subtree: true });
+  removalObserver.observe(document.documentElement, { childList: true });
   document.addEventListener('keydown', onKeydown);
   panelCleanup.set(panel, cleanup);
   return panel;

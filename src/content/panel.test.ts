@@ -118,3 +118,23 @@ it('cleans ownership and Escape handling when the host removes its panel, then r
   document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   expect(onDismiss).toHaveBeenCalledTimes(1);
 });
+
+it('observes only direct removal of its owned panel for lifecycle cleanup', () => {
+  const originalMutationObserver = globalThis.MutationObserver;
+  const observe = vi.fn();
+  class PanelRemovalObserver {
+    constructor(_callback: MutationCallback) { void _callback; }
+    disconnect = vi.fn();
+    observe = observe;
+    takeRecords = vi.fn(() => []);
+  }
+  vi.stubGlobal('MutationObserver', PanelRemovalObserver);
+
+  try {
+    renderPanel(result, vi.fn());
+    expect(observe).toHaveBeenCalledWith(document.documentElement, { childList: true });
+  } finally {
+    removePanel();
+    vi.stubGlobal('MutationObserver', originalMutationObserver);
+  }
+});
