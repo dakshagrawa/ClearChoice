@@ -1,8 +1,9 @@
 import type { AnalysisResult, FindingReason } from '../core/types';
 import panelCss from './panel.css?inline';
 
-const panelSelector = 'aside[data-clearchoice-panel]';
 const panelCleanup = new WeakMap<HTMLElement, () => void>();
+const extensionPanels = new WeakSet<HTMLElement>();
+let activePanel: HTMLElement | undefined;
 
 const reasonText: Record<FindingReason, string> = {
   'price-cadence': 'It includes a price together with a repeating billing cadence.',
@@ -17,8 +18,8 @@ function contentRoot(panel: HTMLElement): ShadowRoot | HTMLElement {
 }
 
 export function removePanel(): void {
-  const panel = document.querySelector<HTMLElement>(panelSelector);
-  if (!panel) return;
+  const panel = activePanel;
+  if (!panel || !extensionPanels.has(panel)) return;
   panelCleanup.get(panel)?.();
   panel.remove();
 }
@@ -27,6 +28,8 @@ export function renderPanel(result: AnalysisResult, onDismiss: () => void): HTML
   removePanel();
 
   const panel = document.createElement('aside');
+  extensionPanels.add(panel);
+  activePanel = panel;
   panel.dataset.clearchoicePanel = '';
   panel.setAttribute('aria-live', 'polite');
   panel.setAttribute('aria-label', 'ClearChoice findings');
@@ -54,6 +57,8 @@ export function renderPanel(result: AnalysisResult, onDismiss: () => void): HTML
   const cleanup = () => {
     document.removeEventListener('keydown', onKeydown);
     panelCleanup.delete(panel);
+    extensionPanels.delete(panel);
+    if (activePanel === panel) activePanel = undefined;
   };
 
   const dismiss = document.createElement('button');

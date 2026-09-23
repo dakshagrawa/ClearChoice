@@ -34,5 +34,5 @@ export function isAnalyzeResponse(value: unknown): value is AnalyzeResponse {
 export function isRestoreResponse(value: unknown): value is RestoreResponse {
   return isRecord(value)
     && ((value.ok === true && Object.keys(value).length === 1)
-      || (value.ok === false && value.error === 'request-failed'));
+      || (value.ok === false && value.error === 'request-failed' && Object.keys(value).length === 2));
 }

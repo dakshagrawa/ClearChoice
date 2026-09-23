@@ -25,8 +25,14 @@ async function activeTabId(): Promise<number | undefined> {
   return tab?.id;
 }
 
+export async function isCurrentActiveTab(tabId: number): Promise<boolean> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab?.id === tabId;
+}
+
 async function injectContentScript(tabId: number): Promise<'ok' | AnalyzeResponse> {
   try {
+    if (!(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
     await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
     return 'ok';
   } catch (error: unknown) {
@@ -41,6 +47,7 @@ export async function analyzeActiveTab(): Promise<AnalyzeResponse> {
 
     const injected = await injectContentScript(tabId);
     if (injected !== 'ok') return injected;
+    if (!(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
 
     const response = await chrome.tabs.sendMessage(tabId, { type: CLEARCHOICE_ANALYZE });
     return isAnalyzeResponse(response) ? response : { ok: false, error: 'request-failed' };
@@ -56,6 +63,7 @@ export async function restoreActiveTab(): Promise<RestoreResponse> {
 
     const injected = await injectContentScript(tabId);
     if (injected !== 'ok') return { ok: false, error: 'request-failed' };
+    if (!(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
 
     const response = await chrome.tabs.sendMessage(tabId, { type: CLEARCHOICE_RESTORE });
     return isRestoreResponse(response) ? response : { ok: false, error: 'request-failed' };

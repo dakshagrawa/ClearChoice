@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
-import { renderPanel } from './panel';
+import { removePanel, renderPanel } from './panel';
 import type { AnalysisResult } from '../core/types';
 
 const result: AnalysisResult = {
@@ -19,7 +19,8 @@ const result: AnalysisResult = {
 };
 
 afterEach(() => {
-  document.querySelector('[data-clearchoice-panel]')?.remove();
+  removePanel();
+  document.body.replaceChildren();
 });
 
 it('renders an accessible non-modal panel with auditable finding evidence and reason', () => {
@@ -72,4 +73,33 @@ it('dismisses only its own panel when Escape is pressed', () => {
   expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
   expect(document.querySelector('[data-unrelated-panel]')).toBe(unrelated);
   unrelated.remove();
+});
+
+it('preserves host panel markup that uses the extension data attribute', () => {
+  const hostPanel = document.createElement('aside');
+  hostPanel.dataset.clearchoicePanel = '';
+  hostPanel.textContent = 'Host checkout sidebar';
+  document.body.append(hostPanel);
+
+  const extensionPanel = renderPanel(result, vi.fn());
+  removePanel();
+
+  expect(hostPanel.isConnected).toBe(true);
+  expect(hostPanel.textContent).toBe('Host checkout sidebar');
+  expect(extensionPanel.isConnected).toBe(false);
+});
+
+it('re-renders by removing only the prior extension-owned panel', () => {
+  const hostPanel = document.createElement('aside');
+  hostPanel.dataset.clearchoicePanel = '';
+  hostPanel.textContent = 'Host checkout sidebar';
+  document.body.append(hostPanel);
+
+  const firstExtensionPanel = renderPanel(result, vi.fn());
+  const secondExtensionPanel = renderPanel(result, vi.fn());
+
+  expect(hostPanel.isConnected).toBe(true);
+  expect(hostPanel.textContent).toBe('Host checkout sidebar');
+  expect(firstExtensionPanel.isConnected).toBe(false);
+  expect(secondExtensionPanel.isConnected).toBe(true);
 });

@@ -21,17 +21,52 @@ function installChrome(overrides: ChromeOverrides = {}): {
   return { query: tabs.query, executeScript: scripting.executeScript, sendMessage: tabs.sendMessage };
 }
 
-it('queries exactly the active current tab then injects and messages that tab only', async () => {
+it('re-confirms the active current tab before injection and before messaging it', async () => {
   const { query, executeScript, sendMessage } = installChrome();
 
   await expect(analyzeActiveTab()).resolves.toEqual({ ok: true, status: 'supported', findingCount: 1 });
 
-  expect(query).toHaveBeenCalledTimes(1);
+  expect(query).toHaveBeenCalledTimes(3);
   expect(query).toHaveBeenCalledWith({ active: true, currentWindow: true });
   expect(executeScript).toHaveBeenCalledTimes(1);
   expect(executeScript).toHaveBeenCalledWith({ target: { tabId: 42 }, files: ['content.js'] });
   expect(sendMessage).toHaveBeenCalledTimes(1);
   expect(sendMessage).toHaveBeenCalledWith(42, { type: 'CLEARCHOICE_ANALYZE' });
+});
+
+it('does not inject or message when the active tab switches before injection', async () => {
+  const { query, executeScript, sendMessage } = installChrome({
+    tabs: {
+      query: vi.fn()
+        .mockResolvedValueOnce([{ id: 42, active: true }])
+        .mockResolvedValueOnce([{ id: 7, active: true }]),
+      sendMessage: vi.fn(),
+    },
+  });
+
+  await expect(analyzeActiveTab()).resolves.toEqual({ ok: false, error: 'request-failed' });
+
+  expect(query).toHaveBeenCalledTimes(2);
+  expect(executeScript).not.toHaveBeenCalled();
+  expect(sendMessage).not.toHaveBeenCalled();
+});
+
+it('does not message when the active tab switches while injection awaits', async () => {
+  const { query, executeScript, sendMessage } = installChrome({
+    tabs: {
+      query: vi.fn()
+        .mockResolvedValueOnce([{ id: 42, active: true }])
+        .mockResolvedValueOnce([{ id: 42, active: true }])
+        .mockResolvedValueOnce([{ id: 7, active: true }]),
+      sendMessage: vi.fn(),
+    },
+  });
+
+  await expect(analyzeActiveTab()).resolves.toEqual({ ok: false, error: 'request-failed' });
+
+  expect(query).toHaveBeenCalledTimes(3);
+  expect(executeScript).toHaveBeenCalledWith({ target: { tabId: 42 }, files: ['content.js'] });
+  expect(sendMessage).not.toHaveBeenCalled();
 });
 
 it('does not inject or message when the current active tab has no ID', async () => {

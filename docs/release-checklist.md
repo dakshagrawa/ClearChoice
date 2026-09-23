@@ -1,5 +1,7 @@
 # ClearChoice v0.2.0 release checklist
 
+> **Historical v0.2.0 evidence only:** the mock-only storage-permission criteria below apply to v0.2.0, not current beta work. Current beta policy and release checks live in [beta-release-checklist.md](./beta-release-checklist.md); this document does not mark beta requirements complete.
+
 - [ ] `npm run check:release` and `npm audit --omit=dev` pass from a clean checkout.
 - [ ] The source, built, and archived manifests declare exactly `storage`; `activeTab`, `scripting`, host, and optional permissions are absent.
 - [ ] The release artifact contains no user-specific Tailscale hostname, secrets, remote executable code, service worker, or broad site permission; its emitted assets pass the static policy rejecting `fetch`, `XMLHttpRequest`, `WebSocket`, `navigator.sendBeacon`, `EventSource`/`Worker` construction, dynamic `import()`, external absolute/protocol-relative HTML `src`, `href`, `action`, `formaction`, or `poster` values (quoted or unquoted), `srcset` values, CSS `url()` values, and supported DOM URL sinks (location, dot/bracket `href`/`src`/`action` assignments, and `setAttribute`, with quoted or template-literal values).

@@ -38,3 +38,28 @@ it('registers one listener and renders one panel when the payload is injected re
   await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({ ok: true, status: 'supported', findingCount: 0 }));
   expect(document.querySelectorAll('[data-clearchoice-panel]')).toHaveLength(1);
 });
+
+it('preserves host panel markup through Analyze and Restore', async () => {
+  const { addListener } = installChrome();
+  const hostPanel = document.createElement('aside');
+  hostPanel.dataset.clearchoicePanel = '';
+  hostPanel.textContent = 'Host checkout sidebar';
+  document.body.append(hostPanel);
+
+  await import('./index');
+  const listener = addListener.mock.calls[0]?.[0] as (
+    message: unknown,
+    sender: unknown,
+    sendResponse: (response: unknown) => void,
+  ) => boolean;
+  const analyzeResponse = vi.fn();
+  const restoreResponse = vi.fn();
+
+  expect(listener({ type: 'CLEARCHOICE_ANALYZE' }, {}, analyzeResponse)).toBe(true);
+  await vi.waitFor(() => expect(analyzeResponse).toHaveBeenCalledWith({ ok: true, status: 'supported', findingCount: 0 }));
+  expect(listener({ type: 'CLEARCHOICE_RESTORE' }, {}, restoreResponse)).toBe(true);
+  await vi.waitFor(() => expect(restoreResponse).toHaveBeenCalledWith({ ok: true }));
+
+  expect(hostPanel.isConnected).toBe(true);
+  expect(hostPanel.textContent).toBe('Host checkout sidebar');
+});
