@@ -146,6 +146,36 @@ it('content-payload/JSDOM integration: a sensitive static candidate never reache
   expect(content?.textContent).not.toContain(maskedCard);
 });
 
+it.each([
+  'Payment xxxx 4242',
+  'Payment:xxxx 4242',
+  'Payment (xxxx 4242)',
+  'Payment method: XXXX 4242',
+])('content-payload/JSDOM integration: payment-context x-masked card text never reaches evidence or a rendered evidence element: %s', async (maskedCard) => {
+  const { addListener } = installChrome();
+  document.body.innerHTML = `
+    <main>
+      <aside>Order summary — Subtotal: $24</aside>
+      <section>Membership renews automatically every month for $12. ${maskedCard}</section>
+      <button>Place order</button>
+    </main>`;
+  await import('./index');
+  const listener = addListener.mock.calls[0]?.[0] as (
+    message: unknown,
+    sender: unknown,
+    sendResponse: (response: unknown) => void,
+  ) => boolean;
+  const sendResponse = vi.fn();
+
+  expect(listener({ type: 'CLEARCHOICE_ANALYZE' }, {}, sendResponse)).toBe(true);
+  await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({ ok: true, status: 'supported', findingCount: 0 }));
+
+  const panel = document.querySelector<HTMLElement>('[data-clearchoice-panel]');
+  const content = panel?.shadowRoot ?? panel;
+  expect(content?.querySelectorAll('.evidence')).toHaveLength(0);
+  expect(content?.textContent).not.toContain(maskedCard);
+});
+
 it('content-payload/JSDOM integration preserves every host checkout integrity predicate through Analyze, Dismiss, Restore, repeated Analyze, and summary replacement', async () => {
   const { addListener } = installChrome();
   document.body.innerHTML = `

@@ -26,6 +26,10 @@ describe('hasSensitiveDisplayData', () => {
     '[•••• 4242]',
     'Payment card:xxxx 4242',
     'Card ending:XXXX 4242',
+    'Payment xxxx 4242',
+    'Payment:xxxx 4242',
+    'Payment (xxxx 4242)',
+    'Payment method: XXXX 4242',
   ])('recognizes a masked card with an allowed prefix context: %s', (text) => {
     expect(hasSensitiveDisplayData(text)).toBe(true);
   });
