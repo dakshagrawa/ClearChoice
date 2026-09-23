@@ -181,7 +181,19 @@ describe('detectRecurringCharges', () => {
   });
 
   it.each([
+    'Card (**** 4242)',
+    'Card [**** 4242]',
+    '(•••• 4242)',
+    '[•••• 4242]',
+  ])('suppresses recurring evidence containing a parenthesized or bracketed masked card display: %s', (card) => {
+    const findings = detectRecurringCharges(root(`<section>Membership renews every month for $5. ${card}</section>`));
+
+    expectSensitiveCandidateSuppressed(findings, card);
+  });
+
+  it.each([
     'SKU-xxxx 4242',
+    'SKU:xxxx 4242',
     'https://example.test/xxxx 4242',
     'note/xxxx 4242',
   ])('keeps ordinary recurring evidence containing non-card punctuation text: %s', (text) => {
@@ -296,7 +308,19 @@ describe('detectPreselectedAddons', () => {
   });
 
   it.each([
+    'Card (**** 4242)',
+    'Card [**** 4242]',
+    '(•••• 4242)',
+    '[•••• 4242]',
+  ])('suppresses a checked add-on label containing a parenthesized or bracketed masked card display: %s', (card) => {
+    const findings = detectPreselectedAddons(root(`<label><input type="checkbox" checked> Add recurring protection for $5. ${card}</label>`));
+
+    expectSensitiveCandidateSuppressed(findings, card);
+  });
+
+  it.each([
     'SKU-xxxx 4242',
+    'SKU:xxxx 4242',
     'https://example.test/xxxx 4242',
     'note/xxxx 4242',
   ])('keeps ordinary checked add-on evidence containing non-card punctuation text: %s', (text) => {

@@ -120,6 +120,32 @@ it('ignores malformed inbound requests without analyzing or restoring', async ()
   expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
 });
 
+it('content-payload/JSDOM integration: a sensitive static candidate never reaches a rendered evidence element', async () => {
+  const { addListener } = installChrome();
+  const maskedCard = 'Card (**** 4242)';
+  document.body.innerHTML = `
+    <main>
+      <aside>Order summary — Subtotal: $24</aside>
+      <section>Membership renews automatically every month for $12. ${maskedCard}</section>
+      <button>Place order</button>
+    </main>`;
+  await import('./index');
+  const listener = addListener.mock.calls[0]?.[0] as (
+    message: unknown,
+    sender: unknown,
+    sendResponse: (response: unknown) => void,
+  ) => boolean;
+  const sendResponse = vi.fn();
+
+  expect(listener({ type: 'CLEARCHOICE_ANALYZE' }, {}, sendResponse)).toBe(true);
+  await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({ ok: true, status: 'supported', findingCount: 0 }));
+
+  const panel = document.querySelector<HTMLElement>('[data-clearchoice-panel]');
+  const content = panel?.shadowRoot ?? panel;
+  expect(content?.querySelectorAll('.evidence')).toHaveLength(0);
+  expect(content?.textContent).not.toContain(maskedCard);
+});
+
 it('content-payload/JSDOM integration preserves every host checkout integrity predicate through Analyze, Dismiss, Restore, repeated Analyze, and summary replacement', async () => {
   const { addListener } = installChrome();
   document.body.innerHTML = `
