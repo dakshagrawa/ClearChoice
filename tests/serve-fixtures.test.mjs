@@ -12,6 +12,10 @@ const expectedSignals = {
     'Membership renews automatically for $12 per month until cancelled.',
     'Add purchase protection for $5',
   ],
+  '/checkout/dynamic-beta': [
+    'Beta membership renews automatically for $12 per month until cancelled.',
+    'Add fake purchase protection for $5',
+  ],
 };
 
 async function startFixtureServer() {
@@ -62,11 +66,18 @@ test('controlled checkout fixtures expose only the scenario matrix with exact fa
       const html = await response.text();
       expect(html).toContain(fakeDataBanner);
       expect(html.match(/renews automatically for \$12 per month until cancelled\./g) ?? []).toHaveLength(
-        signals.includes('Membership renews automatically for $12 per month until cancelled.') ? 1 : 0,
+        route === '/checkout/dynamic-beta' ? 2 : signals.includes('Membership renews automatically for $12 per month until cancelled.') ? 1 : 0,
       );
       expect(html.match(/<input type="checkbox" checked> Add purchase protection for \$5/g) ?? []).toHaveLength(
         signals.includes('Add purchase protection for $5') ? 1 : 0,
       );
+      if (route === '/checkout/dynamic-beta') {
+        expect(html).toContain('<form id="fake-beta-checkout" action="#fake-order-confirmation">');
+        expect(html).toContain('id="replace-order-summary"');
+        expect(html).toContain('id="fake-fragment-control" href="#fake-delivery-details"');
+        expect(html).toContain("nextSummary.append(heading, renewal, subtotal);");
+        expect(html).toContain('orderSummary.replaceWith(nextSummary);');
+      }
     }
 
     for (const path of [

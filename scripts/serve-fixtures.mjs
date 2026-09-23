@@ -7,6 +7,7 @@ const ROUTES = new Map([
   ['/checkout/recurring', 'recurring-checkout.html'],
   ['/checkout/addon', 'paid-addon-checkout.html'],
   ['/checkout/mixed', 'mixed-checkout.html'],
+  ['/checkout/dynamic-beta', 'beta-dynamic-checkout.html'],
   ['/unsupported/marketing-article', 'marketing-article.html'],
   ['/unsupported/account-settings', 'account-settings.html'],
 ]);
