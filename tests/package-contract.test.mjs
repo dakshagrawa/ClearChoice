@@ -14,12 +14,8 @@ const safeManifest = {
   version: '0.2.0',
   description: 'A local extension popup.',
   action: { default_popup: 'popup/index.html' },
-  permissions: ['storage'],
+  permissions: ['activeTab', 'scripting', 'storage'],
   host_permissions: [],
-  content_scripts: [{
-    matches: ['http://127.0.0.1/*'],
-    js: ['content.js'],
-  }],
 };
 
 function verify(manifest) {
@@ -61,24 +57,20 @@ function runtimeAssetContents(directory) {
   return files.join('\n');
 }
 
-test('package verifier accepts an MV3 manifest with exactly storage and the approved mock-demo content-script match', () => {
+test('package verifier accepts an MV3 manifest with exactly temporary active-tab beta permissions', () => {
   const safe = verify(safeManifest);
   expect(safe.status, safe.stderr).toBe(0);
   expect(safe.stdout).toBe('manifest contract passed\n');
 });
 
-test('package verifier rejects content-script match sets other than the local mock origin', () => {
-  for (const matches of [
-    ['http://other.tailnet.ts.net:4173/*'],
-    ['http://127.0.0.1/*', 'http://other.tailnet.ts.net:4173/*'],
-  ]) {
-    const result = verify({
-      ...safeManifest,
-      content_scripts: [{ matches, js: ['content.js'] }],
-    });
-    expect(result.status, `${matches.join(', ')} unexpectedly passed`).not.toBe(0);
-    expect(result.stderr).toContain('content_scripts must contain exactly the approved mock-demo content.js matches');
-  }
+test('package verifier rejects every static content script', () => {
+  const result = verify({
+    ...safeManifest,
+    content_scripts: [{ matches: ['http://127.0.0.1/*'], js: ['content.js'] }],
+  });
+
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('content_scripts is not allowed');
 });
 
 test('package verifier rejects optional permissions', () => {
@@ -209,10 +201,13 @@ test('built dist manifest and runtime assets satisfy package validation', () => 
 test('package verifier rejects unsafe MV3 manifest capabilities', () => {
   for (const [label, manifest] of [
     ['all URLs', { ...safeManifest, host_permissions: ['<all_urls>'] }],
-    ['restored activeTab', { ...safeManifest, permissions: ['activeTab', 'storage'] }],
-    ['restored scripting', { ...safeManifest, permissions: ['scripting', 'storage'] }],
+    ['missing activeTab', { ...safeManifest, permissions: ['scripting', 'storage'] }],
+    ['missing scripting', { ...safeManifest, permissions: ['activeTab', 'storage'] }],
+    ['duplicate permission', { ...safeManifest, permissions: [...safeManifest.permissions, 'storage'] }],
     ['tabs', { ...safeManifest, permissions: [...safeManifest.permissions, 'tabs'] }],
     ['webRequest', { ...safeManifest, permissions: [...safeManifest.permissions, 'webRequest'] }],
+    ['cookies', { ...safeManifest, permissions: [...safeManifest.permissions, 'cookies'] }],
+    ['declarativeNetRequest', { ...safeManifest, permissions: [...safeManifest.permissions, 'declarativeNetRequest'] }],
     ['optional host grant', { ...safeManifest, optional_host_permissions: ['https://example.test/*'] }],
     ['non-local content script', { ...safeManifest, content_scripts: [{ matches: ['https://example.test/*'], js: ['content.js'] }] }],
     ['nonempty host permissions', { ...safeManifest, host_permissions: ['https://example.test/*'] }],
