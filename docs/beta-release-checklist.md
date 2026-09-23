@@ -1,13 +1,13 @@
-# ClearChoice private-beta release checklist
+# ClearChoice 0.3.0-beta.1 private-beta release checklist
 
 > This checklist defines future beta acceptance gates. It does not indicate that the beta has been implemented or released. For the v0.2.0 mock-only historical evidence, see [release-checklist.md](release-checklist.md).
 
-- [ ] The beta manifest has exactly ordered `activeTab`, `scripting`, and `storage`; `host_permissions` is `[]`; it declares no optional permissions, static content scripts, background service worker, external connection declaration, or remote executable code.
+- [ ] The beta manifest has exactly ordered `activeTab`, `scripting`, and `storage`; `host_permissions` is `[]`; it declares exactly `_execute_action` with suggested `Ctrl+Shift+Y`, and no optional permissions, static content scripts, background service worker, external connection declaration, or remote executable code.
 - [ ] The popup can analyze only the active current tab after a deliberate button press. It injects no code on popup load, never searches or messages non-active tabs, and reports restricted/unsupported pages without crashing.
 - [ ] The content script cannot register duplicate listeners or panels after repeated Analyze presses or SPA rerenders. It analyzes only visible non-form-field text and checked paid controls; it never reads typed input, textarea, select, password, payment, or contenteditable values.
 - [ ] Page analysis stays page-local: popup responses contain only a status and integer count. No URL, title, evidence, selector, DOM text, timestamps, page HTML, form value, payment data, or finding is stored or sent outside the content-script context.
 - [ ] The beta supports English checkout-like contexts only. It recognizes a conservative checkout context before showing notices; otherwise it says that the page does not look like a supported checkout context. It retains existing recurring/add-on evidence rules and "possible" language.
 - [ ] Every interactive surface works with keyboard and pointer input; automated accessibility checks pass for the popup and panel in both light and dark fixture contexts; the existing 44px dismissal target and Escape behavior remain intact.
 - [ ] Tests prove no page form state or URL changes after Analyze, Dismiss, Restore, repeated Analyze, no-findings, unsupported pages, injection failure, and injected-script reinjection.
-- [ ] `npm run check:beta` passes from a clean checkout: unit tests, lint, beta build, static package scan, Chromium E2E, accessibility E2E, ZIP integrity, and `npm audit --omit=dev`. The final local tag points exactly at the audited beta commit.
+- [ ] `npm run check:beta` passes from a clean checkout only with a deliberately supplied local manual active-tab QA marker for the exact commit and manifest: unit tests, lint, beta build, static package scan, ZIP integrity, and marker validation run automatically. The marker comes only from the documented clean-profile human toolbar-click and pointer-Analyze protocol; no automated E2E success claim substitutes for it. The final local tag points exactly at the audited beta commit.
 - [ ] Documentation accurately says **private opt-in beta**, explains temporary active-tab access/local processing, lists unsupported cases, and gives a manual tester protocol. No store listing, upload, push, or publication occurs.

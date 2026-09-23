@@ -1,8 +1,8 @@
-# ClearChoice v0.2.0 threat model
+# ClearChoice 0.3.0-beta.1 private-beta threat model
 
 ## System boundary
 
-ClearChoice is an unpublished Chromium Manifest V3 private beta with a popup. Its generated manifest declares exactly `activeTab`, `scripting`, and `storage`, and `host_permissions: []`. It declares no static content script, optional permission, background worker, or external connection. `activeTab` grants temporary access to the active tab after user invocation.
+ClearChoice is an unpublished Chromium Manifest V3 private beta with a popup. Its generated manifest declares exactly `activeTab`, `scripting`, and `storage`, `host_permissions: []`, and exactly one `_execute_action` command with the suggested `Ctrl+Shift+Y` shortcut. It declares no static content script, optional permission, background worker, or external connection. `activeTab` grants temporary access to the active tab after user invocation.
 
 Task 2 implements current-tab injection as current beta work; it is not release-ready. Analyze and Restore select the active current tab, recheck it before injection and after awaited injection, then message it only if it remains active at the observed checkpoints. Extension code cannot atomically guarantee focus between those asynchronous operations, so a tab switch just after a checkpoint remains a residual race.
 
@@ -13,7 +13,7 @@ Controlled local fixtures remain available for internal testing, but their host 
 | Asset / concern | Private-beta boundary |
 | --- | --- |
 | Page text and findings | User invocation triggers temporary active-tab processing. Content requests and popup responses use closed schemas; page data remains in the page context. |
-| Scope of execution | No host permissions or static content scripts; no broad, persistent, or optional host grant. Observed tab switches cancel at pre/post-injection checkpoints, without a claim to eliminate every micro-race. |
+| Temporary active-tab authorization | A human toolbar-action click is required before popup Analyze/Restore can inject into the current active tab. The `_execute_action` shortcut is a documented user affordance. Automated Playwright/CDP input is intentionally treated as denied and cannot attest to this grant. The beta gate requires a local human-QA pass marker bound to the commit and manifest; no automated success claim is made. |
 | Accounts, credentials, payment data | Not accessed; no account permissions, login flows, or checkout actions exist. |
 | Local persistence | `chrome.storage.local` is limited to the dismissible findings-panel state. |
 

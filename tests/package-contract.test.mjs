@@ -14,6 +14,7 @@ const safeManifest = {
   version: '0.2.0',
   description: 'A local extension popup.',
   action: { default_popup: 'popup/index.html' },
+  commands: { _execute_action: { suggested_key: { default: 'Ctrl+Shift+Y' } } },
   permissions: ['activeTab', 'scripting', 'storage'],
   host_permissions: [],
 };
@@ -61,6 +62,16 @@ test('package verifier accepts an MV3 manifest with exactly temporary active-tab
   const safe = verify(safeManifest);
   expect(safe.status, safe.stderr).toBe(0);
   expect(safe.stdout).toBe('manifest contract passed\n');
+});
+
+test.each([
+  ['missing action command', { ...safeManifest, commands: {} }],
+  ['wrong action shortcut', { ...safeManifest, commands: { _execute_action: { suggested_key: { default: 'Ctrl+Shift+X' } } } }],
+  ['additional command', { ...safeManifest, commands: { ...safeManifest.commands, analyze: { suggested_key: { default: 'Ctrl+Shift+U' } } } }],
+])('package verifier rejects %s', (_label, manifest) => {
+  const result = verify(manifest);
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('commands must be exactly');
 });
 
 test('package verifier rejects every static content script', () => {

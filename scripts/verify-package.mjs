@@ -3,6 +3,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const allowedPermissions = ['activeTab', 'scripting', 'storage'];
+const requiredCommands = { _execute_action: { suggested_key: { default: 'Ctrl+Shift+Y' } } };
 const secretManifestKeys = new Set(['api_key', 'apiKey', 'token', 'secret', 'password']);
 const executableManifestKeys = new Set(['service_worker', 'js']);
 const runtimeAssetExtension = /\.(?:css|html|js|mjs|cjs|json)$/i;
@@ -83,6 +84,7 @@ function validateManifest(manifest) {
     return 'permissions must be exactly activeTab, scripting, storage in that order without duplicates';
   }
   if (!Array.isArray(manifest.host_permissions) || manifest.host_permissions.length !== 0) return 'host_permissions must be exactly []';
+  if (JSON.stringify(manifest.commands) !== JSON.stringify(requiredCommands)) return 'commands must be exactly _execute_action with Ctrl+Shift+Y';
   const remoteExecutableError = findRemoteExecutableUrl(manifest);
   if (remoteExecutableError) return remoteExecutableError;
   if (Object.hasOwn(manifest, 'optional_permissions')) return 'optional_permissions is not allowed';

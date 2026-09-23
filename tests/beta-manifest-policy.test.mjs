@@ -6,6 +6,7 @@ import { generateManifest } from '../scripts/build-manifest.mjs';
 
 const repositoryRoot = resolve(process.cwd());
 const betaPermissions = ['activeTab', 'scripting', 'storage'];
+const betaCommands = { _execute_action: { suggested_key: { default: 'Ctrl+Shift+Y' } } };
 
 function betaManifest() {
   return {
@@ -14,6 +15,7 @@ function betaManifest() {
     version: '0.2.0',
     description: 'Private beta popup.',
     action: { default_popup: 'popup/index.html' },
+    commands: structuredClone(betaCommands),
     permissions: [...betaPermissions],
     host_permissions: [],
   };
@@ -21,6 +23,7 @@ function betaManifest() {
 
 function assertBetaManifestPolicy(manifest) {
   expect(manifest.permissions).toEqual(betaPermissions);
+  expect(manifest.commands).toEqual(betaCommands);
   expect(new Set(manifest.permissions)).toHaveLength(betaPermissions.length);
   expect(manifest.host_permissions).toEqual([]);
   expect(manifest).not.toHaveProperty('content_scripts');

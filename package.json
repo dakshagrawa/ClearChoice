@@ -13,6 +13,8 @@
     "verify:archive": "node scripts/verify-package.mjs --zip ClearChoice-v0.2.0-unpacked.zip",
     "package:unpacked": "npm run build && node scripts/package-unpacked.mjs",
     "e2e": "playwright test",
+    "check:beta": "node scripts/check-beta.mjs",
+    "manual:active-tab-qa": "node scripts/manual-active-tab-qa.mjs",
     "check:release": "node scripts/check-release.mjs"
   },
   "devDependencies": {
