@@ -3,6 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { chromium, expect, test, type BrowserContext } from 'playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 
 const repositoryRoot = resolve(process.cwd());
 const extensionPath = resolve(repositoryRoot, 'dist');
@@ -76,6 +77,30 @@ test('packaged direct-popup automation does not claim an activeTab grant', async
   }
 });
 
+test('packaged-popup accessibility has no serious or critical Axe violations and reaches Analyze and Restore by Tab', async () => {
+  const userDataDir = await mkdtemp(resolve(tmpdir(), 'clearchoice-popup-a11y-'));
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: 'chromium',
+    headless: false,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+  try {
+    const id = await extensionId(context);
+    const popup = await context.newPage();
+    await popup.goto(`chrome-extension://${id}/popup/index.html`);
+
+    const results = await new AxeBuilder({ page: popup }).analyze();
+    expect(results.violations.filter((violation) => ['serious', 'critical'].includes(violation.impact ?? ''))).toEqual([]);
+
+    await popup.locator('body').focus();
+    await popup.keyboard.press('Tab');
+    await expect(popup.getByRole('button', { name: 'Analyze' })).toBeFocused();
+    await popup.keyboard.press('Tab');
+    await expect(popup.getByRole('button', { name: 'Restore' })).toBeFocused();
+  } finally {
+    await closeExtension(context, userDataDir);
+  }
+});
 
 declare global {
   interface Window {

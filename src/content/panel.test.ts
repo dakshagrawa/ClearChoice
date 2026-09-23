@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { removePanel, renderPanel } from './panel';
@@ -51,7 +52,7 @@ it.each(['light', 'dark'])('payload-level accessibility: supports keyboard dismi
 
   const panel = document.querySelector<HTMLElement>('aside[data-clearchoice-panel]');
   const dismiss = panel?.shadowRoot?.querySelector<HTMLButtonElement>('button') ?? panel?.querySelector('button');
-  const styles = panel?.shadowRoot?.querySelector('style')?.textContent ?? '';
+  const styles = readFileSync('src/content/panel.css', 'utf8');
   dismiss?.focus();
 
   expect(document.activeElement === dismiss || panel?.shadowRoot?.activeElement === dismiss).toBe(true);
@@ -60,6 +61,8 @@ it.each(['light', 'dark'])('payload-level accessibility: supports keyboard dismi
   expect(styles).toContain('button:focus-visible');
   expect(styles).toContain('min-width: 44px');
   expect(styles).toContain('min-height: 44px');
+  dismiss?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+  expect(panel?.shadowRoot?.querySelector('[data-clearchoice-dismiss]')).toBe(dismiss);
   document.documentElement.style.colorScheme = '';
 });
 

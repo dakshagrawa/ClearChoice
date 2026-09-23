@@ -11,6 +11,7 @@ const REQUIRED_MARKER_FIELDS = new Set([
   'outcome',
   'cleanFixtureIntegrity',
   'dynamicFixtureIntegrity',
+  'accessibility',
   'commit',
   'manifestSha256',
   'reviewer',
@@ -34,6 +35,7 @@ export function validateManualActiveTabMarker(marker, expected) {
   if (marker.outcome !== 'passed') return { ok: false, error: 'marker outcome must be passed' };
   if (marker.cleanFixtureIntegrity !== 'passed') return { ok: false, error: 'marker must attest that clean fixture integrity passed' };
   if (marker.dynamicFixtureIntegrity !== 'passed') return { ok: false, error: 'marker must attest that dynamic fixture integrity passed' };
+  if (marker.accessibility !== true) return { ok: false, error: 'marker must attest that active-tab panel accessibility passed' };
   if (marker.reviewer !== LOCAL_HUMAN_ATTESTATION) return { ok: false, error: 'marker reviewer must be the local human attestation token' };
   if (marker.commit !== expected.commit) return { ok: false, error: 'marker does not attest to the current commit' };
   if (marker.manifestSha256 !== expected.manifestSha256) return { ok: false, error: 'marker does not attest to the current manifest' };

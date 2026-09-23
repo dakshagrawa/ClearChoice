@@ -123,6 +123,7 @@ export function createManualActiveTabQaMarker({ commit, manifestSha256 }) {
     outcome: 'passed',
     cleanFixtureIntegrity: 'passed',
     dynamicFixtureIntegrity: 'passed',
+    accessibility: true,
     commit,
     manifestSha256,
     reviewer: LOCAL_HUMAN_ATTESTATION,
@@ -164,7 +165,7 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
 
     process.stdout.write('\nManual active-tab QA is waiting. In the runner-provided visible Chromium window:\n');
     process.stdout.write('That Chromium can access only the local 127.0.0.1 fixtures and the extension; its dead proxy blocks non-loopback sites, so it cannot validate real sites. This boundary applies only to Chromium launched by this runner, not other browser instances.\n');
-    process.stdout.write('CLEAN FIXTURE: click the ClearChoice toolbar icon with the pointer, then click Analyze in the browser-owned popup with the pointer.\n');
+    process.stdout.write('CLEAN FIXTURE: click the ClearChoice toolbar icon with the pointer, then click Analyze in the browser-owned popup with the pointer. With the actual visible panel open, press Tab and confirm visible focus reaches Dismiss, then press Escape and confirm only the ClearChoice panel closes.\n');
     process.stdout.write('The runner retains only SHA-256 integrity digests and panel/integrity pass-fail predicates; it never writes or prints page data.\n\n');
 
     await waitForPanel(cleanPage, 'attached');
@@ -174,7 +175,7 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
     await dynamicPage.goto(`${fixtureOrigin}/checkout/dynamic-beta#checkout`);
     await captureIntegrityBaseline(dynamicPage);
     await dynamicPage.bringToFront();
-    process.stdout.write('DYNAMIC FIXTURE: click the toolbar icon with the pointer, then click Analyze in its popup with the pointer.\n');
+    process.stdout.write('DYNAMIC FIXTURE: click the toolbar icon with the pointer, then click Analyze in its popup with the pointer. With the actual visible panel open, press Tab and confirm visible focus reaches Dismiss, then press Escape and confirm only the ClearChoice panel closes. Reopen it with a toolbar pointer click and popup pointer Analyze before continuing.\n');
     await waitForPanel(dynamicPage, 'attached');
     await assertIntegrity(dynamicPage, 'dynamic-fixture Analyze');
 

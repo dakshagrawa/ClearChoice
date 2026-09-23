@@ -101,10 +101,10 @@ test('retains digest and boolean predicates only, and detects a changed host fie
 
     const outputMarker = createManualActiveTabQaMarker({ commit: 'a'.repeat(40), manifestSha256: 'b'.repeat(64) });
     expect(Object.keys(outputMarker).sort()).toEqual([
+      'accessibility',
       'cleanFixtureIntegrity',
       'commit',
       'dynamicFixtureIntegrity',
-      'accessibility',
       'manifestSha256',
       'outcome',
       'reviewer',

@@ -18,6 +18,7 @@
     "check:release": "node scripts/check-release.mjs"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@eslint/js": "9.39.1",
     "@types/chrome": "0.0.327",
     "@types/node": "22.18.12",
