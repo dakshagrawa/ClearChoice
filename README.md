@@ -1,6 +1,6 @@
 # ClearChoice 0.3.0-beta.1
 
-ClearChoice is an **unpublished, non-production Chromium Manifest V3 private beta**. It is not published, store-distributed, or production-ready.
+ClearChoice is an **unpublished, non-production Linux Chromium Manifest V3 private beta**. It is not published, store-distributed, or production-ready.
 
 ## Private-beta scope
 
@@ -27,7 +27,7 @@ Run `npm ci`, `npm run build`, and `npm run serve:fixtures`. Controlled fake-che
 
 ## Manual active-tab QA (required for beta gate)
 
-Automated Playwright/CDP input reaches page JavaScript but does not invoke Chromium's extension action, so it cannot prove an `activeTab` grant. The packaged E2E intentionally proves that this path remains denied; it is **not** an automated active-tab success claim.
+Automated Playwright/CDP input reaches page JavaScript but does not invoke Chromium's extension action, so it cannot prove an `activeTab` grant. The packaged E2E intentionally proves that this path remains denied; it is **not** an automated active-tab success claim. This private beta and its `check:beta` manual-marker gate are supported only on Linux Chromium: marker validation deliberately binds the open file descriptor through Linux `/proc/self/fd`, so `check:beta` fails closed with an explicit diagnostic on macOS and Windows rather than claiming portability.
 
 After `npm run build`, run the following locally with a human available to use the visible browser chrome:
 

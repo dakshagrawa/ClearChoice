@@ -23,13 +23,20 @@ function isInsideRepository(path) {
   return pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !pathFromRoot.startsWith('/'));
 }
 
-export function readManualActiveTabMarker(markerPath, { beforeOpen } = {}) {
+export function readManualActiveTabMarker(markerPath, {
+  platform = process.platform,
+  testHooks = {},
+} = {}) {
+  if (platform !== 'linux') {
+    throw new Error(`check:beta manual active-tab QA marker validation is supported only on Linux because it validates the opened descriptor through /proc/self/fd; current platform: ${platform}`);
+  }
+
   const resolvedMarkerPath = resolve(markerPath);
   if (isInsideRepository(resolvedMarkerPath)) {
     throw new Error('CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point outside the repository so it cannot be committed or archived');
   }
 
-  beforeOpen?.();
+  testHooks.beforeOpen?.();
   let descriptor;
   try {
     try {
@@ -43,6 +50,7 @@ export function readManualActiveTabMarker(markerPath, { beforeOpen } = {}) {
     if (!fstatSync(descriptor).isFile()) {
       throw new Error('CLEARCHOICE_ACTIVE_TAB_QA_MARKER must be a regular file');
     }
+    testHooks.afterOpen?.();
     const openedMarkerPath = realpathSync(`/proc/self/fd/${descriptor}`);
     if (isInsideRepository(openedMarkerPath)) {
       throw new Error('CLEARCHOICE_ACTIVE_TAB_QA_MARKER must resolve outside the repository at read time so it cannot be committed or archived');

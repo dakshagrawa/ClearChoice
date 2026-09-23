@@ -93,6 +93,17 @@ test('check:beta rejects a marker path inside the repository before reading it',
   expect(result.stderr).toContain('outside the repository');
 });
 
+test('check:beta fails closed with a Linux-only diagnostic before opening a marker on another platform', () => {
+  expect(() => readManualActiveTabMarker('/external/marker.json', {
+    platform: 'darwin',
+    testHooks: {
+      beforeOpen() {
+        throw new Error('marker must not be opened on an unsupported platform');
+      },
+    },
+  })).toThrow('supported only on Linux because it validates the opened descriptor through /proc/self/fd; current platform: darwin');
+});
+
 test('check:beta rejects an external marker symlink before reading it', async () => {
   const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-beta-marker-symlink-'));
   try {
@@ -151,7 +162,7 @@ test('check:beta rejects a marker reached through a parent-directory symlink int
   }
 });
 
-test('check:beta rejects an opened repository marker after a controlled parent symlink swap', async () => {
+test('check:beta rejects a marker whose parent symlink is swapped into the repository before opening', async () => {
   const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-beta-marker-parent-swap-'));
   const parentPath = resolve(markerDirectory, 'parent');
   const targetDirectory = resolve(markerDirectory, 'target');
@@ -164,13 +175,42 @@ test('check:beta rejects an opened repository marker after a controlled parent s
     symlinkSync(targetDirectory, parentPath);
 
     expect(() => readManualActiveTabMarker(resolve(parentPath, markerName), {
-      beforeOpen() {
-        unlinkSync(parentPath);
-        symlinkSync(root, parentPath);
+      testHooks: {
+        beforeOpen() {
+          unlinkSync(parentPath);
+          symlinkSync(root, parentPath);
+        },
       },
     })).toThrow('outside the repository');
   } finally {
     await rm(repositoryMarkerPath, { force: true });
+    await rm(markerDirectory, { recursive: true, force: true });
+  }
+});
+
+test('check:beta keeps reading the opened external marker after a controlled parent symlink swap', async () => {
+  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-beta-marker-post-open-parent-swap-'));
+  const parentPath = resolve(markerDirectory, 'parent');
+  const targetDirectory = resolve(markerDirectory, 'target');
+  const markerName = 'marker.json';
+  let swapped = false;
+  try {
+    await mkdir(targetDirectory);
+    await writeFile(resolve(targetDirectory, markerName), `${JSON.stringify(marker())}\n`);
+    symlinkSync(targetDirectory, parentPath);
+
+    expect(readManualActiveTabMarker(resolve(parentPath, markerName), {
+      platform: 'linux',
+      testHooks: {
+        afterOpen() {
+          unlinkSync(parentPath);
+          symlinkSync(root, parentPath);
+          swapped = true;
+        },
+      },
+    })).toEqual(marker());
+    expect(swapped).toBe(true);
+  } finally {
     await rm(markerDirectory, { recursive: true, force: true });
   }
 });

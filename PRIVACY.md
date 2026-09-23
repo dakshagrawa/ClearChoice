@@ -1,6 +1,6 @@
 # ClearChoice 0.3.0-beta.1 Private-Beta Privacy Notice
 
-ClearChoice is an unpublished Chromium private beta. It is not a published service or production privacy program.
+ClearChoice is an unpublished Linux Chromium private beta. It is not a published service or production privacy program.
 
 ## Access and data handling
 
@@ -10,7 +10,7 @@ Task 2 current-tab injection is implemented as current beta work, not release-re
 
 Analyze rechecks the chosen tab before injection and after awaited injection. If a tab switch is observed at those checkpoints, it cancels instead of messaging the old target. An extension cannot atomically lock focus between those checks and asynchronous browser operations, so no claim is made that every micro-race can be prevented.
 
-A dismissed findings-panel state may be stored in `chrome.storage.local`; it is not used for tracking, analytics, synchronization, advertising, or profiling. After local human attestation, the separate manual active-tab QA runner emits—but never writes—a data-free JSON marker. The reviewer manually saves that local self-attestation outside the repository; it records only pass/fail, the fixed literal `local-human-attestation`, current Git commit, and manifest hash, with no URL, title, DOM text, form value, or finding. It is not cryptographic proof of a human gesture.
+A dismissed findings-panel state may be stored in `chrome.storage.local`; it is not used for tracking, analytics, synchronization, advertising, or profiling. After local human attestation, the separate Linux-only manual active-tab QA runner emits—but never writes—a data-free JSON marker. The reviewer manually saves that local self-attestation outside the repository; it records only pass/fail, the fixed literal `local-human-attestation`, current Git commit, and manifest hash, with no URL, title, DOM text, form value, or finding. `check:beta` deliberately binds that marker's opened descriptor through Linux `/proc/self/fd`; it fails closed with an explicit diagnostic on macOS and Windows, which are not supported by this beta gate. It is not cryptographic proof of a human gesture.
 
 The release verifier rejects static package patterns for network APIs, remote executable URLs, secrets, dynamic imports, external resource URLs, and supported DOM URL sinks. This fail-closed static policy does not prove every possible browser/runtime networking behavior is absent.
 
