@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -77,46 +76,6 @@ test('packaged direct-popup automation does not claim an activeTab grant', async
   }
 });
 
-test('built content analysis preserves the dynamic checkout host across repeated user requests', async () => {
-  const { server, origin } = await startFixtureServer();
-  const userDataDir = await mkdtemp(resolve(tmpdir(), 'clearchoice-integrity-'));
-  const context = await chromium.launchPersistentContext(userDataDir, {
-    channel: 'chromium', headless: false, args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
-  });
-  try {
-    const fixture = await context.newPage();
-    await fixture.addInitScript(() => {
-      (window as any).chrome = { runtime: { onMessage: { addListener: (listener: unknown) => { (window as any).__clearchoiceListener = listener; } } }, storage: { local: { get: async () => ({ dismissed: false }), set: async () => undefined } } };
-    });
-    await fixture.goto(`${origin}/checkout/dynamic-beta#checkout`);
-    await fixture.addScriptTag({ path: resolve(extensionPath, 'content.js') });
-    const snapshot = () => fixture.evaluate(() => {
-      const owned = (node: Element) => node.closest('[data-clearchoice-panel]') !== null;
-      const nodes = Array.from(document.querySelectorAll('input, button, a')).filter((node) => !owned(node));
-      (window as any).__hostNodes ??= nodes;
-      return { href: location.href, forms: Array.from(document.forms, (form) => form.action), controls: Array.from(document.querySelectorAll('input, select')).filter((node) => !owned(node)).map((node: any) => [node.tagName, node.name, node.type, node.value, node.checked, node.disabled]), sameNodes: nodes.every((node, index) => node === (window as any).__hostNodes[index]) };
-    });
-    const request = (type: string) => fixture.evaluate(async (messageType) => await new Promise((resolveResponse) => (window as any).__clearchoiceListener({ type: messageType }, {}, resolveResponse)), type);
-    const before = await snapshot();
-    await request('CLEARCHOICE_ANALYZE');
-    await expect(fixture.locator('[data-clearchoice-panel]')).toHaveCount(1);
-    expect(await snapshot()).toEqual(before);
-    await fixture.locator('[data-clearchoice-panel]').evaluate((panel) => (panel.shadowRoot?.querySelector('button') as HTMLButtonElement).click());
-    await expect(fixture.locator('[data-clearchoice-panel]')).toHaveCount(0);
-    expect(await snapshot()).toEqual(before);
-    await request('CLEARCHOICE_RESTORE');
-    await request('CLEARCHOICE_ANALYZE');
-    await request('CLEARCHOICE_ANALYZE');
-    await expect(fixture.locator('[data-clearchoice-panel]')).toHaveCount(1);
-    await fixture.locator('#replace-order-summary').click();
-    await expect(fixture.locator('#fake-order-summary')).toContainText('updated');
-    await expect(fixture.locator('[data-clearchoice-panel]')).toHaveCount(1);
-    expect(await snapshot()).toEqual(before);
-  } finally {
-    await closeExtension(context, userDataDir);
-    await closeServer(server);
-  }
-});
 
 declare global {
   interface Window {

@@ -1,7 +1,7 @@
+/* global window, location, document */
 import { execFileSync } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -11,8 +11,17 @@ import { LOCAL_HUMAN_ATTESTATION, sha256 } from './active-tab-qa.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const extensionPath = resolve(root, 'dist');
-const fixturePath = resolve(root, 'fixtures/clean-checkout.html');
+const fixturePaths = {
+  clean: resolve(root, 'fixtures/clean-checkout.html'),
+  dynamic: resolve(root, 'fixtures/beta-dynamic-checkout.html'),
+};
 const fixtureOriginPattern = /^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})$/;
+
+export function fixtureForRequest(url) {
+  if (url === '/checkout/clean') return 'clean';
+  if (url === '/checkout/dynamic-beta') return 'dynamic';
+  throw new Error('unknown manual QA fixture request');
+}
 
 export function assertFixtureOrigin(origin) {
   const match = fixtureOriginPattern.exec(origin);
@@ -62,13 +71,59 @@ function closeServer(server) {
   return new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
 }
 
+async function captureIntegrityBaseline(page) {
+  await page.evaluate(() => {
+    const owned = (node) => node.closest('[data-clearchoice-panel]') !== null;
+    window.__clearchoiceManualIntegrityBaseline = {
+      href: location.href,
+      forms: Array.from(document.forms, (form) => form.action),
+      controls: Array.from(document.querySelectorAll('input, select'))
+        .filter((node) => !owned(node))
+        .map((node) => [node.tagName, node.name, node.type, node.value, node.checked, node.disabled]),
+      nodes: Array.from(document.querySelectorAll('input, button, a')).filter((node) => !owned(node)),
+    };
+  });
+}
+
+async function integrityPassed(page) {
+  return page.evaluate(() => {
+    const baseline = window.__clearchoiceManualIntegrityBaseline;
+    if (!baseline) return false;
+    const owned = (node) => node.closest('[data-clearchoice-panel]') !== null;
+    const controls = Array.from(document.querySelectorAll('input, select'))
+      .filter((node) => !owned(node))
+      .map((node) => [node.tagName, node.name, node.type, node.value, node.checked, node.disabled]);
+    const nodes = Array.from(document.querySelectorAll('input, button, a')).filter((node) => !owned(node));
+    return location.href === baseline.href
+      && JSON.stringify(Array.from(document.forms, (form) => form.action)) === JSON.stringify(baseline.forms)
+      && JSON.stringify(controls) === JSON.stringify(baseline.controls)
+      && nodes.length === baseline.nodes.length
+      && nodes.every((node, index) => node === baseline.nodes[index]);
+  });
+}
+
+async function assertIntegrity(page, phase) {
+  if (!(await integrityPassed(page))) throw new Error(`manual ${phase} integrity predicate failed`);
+}
+
+async function waitForPanel(page, state) {
+  await page.locator('aside[data-clearchoice-panel]').waitFor({ state, timeout: 300_000 });
+}
+
 export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
   parseArguments(argv);
   await readFile(resolve(extensionPath, 'manifest.json'));
-  const fixture = await readFile(fixturePath);
-  const server = createServer((_request, response) => {
-    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end(fixture);
+  const fixtures = Object.fromEntries(await Promise.all(
+    Object.entries(fixturePaths).map(async ([name, path]) => [name, await readFile(path)]),
+  ));
+  const server = createServer((request, response) => {
+    try {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      response.end(fixtures[fixtureForRequest(request.url)]);
+    } catch {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('not found');
+    }
   });
   await new Promise((resolveListen, reject) => {
     server.once('error', reject);
@@ -83,24 +138,50 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
 
     profile = await mkdtemp(resolve(tmpdir(), 'clearchoice-manual-active-tab-'));
     context = await chromium.launchPersistentContext(profile, reviewBrowserLaunchOptions(extensionPath));
-    const fixturePage = await context.newPage();
-    await fixturePage.goto(`${fixtureOrigin}/checkout/clean`);
-    await fixturePage.bringToFront();
+    const cleanPage = await context.newPage();
+    await cleanPage.goto(`${fixtureOrigin}/checkout/clean`);
+    await captureIntegrityBaseline(cleanPage);
+    await cleanPage.bringToFront();
 
     process.stdout.write('\nManual active-tab QA is waiting. In the runner-provided visible Chromium window:\n');
-    process.stdout.write('That Chromium can access only the local 127.0.0.1 fixture and the extension; its dead proxy blocks non-loopback sites, so it cannot validate real sites. This boundary applies only to Chromium launched by this runner, not other browser instances.\n');
-    process.stdout.write('1. Click the ClearChoice toolbar icon with the pointer (do not use a keyboard shortcut).\n');
-    process.stdout.write('2. In that browser-owned popup, click Analyze with the pointer.\n');
-    process.stdout.write('The script observes only whether the local fixture receives a ClearChoice panel; it reads no page data.\n\n');
+    process.stdout.write('That Chromium can access only the local 127.0.0.1 fixtures and the extension; its dead proxy blocks non-loopback sites, so it cannot validate real sites. This boundary applies only to Chromium launched by this runner, not other browser instances.\n');
+    process.stdout.write('CLEAN FIXTURE: click the ClearChoice toolbar icon with the pointer, then click Analyze in the browser-owned popup with the pointer.\n');
+    process.stdout.write('The runner captures only panel/integrity pass-fail predicates and never writes or prints page data.\n\n');
 
-    await fixturePage.locator('aside[data-clearchoice-panel]').waitFor({ state: 'attached', timeout: 300_000 });
+    await waitForPanel(cleanPage, 'attached');
+    await assertIntegrity(cleanPage, 'clean-fixture Analyze');
+
+    const dynamicPage = await context.newPage();
+    await dynamicPage.goto(`${fixtureOrigin}/checkout/dynamic-beta#checkout`);
+    await captureIntegrityBaseline(dynamicPage);
+    await dynamicPage.bringToFront();
+    process.stdout.write('DYNAMIC FIXTURE: click the toolbar icon with the pointer, then click Analyze in its popup with the pointer.\n');
+    await waitForPanel(dynamicPage, 'attached');
+    await assertIntegrity(dynamicPage, 'dynamic-fixture Analyze');
+
+    process.stdout.write('DYNAMIC FIXTURE: dismiss the findings panel with its pointer control.\n');
+    await waitForPanel(dynamicPage, 'detached');
+    await assertIntegrity(dynamicPage, 'dynamic-fixture Dismiss');
+
+    process.stdout.write('DYNAMIC FIXTURE: use a toolbar pointer click and popup pointer click to Restore, then repeat toolbar/popup pointer Analyze twice. Click Replace fake order summary with the pointer.\n');
+    process.stdout.write('After those steps, return to this terminal and type ATTEST only if you personally observed all pointer actions complete.\n');
     const terminal = createInterface({ input: process.stdin, output: process.stdout });
-    const attestation = await terminal.question('After personally completing both pointer clicks, type ATTEST to emit the pass-only marker: ');
+    const attestation = await terminal.question('Type ATTEST to evaluate final pass/fail predicates and emit the marker: ');
     terminal.close();
     if (attestation !== 'ATTEST') throw new Error('manual human attestation was not confirmed; marker was not emitted');
+
+    await waitForPanel(dynamicPage, 'attached');
+    if (await dynamicPage.locator('aside[data-clearchoice-panel]').count() !== 1) throw new Error('manual dynamic-fixture repeated Analyze panel predicate failed');
+    await dynamicPage.locator('#fake-order-summary').waitFor({ state: 'attached', timeout: 300_000 });
+    const replacementPassed = await dynamicPage.locator('#fake-order-summary').evaluate((summary) => summary.textContent?.includes('updated') === true);
+    if (!replacementPassed) throw new Error('manual dynamic-fixture replacement predicate failed');
+    await assertIntegrity(dynamicPage, 'dynamic-fixture Restore/repeated Analyze/replacement');
+
     const marker = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       outcome: 'passed',
+      cleanFixtureIntegrity: 'passed',
+      dynamicFixtureIntegrity: 'passed',
       commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
       manifestSha256: sha256(await readFile(resolve(root, 'manifest.json'))),
       reviewer: LOCAL_HUMAN_ATTESTATION,

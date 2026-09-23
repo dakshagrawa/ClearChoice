@@ -120,7 +120,7 @@ it('ignores malformed inbound requests without analyzing or restoring', async ()
   expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
 });
 
-it('preserves every host checkout state through Analyze, Dismiss, Restore, repeat Analyze, and summary replacement', async () => {
+it('content-payload/JSDOM integration preserves every host checkout integrity predicate through Analyze, Dismiss, Restore, repeated Analyze, and summary replacement', async () => {
   const { addListener } = installChrome();
   document.body.innerHTML = `
     <main><h1>Local beta checkout</h1>

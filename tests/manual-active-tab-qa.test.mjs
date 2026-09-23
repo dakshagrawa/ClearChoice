@@ -8,6 +8,7 @@ import { afterEach, expect, test } from 'vitest';
 import {
   assertFixtureOrigin,
   fixtureOriginForServerAddress,
+  fixtureForRequest,
   restrictedBrowserArgs,
   reviewBrowserLaunchOptions,
   runManualActiveTabQa,
@@ -38,6 +39,12 @@ function close(server) {
 
 afterEach(async () => {
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+test('serves separate clean and dynamic fake checkout fixtures for manual integrity QA', () => {
+  expect(fixtureForRequest('/checkout/clean')).toBe('clean');
+  expect(fixtureForRequest('/checkout/dynamic-beta')).toBe('dynamic');
+  expect(() => fixtureForRequest('/')).toThrow('unknown manual QA fixture request');
 });
 
 test('derives the navigated fixture origin only from the runner-owned 127.0.0.1 listener', () => {

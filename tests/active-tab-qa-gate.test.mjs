@@ -16,8 +16,10 @@ const reviewer = 'local-human-attestation';
 
 function marker(overrides = {}) {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     outcome: 'passed',
+    cleanFixtureIntegrity: 'passed',
+    dynamicFixtureIntegrity: 'passed',
     commit,
     manifestSha256,
     reviewer,
@@ -31,6 +33,8 @@ test('accepts a deliberately supplied local human attestation marker for this co
 
 test.each([
   ['a non-pass outcome', marker({ outcome: 'failed' })],
+  ['a missing clean fixture integrity attestation', marker({ cleanFixtureIntegrity: 'failed' })],
+  ['a missing dynamic fixture integrity attestation', marker({ dynamicFixtureIntegrity: 'failed' })],
   ['a missing reviewer attestation', marker({ reviewer: '' })],
   ['a free-text reviewer value', marker({ reviewer: 'local-qa' })],
   ['a marker for another commit', marker({ commit: '0'.repeat(40) })],
