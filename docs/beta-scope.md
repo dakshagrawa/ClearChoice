@@ -1,6 +1,6 @@
 # ClearChoice private-beta scope
 
-ClearChoice private beta runs only on Linux Chromium when a person explicitly invokes Analyze from the extension popup. Its required `check:beta` manual-QA marker gate is also Linux-only: it deliberately validates the opened marker descriptor through Linux `/proc/self/fd` and fails closed with a platform-specific diagnostic on macOS and Windows. It uses Chromium's temporary active-tab permission to inspect visible English checkout-page evidence locally in that one tab. It does not run automatically, use broad host access, store page data, transmit page data, access accounts, process payments, or change checkout behavior.
+ClearChoice private beta runs only on Linux Chromium when a person explicitly invokes Analyze from the extension popup. Its required `check:beta` manual-QA marker gate is also Linux-only: it deliberately validates the opened marker descriptor through Linux `/proc/self/fd` and fails closed with a platform-specific diagnostic on macOS and Windows. It uses Chromium's temporary active-tab permission to briefly inspect visible English checkout-page evidence locally in that one tab. It excludes typed form and `contenteditable` values, and suppresses sensitive-looking static candidates from context cues, findings, and evidence. It does not run automatically, use broad host access, store page data, transmit page data, process payments, or change checkout behavior.
 
 ## Supported boundary
 

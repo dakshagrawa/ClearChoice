@@ -11,13 +11,13 @@ ClearChoice is an **unpublished, non-production Linux Chromium Manifest V3 priva
 - A switch observed at either recheck cancels the request. Extension code cannot atomically hold browser focus across an asynchronous injection or message operation, so it cannot eliminate a race occurring after a recheck checkpoint.
 - The extension has no persistent host access. Local checkout fixtures remain available for internal testing, but their host is not exposed by the manifest.
 - `dist/content.js` is the intentional local payload for programmatic injection, not a dead build artifact or a static content script.
-- The analysis is user initiated and reads visible page text and checked checkbox/radio labels only in the injected page context. The popup receives only a typed status and integer finding count.
+- The analysis is user initiated and briefly inspects visible evidence locally in the injected page context. It excludes typed `input`, `textarea`, `select`, and `contenteditable` values, and discards an entire static context or finding candidate when it looks like it displays an email, payment card/PAN or masked card, account/bank/routing number, CVV, or security code. The popup receives only a typed status and integer finding count.
 
 See [the beta scope](docs/beta-scope.md) and [beta release checklist](docs/beta-release-checklist.md) for current private-beta boundaries and gates.
 
 ## Explicit non-goals and limits
 
-This beta does **not** access accounts, payment data, or cancellation flows; perform checkout actions; modify checkout controls, selections, prices, forms, or page content; make legal/compliance determinations; support browser stores or real production use; or include remote code, network APIs, or secrets.
+This beta does **not** read typed form or `contenteditable` values; perform checkout actions; modify checkout controls, selections, prices, forms, or page content; make legal/compliance determinations; support browser stores or real production use; or include remote code, network APIs, or secrets. Sensitive-looking static display candidates are suppressed from context cues, findings, and evidence rather than redacted or retained.
 
 The package verifier fail-closes emitted assets containing network APIs, remote executable URLs, secret-like patterns, dynamic imports, and external resource URL sinks. It is a static check, not proof that every browser/runtime network behavior is impossible.
 

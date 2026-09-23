@@ -12,7 +12,7 @@ All findings are informational heuristics. Their machine-readable severity is ei
 - `billed`, `charged`, or `renews automatically`, followed within 80 non-period characters by a cadence such as `every`, `monthly`, `weekly`, `annually`, `yearly`, `month`, `week`, or `year` (`notice`); or
 - `subscription`, `recurring payment`, or `auto-renew` without a preceding stronger signal (`info`).
 
-**Output:** `Possible recurring charge` with the candidate's visible text as evidence and the severity shown above. Nested matching candidates are reduced so the enclosing matching element is not reported when it contains another matching candidate.
+**Output:** `Possible recurring charge` with the candidate's visible text as evidence and the severity shown above. A candidate containing an email, payment card/PAN or masked card, account/bank/routing number, CVV, or security-code text is discarded whole rather than redacted or retained. Nested matching candidates are reduced so the enclosing matching element is not reported when it contains another matching candidate.
 
 **Known false positives:** policy copy, educational text, historical invoices, non-purchase memberships, free trials described with recurring language, and unrelated visible text can match. A match does not prove a charge exists or will recur.
 
@@ -22,7 +22,7 @@ All findings are informational heuristics. Their machine-readable severity is ei
 
 **Candidate controls:** checked `input[type="checkbox"]` and `input[type="radio"]` elements with an associated label (via `labels` or an enclosing `label`).
 
-**Exclusions:** hidden controls; controls or ancestors that are `[hidden]`, `aria-hidden="true"`, `display: none`, or `visibility: hidden`; controls inside `[data-clearchoice-ignore]`; and labels that are not visible.
+**Exclusions:** hidden controls; controls or ancestors that are `[hidden]`, `aria-hidden="true"`, `display: none`, or `visibility: hidden`; controls inside `[data-clearchoice-ignore]`; labels that are not visible; and labels containing an email, payment card/PAN or masked card, account/bank/routing number, CVV, or security-code text. Sensitive candidates are discarded whole rather than redacted or retained.
 
 **Signal:** normalized visible label text containing either a currency amount using `$`, `€`, or `£`, or one of `paid`, `premium`, `protection`, or `membership`.
 

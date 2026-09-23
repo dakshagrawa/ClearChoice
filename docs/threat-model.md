@@ -12,9 +12,9 @@ Controlled local fixtures remain available for internal testing, but their host 
 
 | Asset / concern | Private-beta boundary |
 | --- | --- |
-| Page text and findings | User invocation triggers temporary active-tab processing. Content requests and popup responses use closed schemas; page data remains in the page context. |
+| Page text and findings | User invocation triggers temporary active-tab processing. All visible-evidence analysis is local; typed form/contenteditable values are excluded and sensitive-looking static candidates are discarded whole. Content requests and popup responses use closed schemas; page data remains in the page context. |
 | Temporary active-tab authorization | A human toolbar-action click is required before popup Analyze/Restore can inject into the current active tab. The `_execute_action` shortcut is a documented user affordance. Automated Playwright/CDP input is intentionally treated as denied and cannot attest to this grant. Automated content-payload/JSDOM integrity tests use a fake bridge and cannot prove packaged MV3 injection. The Linux-only beta gate requires a local schema-version-2 self-attestation for clean and dynamic fake-fixture integrity, bound to the commit and manifest, validates the safely opened descriptor through `/proc/self/fd`, and fails closed on macOS and Windows; its fixed `local-human-attestation` token is not cryptographic proof and cannot prove the human gesture to CI. |
-| Accounts, credentials, payment data | Not accessed; no account permissions, login flows, or checkout actions exist. |
+| Typed credentials and sensitive-looking displayed text | Typed form/contenteditable values are excluded; static context/finding candidates containing email, payment-card/PAN/masked-card, account/bank/routing-number, CVV, or security-code patterns are discarded whole before evidence, messages, or storage. |
 | Local persistence | `chrome.storage.local` is limited to the dismissible findings-panel state. |
 
 ## Threats and mitigations

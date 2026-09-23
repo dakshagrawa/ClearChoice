@@ -65,4 +65,14 @@ describe('classifyCheckoutContext', () => {
 
     expect(classifyCheckoutContext(fixture)).toBe('supported');
   });
+
+  it('does not use static text containing sensitive-looking displayed values as checkout context cues', () => {
+    const fixture = root(`
+      <main>
+        <section>Checkout — Order summary — Place order. sensitive-context@example.test. Card 4111-1111-1111-1111. Account number: 123456789.</section>
+      </main>
+    `);
+
+    expect(classifyCheckoutContext(fixture)).toBe('unsupported');
+  });
 });

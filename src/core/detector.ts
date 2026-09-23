@@ -1,5 +1,6 @@
 import { dedupeNestedTextFindings, makeFinding } from './dedupe';
 import { cssPath, hasContentEditableAncestor, isElementVisible, normalizeVisibleText } from './normalize';
+import { hasSensitiveDisplayData } from './sensitive';
 import type { Finding, FindingReason, Severity } from './types';
 
 const RECURRING_SELECTOR = 'form, section, aside, label, p, span, div, li';
@@ -77,6 +78,7 @@ export function detectRecurringCharges(root: Element): Finding[] {
     .filter((element) => !isExcludedTextElement(element))
     .filter(isElementVisible)
     .map((element) => ({ element, evidence: visibleText(element) }))
+    .filter(({ evidence }) => !hasSensitiveDisplayData(evidence))
     .map(({ element, evidence }) => ({ element, evidence, match: recurringReason(evidence) }))
     .filter((candidate): candidate is { element: Element; evidence: string; match: { reason: FindingReason; severity: Severity } } => candidate.match !== null)
     .sort((left, right) => inDomOrder(left.element, right.element));
@@ -101,6 +103,7 @@ export function detectPreselectedAddons(root: Element): Finding[] {
     .filter((item): item is { control: HTMLInputElement; label: HTMLLabelElement } => item.label !== null)
     .filter(({ label }) => isElementVisible(label))
     .map(({ control, label }) => ({ control, evidence: visibleText(label) }))
+    .filter(({ evidence }) => !hasSensitiveDisplayData(evidence))
     .filter(({ evidence }) => evidence !== '' && paidSignal.test(evidence))
     .map(({ control, evidence }) => makeFinding(
       'preselected-addon',

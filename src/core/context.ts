@@ -1,4 +1,5 @@
 import { hasContentEditableAncestor, normalizeVisibleText } from './normalize';
+import { hasSensitiveDisplayData } from './sensitive';
 import type { ContextStatus } from './types';
 
 const ACTION_CUE = /\b(?:checkout|place\s+order|complete\s+order|pay\s+now|order\s+total)\b/i;
@@ -39,7 +40,7 @@ export function classifyCheckoutContext(root: Element): ContextStatus {
   for (let textNode = textNodes.nextNode() as Text | null; textNode; textNode = textNodes.nextNode() as Text | null) {
     if (!isVisibleStaticText(textNode)) continue;
     const text = normalizeVisibleText(textNode.textContent ?? '');
-    if (text === '') continue;
+    if (text === '' || hasSensitiveDisplayData(text)) continue;
     hasActionCue ||= ACTION_CUE.test(text);
     hasSummaryCue ||= SUMMARY_CUE.test(text);
     hasAccountSettingsCue ||= ACCOUNT_SETTINGS_CUE.test(text);

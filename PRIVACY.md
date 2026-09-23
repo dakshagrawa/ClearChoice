@@ -6,7 +6,7 @@ ClearChoice is an unpublished Linux Chromium private beta. It is not a published
 
 The private-beta manifest declares exactly `activeTab`, `scripting`, and `storage`, plus one `_execute_action` shortcut (`Ctrl+Shift+Y`), with no host permissions, optional permissions, static content scripts, background worker, or external connections. `activeTab` is temporary access to the user-invoked active tab; it does not grant broad or persistent host access.
 
-Task 2 current-tab injection is implemented as current beta work, not release-ready functionality. It begins after a user invokes Analyze or Restore for the active current tab, processes visible text and qualifying checked checkbox/radio labels locally in the injected page context, and returns only a typed status plus integer finding count to the popup. Controlled local checkout fixtures remain for internal testing but are not named in the manifest.
+Task 2 current-tab injection is implemented as current beta work, not release-ready functionality. It begins after a user invokes Analyze or Restore for the active current tab and briefly inspects visible evidence locally in the injected page context. It excludes typed `input`, `textarea`, `select`, and `contenteditable` values; it also discards any static context or finding candidate containing an email, payment card/PAN or masked-card pattern, account/bank/routing number, CVV, or security-code text. It does not redact or retain partial raw candidate text. It returns only a typed status plus integer finding count to the popup. Controlled local checkout fixtures remain for internal testing but are not named in the manifest.
 
 Analyze rechecks the chosen tab before injection and after awaited injection. If a tab switch is observed at those checkpoints, it cancels instead of messaging the old target. An extension cannot atomically lock focus between those checks and asynchronous browser operations, so no claim is made that every micro-race can be prevented.
 
@@ -19,7 +19,7 @@ See [the beta scope](docs/beta-scope.md) and [beta release checklist](docs/beta-
 ## What ClearChoice does not access or do
 
 - It does not have persistent access to any host, including the internal fixtures.
-- It does not access accounts, credentials, or payment data.
+- It does not read typed form or `contenteditable` values; sensitive-looking static display candidates are excluded from context cues, findings, and evidence.
 - It does not initiate purchases, cancellations, refunds, subscriptions, or other checkout actions.
 - It does not modify checkout choices or forms.
 - It does not make legal or regulatory determinations.

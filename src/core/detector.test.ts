@@ -128,6 +128,23 @@ describe('detectRecurringCharges', () => {
     expect(JSON.stringify(findings)).not.toContain('EDITABLE_FINDING_ONLY');
   });
 
+  it('suppresses a static recurring candidate that displays sensitive-looking values', () => {
+    const email = 'sensitive-display-email@example.test';
+    const card = '4111 1111 1111 1111';
+    const account = 'Account number: 987654321';
+    const findings = detectRecurringCharges(root(`
+      <main>
+        <section>Membership renews automatically every month. ${email}. Card: ${card}. ${account}.</section>
+      </main>
+    `));
+
+    expect(findings).toEqual([]);
+    const serialized = JSON.stringify(findings);
+    expect(serialized).not.toContain(email);
+    expect(serialized).not.toContain(card);
+    expect(serialized).not.toContain(account);
+  });
+
   it('uses deterministic IDs and no duplicate explanations for equivalent analysis', () => {
     const html = '<section>Membership renews automatically every year.</section>';
 
@@ -185,6 +202,21 @@ describe('detectPreselectedAddons', () => {
 
     expect(findings).toHaveLength(1);
     expect(findings[0]).toMatchObject({ evidence: 'Static protection $5' });
+  });
+
+  it('suppresses a checked paid label that displays sensitive-looking values', () => {
+    const email = 'sensitive-addon-email@example.test';
+    const card = '**** 4242';
+    const routing = 'Routing number: 021000021';
+    const findings = detectPreselectedAddons(root(`
+      <label><input type="checkbox" checked> Add recurring protection for $5. ${email}. Card ${card}. ${routing}. CVV security code.</label>
+    `));
+
+    expect(findings).toEqual([]);
+    const serialized = JSON.stringify(findings);
+    expect(serialized).not.toContain(email);
+    expect(serialized).not.toContain(card);
+    expect(serialized).not.toContain(routing);
   });
 
   it('finds a checked paid radio', () => {
