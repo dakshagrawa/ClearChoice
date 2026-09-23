@@ -10,7 +10,7 @@ Task 2 current-tab injection is implemented as current beta work, not release-re
 
 Analyze rechecks the chosen tab before injection and after awaited injection. If a tab switch is observed at those checkpoints, it cancels instead of messaging the old target. An extension cannot atomically lock focus between those checks and asynchronous browser operations, so no claim is made that every micro-race can be prevented.
 
-A dismissed findings-panel state may be stored in `chrome.storage.local`; it is not used for tracking, analytics, synchronization, advertising, or profiling. The separate manual active-tab QA marker records only pass/fail, reviewer sign-off, current Git commit, and manifest hash; it records no URL, title, DOM text, form value, or finding.
+A dismissed findings-panel state may be stored in `chrome.storage.local`; it is not used for tracking, analytics, synchronization, advertising, or profiling. The separate manual active-tab QA marker records only pass/fail, the fixed literal `local-human-attestation`, current Git commit, and manifest hash; it records no URL, title, DOM text, form value, or finding. It is a local self-attestation, not cryptographic proof of a human gesture.
 
 The release verifier rejects static package patterns for network APIs, remote executable URLs, secrets, dynamic imports, external resource URLs, and supported DOM URL sinks. This fail-closed static policy does not prove every possible browser/runtime networking behavior is absent.
 

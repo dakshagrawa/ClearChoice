@@ -9,6 +9,7 @@ import { validateManualActiveTabMarker } from '../scripts/active-tab-qa.mjs';
 const root = resolve(process.cwd());
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
 const manifestSha256 = createHash('sha256').update(readFileSync(resolve(root, 'manifest.json'))).digest('hex');
+const reviewer = 'local-human-attestation';
 
 function marker(overrides = {}) {
   return {
@@ -16,18 +17,19 @@ function marker(overrides = {}) {
     outcome: 'passed',
     commit,
     manifestSha256,
-    reviewer: 'local-qa',
+    reviewer,
     ...overrides,
   };
 }
 
-test('accepts a deliberately supplied pass-only manual active-tab marker for this commit and manifest', () => {
+test('accepts a deliberately supplied local human attestation marker for this commit and manifest', () => {
   expect(validateManualActiveTabMarker(marker(), { commit, manifestSha256 })).toEqual({ ok: true });
 });
 
 test.each([
   ['a non-pass outcome', marker({ outcome: 'failed' })],
-  ['a missing reviewer sign-off', marker({ reviewer: '' })],
+  ['a missing reviewer attestation', marker({ reviewer: '' })],
+  ['a free-text reviewer value', marker({ reviewer: 'local-qa' })],
   ['a marker for another commit', marker({ commit: '0'.repeat(40) })],
   ['a marker for another manifest', marker({ manifestSha256: '0'.repeat(64) })],
 ])('rejects %s', (_label, value) => {

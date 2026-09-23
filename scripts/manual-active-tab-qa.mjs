@@ -7,7 +7,7 @@ import { basename, dirname, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
-import { sha256 } from './active-tab-qa.mjs';
+import { LOCAL_HUMAN_ATTESTATION, sha256 } from './active-tab-qa.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 const extensionPath = resolve(root, 'dist');
@@ -22,12 +22,22 @@ export function assertFixtureOrigin(origin) {
   return origin;
 }
 
+export function fixtureOriginForServerAddress(address) {
+  if (!address || typeof address === 'string' || address.address !== '127.0.0.1') {
+    throw new Error('fixture server must bind exactly to 127.0.0.1');
+  }
+  if (!Number.isInteger(address.port) || address.port < 1 || address.port > 65_535) {
+    throw new Error('fixture server did not expose a valid TCP port');
+  }
+  return assertFixtureOrigin(`http://127.0.0.1:${address.port}`);
+}
+
 export function restrictedBrowserArgs(extensionDirectory) {
   return [
     `--disable-extensions-except=${extensionDirectory}`,
     `--load-extension=${extensionDirectory}`,
     '--proxy-server=http://127.0.0.1:9',
-    '--proxy-bypass-list=127.0.0.1',
+    '--proxy-bypass-list=<-loopback>;127.0.0.1',
     '--disable-quic',
   ];
 }
@@ -41,25 +51,25 @@ export function reviewBrowserLaunchOptions(extensionDirectory) {
 }
 
 function usage() {
-  throw new Error('usage: node scripts/manual-active-tab-qa.mjs --marker PATH --reviewer NAME');
+  throw new Error('usage: node scripts/manual-active-tab-qa.mjs --marker PATH');
 }
 
 function parseArguments(argv) {
-  if (argv.length !== 4 || argv[0] !== '--marker' || argv[2] !== '--reviewer' || !argv[1] || !argv[3].trim()) usage();
+  if (argv.length !== 2 || argv[0] !== '--marker' || !argv[1]) usage();
   const markerPath = resolve(argv[1]);
   const pathFromRoot = relative(root, markerPath);
   if (pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !pathFromRoot.startsWith('/'))) {
     throw new Error('marker path must be outside the repository so it cannot be committed or archived');
   }
-  return { markerPath, reviewer: argv[3].trim() };
+  return { markerPath };
 }
 
 function closeServer(server) {
   return new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
 }
 
-export async function runManualActiveTabQa(argv = process.argv.slice(2), environment = process.env) {
-  const { markerPath: requestedMarkerPath, reviewer } = parseArguments(argv);
+export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
+  const { markerPath: requestedMarkerPath } = parseArguments(argv);
   await mkdir(dirname(requestedMarkerPath), { recursive: true, mode: 0o700 });
   const markerPath = resolve(await realpath(dirname(requestedMarkerPath)), basename(requestedMarkerPath));
   const canonicalPathFromRoot = relative(root, markerPath);
@@ -81,7 +91,7 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2), environ
   try {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('fixture server did not expose a TCP port');
-    const fixtureOrigin = assertFixtureOrigin(environment.CLEARCHOICE_MANUAL_FIXTURE_ORIGIN ?? `http://127.0.0.1:${address.port}`);
+    const fixtureOrigin = fixtureOriginForServerAddress(address);
 
     profile = await mkdtemp(resolve(tmpdir(), 'clearchoice-manual-active-tab-'));
     context = await chromium.launchPersistentContext(profile, reviewBrowserLaunchOptions(extensionPath));
@@ -105,7 +115,7 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2), environ
       outcome: 'passed',
       commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
       manifestSha256: sha256(await readFile(resolve(root, 'manifest.json'))),
-      reviewer,
+      reviewer: LOCAL_HUMAN_ATTESTATION,
     };
     await writeFile(markerPath, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
     process.stdout.write('manual active-tab QA passed; wrote pass-only marker without page data\n');

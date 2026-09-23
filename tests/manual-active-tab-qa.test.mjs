@@ -1,25 +1,57 @@
 // @vitest-environment node
-import { spawnSync } from 'node:child_process';
+import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { chromium } from 'playwright';
 import { afterEach, expect, test } from 'vitest';
-import { assertFixtureOrigin, restrictedBrowserArgs, reviewBrowserLaunchOptions } from '../scripts/manual-active-tab-qa.mjs';
+import {
+  assertFixtureOrigin,
+  fixtureOriginForServerAddress,
+  restrictedBrowserArgs,
+  reviewBrowserLaunchOptions,
+} from '../scripts/manual-active-tab-qa.mjs';
 
 const root = resolve(process.cwd());
 const temporaryPaths = [];
+
+function listen(host, port, body) {
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests += 1;
+    response.end(body);
+  });
+  return new Promise((resolveListen, reject) => {
+    server.once('error', reject);
+    server.listen(port, host, () => resolveListen({
+      server,
+      get requests() { return requests; },
+      origin: `http://${host}:${server.address().port}`,
+    }));
+  });
+}
+
+function close(server) {
+  return new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
+}
 
 afterEach(async () => {
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-test('restricts the review Chromium to an exact IPv4 loopback fixture and a dead proxy boundary', () => {
+test('derives the navigated fixture origin only from the runner-owned 127.0.0.1 listener', () => {
+  expect(fixtureOriginForServerAddress({ address: '127.0.0.1', port: 43123 })).toBe('http://127.0.0.1:43123');
+  expect(() => fixtureOriginForServerAddress({ address: '127.0.0.2', port: 43123 })).toThrow('fixture server must bind exactly to 127.0.0.1');
+  expect(() => fixtureOriginForServerAddress({ address: '127.0.0.1', port: 0 })).toThrow('fixture server did not expose a valid TCP port');
+});
+
+test('restricts review Chromium to only its 127.0.0.1 fixture and disables implicit loopback bypass', () => {
   const extensionPath = resolve(root, 'dist');
   expect(restrictedBrowserArgs(extensionPath)).toEqual([
     `--disable-extensions-except=${extensionPath}`,
     `--load-extension=${extensionPath}`,
     '--proxy-server=http://127.0.0.1:9',
-    '--proxy-bypass-list=127.0.0.1',
+    '--proxy-bypass-list=<-loopback>;127.0.0.1',
     '--disable-quic',
   ]);
   expect(reviewBrowserLaunchOptions(extensionPath)).toEqual({
@@ -33,18 +65,26 @@ test('restricts the review Chromium to an exact IPv4 loopback fixture and a dead
   }
 });
 
-test('runner rejects a configured non-loopback fixture origin before starting review Chromium', async () => {
-  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-manual-active-tab-test-'));
-  temporaryPaths.push(markerDirectory);
-  const result = spawnSync(process.execPath, ['scripts/manual-active-tab-qa.mjs', '--marker', resolve(markerDirectory, 'marker.json'), '--reviewer', 'test'], {
-    cwd: root,
-    encoding: 'utf8',
-    env: { ...process.env, CLEARCHOICE_MANUAL_FIXTURE_ORIGIN: 'https://example.test:443' },
-    timeout: 5_000,
-  });
-
-  expect(result.signal).toBeNull();
-  expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain('fixture origin must be exactly http://127.0.0.1:<port>');
-  expect(result.stderr).not.toContain('Manual active-tab QA is waiting');
+test('Chromium reaches the exact fixture but cannot reach 127.0.0.2 or a non-loopback address', async () => {
+  const fixture = await listen('127.0.0.1', 0, 'fixture');
+  const alternate = await listen('127.0.0.2', fixture.server.address().port, 'alternate');
+  const profile = await mkdtemp(resolve(tmpdir(), 'clearchoice-proxy-boundary-'));
+  temporaryPaths.push(profile);
+  let browser;
+  try {
+    browser = await chromium.launch({
+      channel: 'chromium',
+      headless: true,
+      args: restrictedBrowserArgs(resolve(root, 'dist')),
+    });
+    const page = await browser.newPage();
+    await expect(page.goto(fixture.origin, { timeout: 5_000 })).resolves.toBeTruthy();
+    await expect(page.goto(alternate.origin, { timeout: 5_000 })).rejects.toThrow();
+    await expect(page.goto('http://198.51.100.1:8080/', { timeout: 5_000 })).rejects.toThrow();
+    expect(fixture.requests).toBeGreaterThan(0);
+    expect(alternate.requests).toBe(0);
+  } finally {
+    await browser?.close();
+    await Promise.all([close(fixture.server), close(alternate.server)]);
+  }
 });
