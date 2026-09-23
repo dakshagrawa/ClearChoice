@@ -36,7 +36,9 @@ npm run manual:active-tab-qa -- --marker "$HOME/.clearchoice/active-tab-qa.json"
 CLEARCHOICE_ACTIVE_TAB_QA_MARKER="$HOME/.clearchoice/active-tab-qa.json" npm run check:beta
 ```
 
-The manual program creates a clean temporary Chromium profile, loads the packaged `dist/` extension and local fake checkout, and waits for a human to click the toolbar icon and then **Analyze** with the pointer. It writes a pass-only marker bound to the current Git commit and manifest hash plus the supplied reviewer sign-off; it records no URL, DOM text, form data, or findings. `check:beta` fails closed if that marker is absent, unreadable, stale, malformed, non-pass, or lacks a reviewer sign-off.
+The manual program creates a clean temporary Chromium profile, loads the built unpacked `dist/` extension and local fake checkout, and waits for a human to click the real toolbar icon and then **Analyze** with the pointer. After the local fixture receives the panel, the reviewer must type `ATTEST` in the terminal before the program writes its pass-only marker. Use only the fixture: do not sign in, enter data, visit a real site, make a payment, or make a purchase.
+
+The marker path must be explicitly supplied **outside this repository** (the example uses `$HOME/.clearchoice/`); the program and `check:beta` reject an in-repository path so the marker cannot be committed or placed in the ZIP archive. It contains exactly `schemaVersion: 1`, `outcome: "passed"`, current Git commit, manifest SHA-256, and reviewer sign-off—never a URL, title, DOM text/HTML, selector, evidence, form value, or finding. This is a human attestation: automation can confirm only that its direct-popup path is denied, not that Chromium recognized a toolbar click. `check:beta` fails closed if the external marker is absent, unreadable, stale, malformed, non-pass, or lacks a reviewer sign-off.
 
 
 ```sh

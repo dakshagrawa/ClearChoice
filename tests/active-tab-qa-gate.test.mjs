@@ -40,6 +40,7 @@ test.each([
   ['URL', 'url', 'https://example.test/'],
   ['evidence', 'evidence', 'checked active tab'],
   ['selector', 'selector', '#app'],
+  ['form value', 'formValue', '4111 1111 1111 1111'],
   ['an unrelated key', 'unexpected', true],
 ])('rejects markers containing %s data', (_label, key, value) => {
   const result = validateManualActiveTabMarker(marker({ [key]: value }), { commit, manifestSha256 });
@@ -50,8 +51,41 @@ test('rejects required fields inherited through the prototype', () => {
   const inheritedMarker = Object.create(marker());
   expect(validateManualActiveTabMarker(inheritedMarker, { commit, manifestSha256 })).toEqual({
     ok: false,
-    error: 'marker must contain exactly the required attestation fields',
+    error: 'marker must be a JSON object',
   });
+});
+
+test.each([null, [], Object.assign(Object.create(null), marker())])('rejects malformed non-JSON marker objects', (value) => {
+  expect(validateManualActiveTabMarker(value, { commit, manifestSha256 })).toEqual({
+    ok: false,
+    error: 'marker must be a JSON object',
+  });
+});
+
+test.each([
+  ['page title', 'pageTitle', 'ClearChoice'],
+  ['page HTML', 'pageHtml', '<html><body>ClearChoice</body></html>'],
+  ['URL', 'url', 'https://example.test/'],
+  ['evidence', 'evidence', 'checked active tab'],
+  ['selector', 'selector', '#app'],
+  ['form value', 'formValue', '4111 1111 1111 1111'],
+  ['unexpected data', 'unexpected', true],
+])('rejects %s inherited through the prototype', (_label, key, value) => {
+  const inheritedMarker = Object.assign(Object.create({ [key]: value }), marker());
+  expect(validateManualActiveTabMarker(inheritedMarker, { commit, manifestSha256 })).toEqual({
+    ok: false,
+    error: 'marker must be a JSON object',
+  });
+});
+
+test('check:beta rejects a marker path inside the repository before reading it', () => {
+  const result = spawnSync(process.execPath, ['scripts/check-beta.mjs', '--validate-marker-only'], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, CLEARCHOICE_ACTIVE_TAB_QA_MARKER: 'manual-active-tab-qa.json' },
+  });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('outside the repository');
 });
 
 test('check:beta fails closed unless a marker path is deliberately supplied', () => {

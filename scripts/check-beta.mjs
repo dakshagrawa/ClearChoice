@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, realpathSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import { sha256, validateManualActiveTabMarker } from './active-tab-qa.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -17,13 +17,22 @@ function expectedMarker() {
   };
 }
 
+function isInsideRepository(path) {
+  const pathFromRoot = relative(root, path);
+  return pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !pathFromRoot.startsWith('/'));
+}
+
 function assertManualActiveTabMarker() {
   const markerPath = process.env.CLEARCHOICE_ACTIVE_TAB_QA_MARKER;
   if (!markerPath) fail('CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point to a deliberate local manual-QA marker');
+  const resolvedMarkerPath = resolve(markerPath);
+  if (isInsideRepository(resolvedMarkerPath)) fail('CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point outside the repository so it cannot be committed or archived');
 
   let marker;
   try {
-    marker = JSON.parse(readFileSync(resolve(markerPath), 'utf8'));
+    const canonicalMarkerPath = realpathSync(resolvedMarkerPath);
+    if (isInsideRepository(canonicalMarkerPath)) fail('CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point outside the repository so it cannot be committed or archived');
+    marker = JSON.parse(readFileSync(canonicalMarkerPath, 'utf8'));
   } catch (error) {
     fail(`unable to read CLEARCHOICE_ACTIVE_TAB_QA_MARKER: ${error instanceof Error ? error.message : String(error)}`);
   }

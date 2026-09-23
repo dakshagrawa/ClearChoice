@@ -13,7 +13,9 @@ const REQUIRED_MARKER_FIELDS = new Set([
 ]);
 
 export function validateManualActiveTabMarker(marker, expected) {
-  if (!marker || typeof marker !== 'object') return { ok: false, error: 'marker must be a JSON object' };
+  if (!marker || typeof marker !== 'object' || Object.getPrototypeOf(marker) !== Object.prototype) {
+    return { ok: false, error: 'marker must be a JSON object' };
+  }
 
   const markerKeys = Reflect.ownKeys(marker);
   if (
