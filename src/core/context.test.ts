@@ -28,8 +28,9 @@ describe('classifyCheckoutContext', () => {
     `))).toBe('unsupported');
   });
 
-  it('ignores extension, hidden, inert, and form-owned content', () => {
+  it('ignores extension, hidden, inert, form-owned, and all contenteditable content', () => {
     const privateValues = 'private@example.test 4111111111111111 confidential textarea select editable';
+    const editableValue = 'EDITABLE_CONTEXT_ONLY Checkout Order summary Pay now';
     const fixture = root(`
       <aside data-clearchoice-panel>Place order Order summary Total</aside>
       <section hidden>Checkout Subtotal Pay now</section>
@@ -40,10 +41,28 @@ describe('classifyCheckoutContext', () => {
       <textarea>${privateValues} Checkout Order summary Pay now</textarea>
       <select><option>${privateValues} Checkout Order summary Pay now</option></select>
       <div contenteditable="true">${privateValues} Checkout Order summary Pay now</div>
+      <div contenteditable="plaintext-only">${editableValue}</div>
+      <div contenteditable>${editableValue}</div>
+      <div contenteditable="false">${editableValue}</div>
     `);
 
     expect(classifyCheckoutContext(fixture)).toBe('unsupported');
     expect(JSON.stringify(classifyCheckoutContext(fixture))).not.toContain('private@example.test');
     expect(JSON.stringify(classifyCheckoutContext(fixture))).not.toContain('4111111111111111');
+    expect(JSON.stringify(classifyCheckoutContext(fixture))).not.toContain('EDITABLE_CONTEXT_ONLY');
+  });
+
+  it('supports static checkout text surrounding a plaintext-only editable field', () => {
+    const editableValue = 'EDITABLE_CONTEXT_ONLY Checkout Order summary Pay now';
+    const fixture = root(`
+      <main>
+        <h1>Checkout</h1>
+        <div contenteditable="plaintext-only">${editableValue}</div>
+        <aside>Order summary <span>Subtotal: $24</span></aside>
+        <button>Place order</button>
+      </main>
+    `);
+
+    expect(classifyCheckoutContext(fixture)).toBe('supported');
   });
 });

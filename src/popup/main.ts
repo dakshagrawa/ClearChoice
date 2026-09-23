@@ -13,7 +13,7 @@ app.innerHTML = `
       <button type="button" data-action="analyze">Analyze</button>
       <button type="button" data-action="restore">Restore</button>
     </div>
-    <p aria-live="polite" role="status"></p>
+    <p aria-live="polite" role="status">Analyze this tab locally.</p>
   </main>
 `;
 
@@ -24,24 +24,24 @@ const status = app.querySelector<HTMLParagraphElement>('[role="status"]');
 if (!analyzeButton || !restoreButton || !status) throw new Error('ClearChoice popup controls are missing.');
 
 function findingStatus(count: number): string {
-  if (count === 0) return 'No findings shown on this page.';
-  if (count === 1) return '1 finding shown on this page.';
-  return `${count} findings shown on this page.`;
+  if (count === 0) return 'No matching signals found on this page.';
+  if (count === 1) return '1 possible signal found.';
+  return `${count} possible signals found.`;
 }
 
 function analysisStatus(response: AnalyzeResponse): string {
   if (!response.ok) {
-    if (response.error === 'restricted-page') return 'ClearChoice cannot run on this browser page.';
-    if (response.error === 'injection-failed') return 'ClearChoice could not start on this page. Reload and try again.';
+    if (response.error === 'restricted-page') return 'Chrome does not allow ClearChoice to analyze this page.';
+    if (response.error === 'injection-failed') return 'ClearChoice could not analyze this tab. Reload it and try again.';
     return 'ClearChoice could not analyze this page. Reload and try again.';
   }
-  if (response.status === 'unsupported-context') return 'This page does not look like a supported checkout context.';
+  if (response.status === 'unsupported-context') return 'This page does not look like a supported English checkout page.';
   return findingStatus(response.findingCount);
 }
 
 analyzeButton.addEventListener('click', async () => {
   analyzeButton.disabled = true;
-  status.textContent = 'Analyzing this page…';
+  status.textContent = 'Analyzing this tab locally…';
 
   try {
     status.textContent = analysisStatus(await analyzeActiveTab());

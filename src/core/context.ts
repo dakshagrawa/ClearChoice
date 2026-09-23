@@ -16,7 +16,7 @@ const ignoredAncestors = [
   'textarea',
   'select',
   'option',
-  '[contenteditable="true"]',
+  '[contenteditable]',
 ].join(', ');
 
 function isVisibleStaticText(textNode: Text): boolean {

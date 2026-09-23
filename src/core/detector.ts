@@ -39,7 +39,7 @@ function visibleText(element: Element): string {
 }
 
 function isExcludedTextElement(element: Element): boolean {
-  return element.matches('script, style, template, input, textarea, select, option, [contenteditable="true"]');
+  return element.matches('script, style, template, input, textarea, select, option, [contenteditable]');
 }
 
 function elementsIncludingRoot(root: Element, selector: string): Element[] {

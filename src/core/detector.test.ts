@@ -95,7 +95,7 @@ describe('detectRecurringCharges', () => {
     ]);
   });
 
-  it('does not read recurring-looking data-entry content into findings', () => {
+  it('does not read recurring-looking data-entry or any contenteditable content into findings', () => {
     const privateValues = 'private@example.test 4111111111111111 not-a-real-password';
     const findings = detectRecurringCharges(root(`
       <div>
@@ -103,12 +103,29 @@ describe('detectRecurringCharges', () => {
         <textarea>${privateValues} $12 per month</textarea>
         <select><option>${privateValues} subscription</option></select>
         <div contenteditable="true">${privateValues} $12 per month</div>
+        <div contenteditable="plaintext-only">EDITABLE_FINDING_ONLY ${privateValues} $12 per month</div>
+        <div contenteditable>EDITABLE_FINDING_ONLY ${privateValues} subscription</div>
+        <div contenteditable="false">EDITABLE_FINDING_ONLY ${privateValues} renews automatically every year</div>
       </div>
     `));
 
     expect(findings).toEqual([]);
     expect(JSON.stringify(findings)).not.toContain('private@example.test');
     expect(JSON.stringify(findings)).not.toContain('4111111111111111');
+    expect(JSON.stringify(findings)).not.toContain('EDITABLE_FINDING_ONLY');
+  });
+
+  it('keeps safe static recurring evidence surrounding a plaintext-only editable field', () => {
+    const findings = detectRecurringCharges(root(`
+      <section>
+        <div contenteditable="plaintext-only">EDITABLE_FINDING_ONLY $99 per month</div>
+        Membership costs $12 per month
+      </section>
+    `));
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.evidence).toBe('Membership costs $12 per month');
+    expect(JSON.stringify(findings)).not.toContain('EDITABLE_FINDING_ONLY');
   });
 
   it('uses deterministic IDs and no duplicate explanations for equivalent analysis', () => {
