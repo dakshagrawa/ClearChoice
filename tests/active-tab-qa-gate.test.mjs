@@ -2,6 +2,8 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { expect, test } from 'vitest';
 import { validateManualActiveTabMarker } from '../scripts/active-tab-qa.mjs';
@@ -88,6 +90,26 @@ test('check:beta rejects a marker path inside the repository before reading it',
   });
   expect(result.status).not.toBe(0);
   expect(result.stderr).toContain('outside the repository');
+});
+
+test('check:beta rejects an external marker symlink before reading it', async () => {
+  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-beta-marker-symlink-'));
+  try {
+    const target = resolve(markerDirectory, 'marker.json');
+    const markerPath = resolve(markerDirectory, 'marker-link.json');
+    await writeFile(target, `${JSON.stringify(marker())}\n`);
+    await symlink(target, markerPath);
+
+    const result = spawnSync(process.execPath, ['scripts/check-beta.mjs', '--validate-marker-only'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, CLEARCHOICE_ACTIVE_TAB_QA_MARKER: markerPath },
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('must not be a symlink');
+  } finally {
+    await rm(markerDirectory, { recursive: true, force: true });
+  }
 });
 
 test('check:beta fails closed unless a marker path is deliberately supplied', () => {

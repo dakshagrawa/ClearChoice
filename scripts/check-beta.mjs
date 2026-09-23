@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, realpathSync } from 'node:fs';
+import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { sha256, validateManualActiveTabMarker } from './active-tab-qa.mjs';
 
@@ -27,9 +27,9 @@ function assertManualActiveTabMarker() {
   if (!markerPath) fail('CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point to a deliberate local manual-QA marker');
   const resolvedMarkerPath = resolve(markerPath);
   if (isInsideRepository(resolvedMarkerPath)) fail('CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point outside the repository so it cannot be committed or archived');
-
   let marker;
   try {
+    if (lstatSync(resolvedMarkerPath).isSymbolicLink()) fail('CLEARCHOICE_ACTIVE_TAB_QA_MARKER must not be a symlink');
     const canonicalMarkerPath = realpathSync(resolvedMarkerPath);
     if (isInsideRepository(canonicalMarkerPath)) fail('CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point outside the repository so it cannot be committed or archived');
     marker = JSON.parse(readFileSync(canonicalMarkerPath, 'utf8'));

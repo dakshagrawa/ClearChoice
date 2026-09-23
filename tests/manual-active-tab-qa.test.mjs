@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createServer } from 'node:http';
-import { lstat, mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
@@ -66,28 +66,30 @@ test('restricts review Chromium to only its 127.0.0.1 fixture and disables impli
   }
 });
 
-test('manual runner rejects an external marker symlink into the repository before writing its target', async () => {
-  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-marker-symlink-'));
+test('manual runner never writes a caller-provided marker below an external parent symlink to the repository', async () => {
+  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-marker-parent-symlink-'));
   temporaryPaths.push(markerDirectory);
-  const target = resolve(root, 'fixtures/clean-checkout.html');
-  const before = await readFile(target);
-  const markerPath = resolve(markerDirectory, 'manual-active-tab-qa.json');
-  await symlink(target, markerPath);
+  const markerParent = resolve(markerDirectory, 'marker-parent');
+  const repositoryTarget = resolve(root, '.manual-active-tab-qa-parent-symlink.json');
+  const markerPath = resolve(markerParent, 'manual-active-tab-qa.json');
+  await symlink(root, markerParent);
 
-  await expect(runManualActiveTabQa(['--marker', markerPath])).rejects.toThrow('marker path must resolve outside the repository');
-  expect(await readFile(target)).toEqual(before);
-  expect((await lstat(markerPath)).isSymbolicLink()).toBe(true);
+  await expect(runManualActiveTabQa(['--marker', markerPath])).rejects.toThrow('usage: node scripts/manual-active-tab-qa.mjs');
+  await expect(lstat(repositoryTarget)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-test('manual runner rejects a dangling marker symlink without creating its repository target', async () => {
-  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-dangling-marker-'));
+test('manual runner never writes a caller-provided marker after its external parent is swapped to the repository', async () => {
+  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-marker-parent-swap-'));
   temporaryPaths.push(markerDirectory);
-  const target = resolve(root, '.manual-active-tab-qa-dangling-target.json');
-  const markerPath = resolve(markerDirectory, 'manual-active-tab-qa.json');
-  await symlink(target, markerPath);
+  const markerParent = resolve(markerDirectory, 'marker-parent');
+  const repositoryTarget = resolve(root, '.manual-active-tab-qa-parent-swap.json');
+  const markerPath = resolve(markerParent, 'manual-active-tab-qa.json');
+  await mkdir(markerParent);
+  await rm(markerParent, { recursive: true });
+  await symlink(root, markerParent);
 
-  await expect(runManualActiveTabQa(['--marker', markerPath])).rejects.toThrow('marker destination must not be a symlink');
-  await expect(lstat(target)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(runManualActiveTabQa(['--marker', markerPath])).rejects.toThrow('usage: node scripts/manual-active-tab-qa.mjs');
+  await expect(lstat(repositoryTarget)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 test('Chromium reaches the exact fixture but cannot reach 127.0.0.2 or a non-loopback address', async () => {
