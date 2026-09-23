@@ -1,3 +1,4 @@
+import { classifyCheckoutContext } from '../core/context';
 import { detectPreselectedAddons, detectRecurringCharges } from '../core/detector';
 import type { AnalysisResult, Finding } from '../core/types';
 import {
@@ -44,6 +45,12 @@ if (!pageWindow[contentSentinel]) {
         removePanel();
         await setDismissed(false);
         sendResponse({ ok: true } satisfies RestoreResponse);
+        return;
+      }
+
+      if (classifyCheckoutContext(document.documentElement) === 'unsupported') {
+        removePanel();
+        sendResponse({ ok: true, status: 'unsupported-context', findingCount: 0 } satisfies AnalyzeResponse);
         return;
       }
 

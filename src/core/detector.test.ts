@@ -95,6 +95,22 @@ describe('detectRecurringCharges', () => {
     ]);
   });
 
+  it('does not read recurring-looking data-entry content into findings', () => {
+    const privateValues = 'private@example.test 4111111111111111 not-a-real-password';
+    const findings = detectRecurringCharges(root(`
+      <div>
+        <input value="${privateValues}" placeholder="$12 per month" autocomplete="cc-number">
+        <textarea>${privateValues} $12 per month</textarea>
+        <select><option>${privateValues} subscription</option></select>
+        <div contenteditable="true">${privateValues} $12 per month</div>
+      </div>
+    `));
+
+    expect(findings).toEqual([]);
+    expect(JSON.stringify(findings)).not.toContain('private@example.test');
+    expect(JSON.stringify(findings)).not.toContain('4111111111111111');
+  });
+
   it('uses deterministic IDs and no duplicate explanations for equivalent analysis', () => {
     const html = '<section>Membership renews automatically every year.</section>';
 

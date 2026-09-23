@@ -9,8 +9,17 @@
     <main>
       <h1>Mixed mock checkout</h1>
       <p>This is a local demonstration with fake products and no real customer, account, or payment data.</p>
+      <aside><h2>Order summary</h2><p>Subtotal: $24</p></aside>
       <p>Membership renews automatically for $12 per month until cancelled.</p>
       <label><input type="checkbox" checked> Add purchase protection for $5</label>
+      <button type="button">Place order</button>
+      <form>
+        <input value="private@example.test" placeholder="private placeholder" autocomplete="cc-number">
+        <input type="password" value="not-a-real-password">
+        <textarea>4111111111111111 subscription $12 per month</textarea>
+        <select><option>confidential recurring payment</option></select>
+        <div contenteditable="true">editable paid membership $12 per month</div>
+      </form>
     </main>
   </body>
 </html>

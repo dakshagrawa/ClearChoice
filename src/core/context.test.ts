@@ -24,7 +24,7 @@ describe('classifyCheckoutContext', () => {
       <article><h1>How to pay now for subscriptions</h1><p>Order total guidance for members.</p></article>
     `))).toBe('unsupported');
     expect(classifyCheckoutContext(root(`
-      <main><h1>Account settings</h1><p>Payment preferences and shipping addresses.</p></main>
+      <main><h1>Account settings</h1><p>Payment preferences, shipping addresses, order total, and Pay now help.</p></main>
     `))).toBe('unsupported');
   });
 

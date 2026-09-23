@@ -1,3 +1,5 @@
+export type ContextStatus = 'supported' | 'unsupported';
+
 export type FindingKind = 'recurring-charge' | 'preselected-addon';
 export type FindingReason =
   | 'price-cadence'

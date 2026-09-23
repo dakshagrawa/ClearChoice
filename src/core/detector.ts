@@ -30,12 +30,16 @@ function visibleText(element: Element): string {
   const text = Array.from(element.childNodes)
     .map((node) => {
       if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
-      if (node instanceof Element && !hasHiddenAncestor(node)) return visibleText(node);
+      if (node instanceof Element && !isExcludedTextElement(node) && !hasHiddenAncestor(node)) return visibleText(node);
       return '';
     })
     .join(' ');
 
   return normalizeVisibleText(text);
+}
+
+function isExcludedTextElement(element: Element): boolean {
+  return element.matches('script, style, template, input, textarea, select, option, [contenteditable="true"]');
 }
 
 function elementsIncludingRoot(root: Element, selector: string): Element[] {
@@ -68,6 +72,7 @@ function inDomOrder(left: Element, right: Element): number {
 
 export function detectRecurringCharges(root: Element): Finding[] {
   const candidates = elementsIncludingRoot(root, RECURRING_SELECTOR)
+    .filter((element) => !isExcludedTextElement(element))
     .filter(isElementVisible)
     .map((element) => ({ element, evidence: visibleText(element) }))
     .map(({ element, evidence }) => ({ element, evidence, match: recurringReason(evidence) }))

@@ -70,7 +70,16 @@ test('controlled checkout fixtures expose only the scenario matrix with exact fa
     }
 
     for (const path of [
-      '/',
+      '/unsupported/marketing-article',
+      '/unsupported/account-settings',
+    ]) {
+      const response = await globalThis.fetch(`${readyUrl}${path}`);
+      expect(response.status, path).toBe(200);
+      const html = await response.text();
+      expect(html).toContain(path.includes('marketing') ? 'How to pay now for subscriptions' : 'Account settings');
+    }
+
+    for (const path of [
       '/checkout',
       '/checkout/unknown',
       '/checkout/clean?unexpected=true',
