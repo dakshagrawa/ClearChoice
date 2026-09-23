@@ -154,6 +154,39 @@ describe('detectPreselectedAddons', () => {
     });
   });
 
+  it.each([
+    'contenteditable',
+    'contenteditable=""',
+    'contenteditable="false"',
+    'contenteditable="true"',
+    'contenteditable="plaintext-only"',
+  ])('excludes a checked paid control inside a %s label', (editableAttribute) => {
+    const fakeEditableData = 'EDITABLE_LABEL_EVIDENCE_ONLY $987';
+    const findings = detectPreselectedAddons(root(`
+      <main>
+        <aside>Order summary — Subtotal: $24</aside>
+        <button>Place order</button>
+        <label ${editableAttribute}><input type="checkbox" checked> ${fakeEditableData}</label>
+      </main>
+    `));
+
+    expect(findings).toEqual([]);
+    expect(JSON.stringify(findings)).not.toContain(fakeEditableData);
+  });
+
+  it('finds the equivalent checked paid control in a non-editable label', () => {
+    const findings = detectPreselectedAddons(root(`
+      <main>
+        <aside>Order summary — Subtotal: $24</aside>
+        <button>Place order</button>
+        <label><input type="checkbox" checked> Static protection $5</label>
+      </main>
+    `));
+
+    expect(findings).toHaveLength(1);
+    expect(findings[0]).toMatchObject({ evidence: 'Static protection $5' });
+  });
+
   it('finds a checked paid radio', () => {
     const findings = detectPreselectedAddons(root('<label><input type="radio" checked> Premium delivery (£8)</label>'));
 

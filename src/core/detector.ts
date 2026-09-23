@@ -1,5 +1,5 @@
 import { dedupeNestedTextFindings, makeFinding } from './dedupe';
-import { cssPath, isElementVisible, normalizeVisibleText } from './normalize';
+import { cssPath, hasContentEditableAncestor, isElementVisible, normalizeVisibleText } from './normalize';
 import type { Finding, FindingReason, Severity } from './types';
 
 const RECURRING_SELECTOR = 'form, section, aside, label, p, span, div, li';
@@ -27,6 +27,8 @@ function hasHiddenAncestor(element: Element): boolean {
 }
 
 function visibleText(element: Element): string {
+  if (hasContentEditableAncestor(element)) return '';
+
   const text = Array.from(element.childNodes)
     .map((node) => {
       if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';

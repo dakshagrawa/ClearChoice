@@ -2,7 +2,15 @@ export function normalizeVisibleText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
 
+export function hasContentEditableAncestor(element: Element): boolean {
+  return element.closest('[contenteditable]') !== null;
+}
+
 export function isElementVisible(element: Element): boolean {
+  if (hasContentEditableAncestor(element)) {
+    return false;
+  }
+
   if (element.closest('[hidden], [aria-hidden="true"]')) {
     return false;
   }

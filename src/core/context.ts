@@ -1,4 +1,4 @@
-import { normalizeVisibleText } from './normalize';
+import { hasContentEditableAncestor, normalizeVisibleText } from './normalize';
 import type { ContextStatus } from './types';
 
 const ACTION_CUE = /\b(?:checkout|place\s+order|complete\s+order|pay\s+now|order\s+total)\b/i;
@@ -16,12 +16,11 @@ const ignoredAncestors = [
   'textarea',
   'select',
   'option',
-  '[contenteditable]',
 ].join(', ');
 
 function isVisibleStaticText(textNode: Text): boolean {
   const parent = textNode.parentElement;
-  if (!parent || parent.closest(ignoredAncestors)) return false;
+  if (!parent || hasContentEditableAncestor(parent) || parent.closest(ignoredAncestors)) return false;
 
   for (let current: Element | null = parent; current; current = current.parentElement) {
     const style = window.getComputedStyle(current);
