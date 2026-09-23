@@ -17,12 +17,18 @@ function installChrome(): { addListener: ReturnType<typeof vi.fn> } {
 afterEach(() => {
   vi.resetModules();
   vi.unstubAllGlobals();
+  document.body.replaceChildren();
   document.querySelector('[data-clearchoice-panel]')?.remove();
   delete (window as Window & { __clearchoiceContentListenerInstalled__?: true }).__clearchoiceContentListenerInstalled__;
 });
 
+function setSupportedCheckoutContext(): void {
+  document.body.innerHTML = '<main><aside>Order summary — Subtotal: $24</aside><button>Place order</button></main>';
+}
+
 it('registers one listener and renders one panel when the payload is injected repeatedly', async () => {
   const { addListener } = installChrome();
+  setSupportedCheckoutContext();
 
   await import('./index');
   await import('./index');
@@ -41,6 +47,7 @@ it('registers one listener and renders one panel when the payload is injected re
 
 it('preserves host panel markup through Analyze and Restore', async () => {
   const { addListener } = installChrome();
+  setSupportedCheckoutContext();
   const hostPanel = document.createElement('aside');
   hostPanel.dataset.clearchoicePanel = '';
   hostPanel.textContent = 'Host checkout sidebar';
@@ -62,6 +69,37 @@ it('preserves host panel markup through Analyze and Restore', async () => {
 
   expect(hostPanel.isConnected).toBe(true);
   expect(hostPanel.textContent).toBe('Host checkout sidebar');
+});
+
+it('removes only its own panel and returns a count-only unsupported response without reading private form values', async () => {
+  const { addListener } = installChrome();
+  setSupportedCheckoutContext();
+  await import('./index');
+  const listener = addListener.mock.calls[0]?.[0] as (
+    message: unknown,
+    sender: unknown,
+    sendResponse: (response: unknown) => void,
+  ) => boolean;
+  const initialResponse = vi.fn();
+  listener({ type: 'CLEARCHOICE_ANALYZE' }, {}, initialResponse);
+  await vi.waitFor(() => expect(document.querySelector('[data-clearchoice-panel]')).not.toBeNull());
+
+  document.body.innerHTML = `
+    <main><h1>Account settings</h1><p>Manage payment preferences.</p></main>
+    <input value="private@example.test" placeholder="Checkout Order summary Pay now" autocomplete="cc-number">
+    <textarea>4111111111111111 Checkout Order summary Place order</textarea>
+    <select><option>confidential Order total</option></select>
+    <div contenteditable="true">secret Checkout Subtotal</div>
+  `;
+  const sendResponse = vi.fn();
+
+  expect(listener({ type: 'CLEARCHOICE_ANALYZE' }, {}, sendResponse)).toBe(true);
+  await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({ ok: true, status: 'unsupported-context', findingCount: 0 }));
+
+  const serialized = JSON.stringify({ response: sendResponse.mock.calls[0]?.[0], panel: document.querySelector('[data-clearchoice-panel]')?.textContent });
+  expect(serialized).not.toContain('private@example.test');
+  expect(serialized).not.toContain('4111111111111111');
+  expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
 });
 
 it('ignores malformed inbound requests without analyzing or restoring', async () => {
