@@ -1,6 +1,6 @@
 # ClearChoice v0.2.0 rule catalog
 
-All findings are informational `notice`-severity heuristics. They run only after the user clicks **Analyze** on the local `http://127.0.0.1/*` mock checkout target. They are not legal, compliance, or billing determinations.
+All findings are informational heuristics. Their machine-readable severity is either `notice` or `info`: stronger recurring-charge evidence and preselected paid-option evidence emit `notice`, while bare subscription language emits `info`. They run only after the user clicks **Analyze** on the local `http://127.0.0.1/*` mock checkout target. They are not legal, compliance, or billing determinations.
 
 ## R1 — Possible recurring charge
 
@@ -8,11 +8,11 @@ All findings are informational `notice`-severity heuristics. They run only after
 
 **Signal:** visible text matching at least one of:
 
-- a currency amount with `/` or `per` followed by `month`, `week`, or `year` (for example, `$12 per month`);
-- `billed`, `charged`, or `renews automatically`, followed within 80 non-period characters by a cadence such as `every`, `monthly`, `weekly`, `annually`, `yearly`, `month`, `week`, or `year`; or
-- `subscription`, `recurring payment`, or `auto-renew`.
+- a currency amount with `/` or `per` followed by `month`, `week`, or `year` (for example, `$12 per month`) (`notice`);
+- `billed`, `charged`, or `renews automatically`, followed within 80 non-period characters by a cadence such as `every`, `monthly`, `weekly`, `annually`, `yearly`, `month`, `week`, or `year` (`notice`); or
+- `subscription`, `recurring payment`, or `auto-renew` without a preceding stronger signal (`info`).
 
-**Output:** `Possible recurring charge` with the candidate's visible text as evidence. Nested matching candidates are reduced so the enclosing matching element is not reported when it contains another matching candidate.
+**Output:** `Possible recurring charge` with the candidate's visible text as evidence and the severity shown above. Nested matching candidates are reduced so the enclosing matching element is not reported when it contains another matching candidate.
 
 **Known false positives:** policy copy, educational text, historical invoices, non-purchase memberships, free trials described with recurring language, and unrelated visible text can match. A match does not prove a charge exists or will recur.
 
@@ -26,7 +26,7 @@ All findings are informational `notice`-severity heuristics. They run only after
 
 **Signal:** normalized visible label text containing either a currency amount using `$`, `€`, or `£`, or one of `paid`, `premium`, `protection`, or `membership`.
 
-**Output:** `Preselected paid option` with the full visible label text as evidence.
+**Output:** `Preselected paid option` with the full visible label text as evidence and `notice` severity.
 
 **Known false positives:** preselected no-cost options whose label uses one of the keywords, included benefits, labels that mention a price only for comparison, or controls selected by the page for a non-purchase purpose. A match does not establish that an option costs money.
 
