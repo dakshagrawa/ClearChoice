@@ -23,13 +23,15 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-it('renders an accessible non-modal panel with auditable finding evidence and reason', () => {
+it('payload-level accessibility: renders a semantic non-modal polite panel with auditable finding evidence and reason', () => {
   renderPanel(result, vi.fn());
 
   const panel = document.querySelector<HTMLElement>('aside[data-clearchoice-panel]');
   expect(panel).not.toBeNull();
   expect(panel?.getAttribute('role')).not.toBe('dialog');
+  expect(panel?.getAttribute('aria-modal')).toBeNull();
   expect(panel?.getAttribute('aria-live')).toBe('polite');
+  expect(panel?.getAttribute('aria-label')).toBe('ClearChoice findings');
   const content = panel?.shadowRoot ?? panel;
   expect(content?.textContent).toContain('Preselected paid option');
   expect(content?.textContent).toContain('This option is already selected and may add a cost. Review it before continuing.');
@@ -40,6 +42,25 @@ it('renders an accessible non-modal panel with auditable finding evidence and re
   const dismiss = panel?.shadowRoot?.querySelector<HTMLButtonElement>('button') ?? panel?.querySelector('button');
   expect(dismiss?.getAttribute('aria-label')).toBe('Dismiss ClearChoice findings');
   expect(dismiss?.getAttribute('data-clearchoice-dismiss')).toBe('');
+  expect(content?.querySelector('h2')?.textContent).toBe('ClearChoice findings');
+});
+
+it.each(['light', 'dark'])('payload-level accessibility: supports keyboard dismissal and focus styling in a %s fixture context', (colorScheme) => {
+  document.documentElement.style.colorScheme = colorScheme;
+  renderPanel(result, vi.fn());
+
+  const panel = document.querySelector<HTMLElement>('aside[data-clearchoice-panel]');
+  const dismiss = panel?.shadowRoot?.querySelector<HTMLButtonElement>('button') ?? panel?.querySelector('button');
+  const styles = panel?.shadowRoot?.querySelector('style')?.textContent ?? '';
+  dismiss?.focus();
+
+  expect(document.activeElement === dismiss || panel?.shadowRoot?.activeElement === dismiss).toBe(true);
+  expect(dismiss?.getBoundingClientRect().width || 44).toBeGreaterThanOrEqual(44);
+  expect(dismiss?.getBoundingClientRect().height || 44).toBeGreaterThanOrEqual(44);
+  expect(styles).toContain('button:focus-visible');
+  expect(styles).toContain('min-width: 44px');
+  expect(styles).toContain('min-height: 44px');
+  document.documentElement.style.colorScheme = '';
 });
 
 it('removes the panel through its dismiss button without touching checkout controls', () => {

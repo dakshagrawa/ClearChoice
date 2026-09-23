@@ -104,6 +104,7 @@ test('retains digest and boolean predicates only, and detects a changed host fie
       'cleanFixtureIntegrity',
       'commit',
       'dynamicFixtureIntegrity',
+      'accessibility',
       'manifestSha256',
       'outcome',
       'reviewer',
