@@ -2,6 +2,8 @@
 
 ClearChoice is an **unpublished, non-production Chromium Manifest V3 v0.2.0 release candidate**. It provides a local, user-initiated analysis of mock checkout pages served from `127.0.0.1`.
 
+> **Transition note:** v0.2.0 remains mock-only until beta gates pass. The private-beta scope and future acceptance gates are documented in [docs/beta-scope.md](docs/beta-scope.md) and [docs/beta-release-checklist.md](docs/beta-release-checklist.md); they do not describe current v0.2.0 behavior.
+
 ## Scope
 
 - The release content script is registered only for `http://127.0.0.1/*`. `npm run build:demo` may add one exact HTTP Tailnet origin from the gitignored `.demo-origin.local` file to the separate `demo-dist/` output.
