@@ -19,6 +19,4 @@ export interface Finding {
 
 export interface AnalysisResult {
   findings: Finding[];
-  analyzedAt: string;
-  pageTitle: string;
 }

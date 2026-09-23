@@ -1,5 +1,3 @@
-import type { AnalysisResult, Finding, FindingKind, FindingReason, Severity } from '../core/types';
-
 export const CLEARCHOICE_ANALYZE = 'CLEARCHOICE_ANALYZE' as const;
 export const CLEARCHOICE_RESTORE = 'CLEARCHOICE_RESTORE' as const;
 
@@ -13,57 +11,28 @@ export interface RestoreRequest {
 
 export type ContentRequest = AnalyzeRequest | RestoreRequest;
 export type AnalyzeResponse =
-  | { ok: true; result: AnalysisResult }
-  | { ok: false; error: string };
-export type RestoreResponse = { ok: true } | { ok: false; error: string };
+  | { ok: true; status: 'supported'; findingCount: number }
+  | { ok: true; status: 'unsupported-context'; findingCount: 0 }
+  | { ok: false; error: 'restricted-page' | 'injection-failed' | 'request-failed' };
+export type RestoreResponse = { ok: true } | { ok: false; error: 'request-failed' };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function isFindingKind(value: unknown): value is FindingKind {
-  return value === 'recurring-charge' || value === 'preselected-addon';
-}
-
-function isFindingReason(value: unknown): value is FindingReason {
-  return value === 'price-cadence'
-    || value === 'renewal-language'
-    || value === 'subscription-language'
-    || value === 'checked-paid-control';
-}
-
-function isSeverity(value: unknown): value is Severity {
-  return value === 'info' || value === 'notice';
-}
-
-function isFinding(value: unknown): value is Finding {
-  return isRecord(value)
-    && typeof value.id === 'string'
-    && isFindingKind(value.kind)
-    && isFindingReason(value.reason)
-    && isSeverity(value.severity)
-    && typeof value.title === 'string'
-    && typeof value.explanation === 'string'
-    && typeof value.evidence === 'string'
-    && typeof value.selector === 'string';
-}
-
-function isAnalysisResult(value: unknown): value is AnalysisResult {
-  return isRecord(value)
-    && Array.isArray(value.findings)
-    && value.findings.every(isFinding)
-    && typeof value.analyzedAt === 'string'
-    && typeof value.pageTitle === 'string';
-}
-
 export function isAnalyzeResponse(value: unknown): value is AnalyzeResponse {
-  return isRecord(value)
-    && ((value.ok === true && isAnalysisResult(value.result))
-      || (value.ok === false && typeof value.error === 'string'));
+  if (!isRecord(value)) return false;
+  if (value.ok === false) {
+    return Object.keys(value).length === 2
+      && (value.error === 'restricted-page' || value.error === 'injection-failed' || value.error === 'request-failed');
+  }
+  if (value.ok !== true || Object.keys(value).length !== 3) return false;
+  return (value.status === 'supported' && typeof value.findingCount === 'number' && Number.isInteger(value.findingCount) && value.findingCount >= 0)
+    || (value.status === 'unsupported-context' && value.findingCount === 0);
 }
 
 export function isRestoreResponse(value: unknown): value is RestoreResponse {
   return isRecord(value)
     && ((value.ok === true && Object.keys(value).length === 1)
-      || (value.ok === false && typeof value.error === 'string'));
+      || (value.ok === false && value.error === 'request-failed'));
 }

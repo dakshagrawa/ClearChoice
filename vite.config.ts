@@ -21,6 +21,8 @@ export default defineConfig({
         content: resolve(projectRoot, 'src/content/index.ts'),
       },
       output: {
+        intro: '(function () {',
+        outro: '})();',
         entryFileNames: (chunk) => (chunk.name === 'content' ? 'content.js' : 'assets/[name]-[hash].js'),
       },
     },

@@ -6,9 +6,10 @@ ClearChoice is an **unpublished, non-production Chromium Manifest V3 private bet
 
 - The generated and packaged manifest declares exactly `activeTab`, `scripting`, and `storage`, in that order.
 - It declares `host_permissions: []`, no optional permissions or optional host permissions, no `content_scripts`, no background worker, and no external connections.
-- `activeTab` grants temporary access only after the user invokes the extension on the active tab. Task 1 establishes this manifest contract only; current-tab injection is not implemented yet.
+- `activeTab` grants temporary access only after the user invokes the extension on the active tab. Analyze and Restore query exactly that active tab in the current window, inject `dist/content.js` programmatically, then message that same tab; they never probe or message inactive tabs.
 - The extension has no persistent host access. Local checkout fixtures remain available for internal testing, but their host is not exposed by the manifest.
-- The analysis is user initiated and reads visible page text and checked checkbox/radio labels when the beta injection flow is implemented.
+- `dist/content.js` is the intentional local payload for programmatic injection, not a dead build artifact or a static content script.
+- The analysis is user initiated and reads visible page text and checked checkbox/radio labels only in the injected page context. The popup receives only a typed status and integer finding count.
 
 ## Explicit non-goals and limits
 

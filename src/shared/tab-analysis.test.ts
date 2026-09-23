@@ -2,7 +2,12 @@ import { expect, it, vi } from 'vitest';
 
 import { analyzeActiveTab, restoreActiveTab } from './tab-analysis';
 
-function installChrome(overrides: Partial<typeof chrome> = {}): {
+type ChromeOverrides = {
+  tabs?: { query: ReturnType<typeof vi.fn>; sendMessage: ReturnType<typeof vi.fn> };
+  scripting?: { executeScript: ReturnType<typeof vi.fn> };
+};
+
+function installChrome(overrides: ChromeOverrides = {}): {
   query: ReturnType<typeof vi.fn>;
   executeScript: ReturnType<typeof vi.fn>;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -10,12 +15,10 @@ function installChrome(overrides: Partial<typeof chrome> = {}): {
   const query = vi.fn().mockResolvedValue([{ id: 42, active: true }]);
   const executeScript = vi.fn().mockResolvedValue([]);
   const sendMessage = vi.fn().mockResolvedValue({ ok: true, status: 'supported', findingCount: 1 });
-  vi.stubGlobal('chrome', {
-    ...overrides,
-    tabs: { query, sendMessage },
-    scripting: { executeScript },
-  });
-  return { query, executeScript, sendMessage };
+  const tabs = overrides.tabs ?? { query, sendMessage };
+  const scripting = overrides.scripting ?? { executeScript };
+  vi.stubGlobal('chrome', { tabs, scripting });
+  return { query: tabs.query, executeScript: scripting.executeScript, sendMessage: tabs.sendMessage };
 }
 
 it('queries exactly the active current tab then injects and messages that tab only', async () => {

@@ -11,7 +11,7 @@ npm audit --omit=dev
 
 `npm run check:release` runs the complete Vitest suite, ESLint, release build, built-extension Playwright cases, package creation, and ZIP inspection. The package verifier requires ordered `activeTab`, `scripting`, `storage` permissions with empty host permissions and rejects duplicates, optional permissions, static content scripts, background workers, external connections, remote executable URLs, secret-like patterns, and emitted runtime assets containing `fetch`, `XMLHttpRequest`, `WebSocket`, `navigator.sendBeacon`, `EventSource` or `Worker` construction, dynamic `import()`, external resource URLs, or supported DOM URL sinks. It validates both `dist/manifest.json` and the unpacked ZIP root manifest. This static policy does not prove every possible browser/runtime networking behavior is absent.
 
-The existing Playwright suite starts an ephemeral `127.0.0.1` fixture server on port `0` and still exercises the prior static-content-script behavior. It is intentionally expected to fail until Task 2 implements user-invoked current-tab injection and refactors those E2E cases; Task 1 preserves the suite rather than weakening or deleting it.
+The Playwright suite starts an ephemeral `127.0.0.1` fixture server on port `0` and programmatically injects the built `dist/content.js` payload into each fixture. It covers clean, recurring, paid add-on, mixed, and dismiss/reload/Restore behavior without relying on static content-script registration.
 
 ## Observed v0.2.0 results
 

@@ -1,37 +1,25 @@
 import { expect, it } from 'vitest';
 
-import { CLEARCHOICE_ANALYZE } from './messages';
+import { CLEARCHOICE_ANALYZE, isAnalyzeResponse } from './messages';
 import type { AnalyzeRequest, AnalyzeResponse } from './messages';
 
-const result = {
-  findings: [
-    {
-      id: 'finding-1',
-      kind: 'recurring-charge' as const,
-      reason: 'price-cadence' as const,
-      severity: 'notice' as const,
-      title: 'Possible recurring charge',
-      explanation: 'Check the schedule.',
-      evidence: '$12 per month',
-      selector: 'section',
-    },
-  ],
-  analyzedAt: '2026-09-22T00:00:00.000Z',
-  pageTitle: 'Mock checkout',
-};
-
-it('defines successful analysis messages as an explicit success union member', () => {
+it('defines popup-safe successful analysis messages with status and count only', () => {
   const request: AnalyzeRequest = { type: CLEARCHOICE_ANALYZE };
-  const response: AnalyzeResponse = { ok: true, result };
+  const response: AnalyzeResponse = { ok: true, status: 'supported', findingCount: 1 };
 
   expect(request.type).toBe('CLEARCHOICE_ANALYZE');
-  expect(response.ok).toBe(true);
-  if (response.ok) expect(response.result.findings[0]?.evidence).toBe('$12 per month');
+  expect(isAnalyzeResponse(response)).toBe(true);
+  expect(Object.keys(response)).toEqual(['ok', 'status', 'findingCount']);
 });
 
-it('defines failed analysis messages as an explicit error union member', () => {
-  const response: AnalyzeResponse = { ok: false, error: 'Analysis unavailable.' };
+it('accepts the zero-count unsupported context response and rejects page data', () => {
+  expect(isAnalyzeResponse({ ok: true, status: 'unsupported-context', findingCount: 0 })).toBe(true);
+  expect(isAnalyzeResponse({ ok: true, status: 'unsupported-context', findingCount: 1 })).toBe(false);
+  expect(isAnalyzeResponse({ ok: true, status: 'supported', findingCount: 1, pageTitle: 'private' })).toBe(false);
+});
 
-  expect(response.ok).toBe(false);
-  if (!response.ok) expect(response.error).toBe('Analysis unavailable.');
+it('defines a closed typed failure union', () => {
+  const response: AnalyzeResponse = { ok: false, error: 'injection-failed' };
+  expect(isAnalyzeResponse(response)).toBe(true);
+  expect(isAnalyzeResponse({ ok: false, error: 'unexpected-error' })).toBe(false);
 });

@@ -16,8 +16,6 @@ const result: AnalysisResult = {
       selector: 'label:nth-of-type(1)',
     },
   ],
-  analyzedAt: '2026-09-22T00:00:00.000Z',
-  pageTitle: 'Mock checkout',
 };
 
 afterEach(() => {

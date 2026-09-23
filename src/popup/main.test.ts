@@ -1,45 +1,17 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
-const result = {
-  findings: [
-    {
-      id: 'finding-1',
-      kind: 'recurring-charge' as const,
-      reason: 'price-cadence' as const,
-      severity: 'notice' as const,
-      title: 'Possible recurring charge',
-      explanation: 'Check the schedule.',
-      evidence: '$12 per month',
-      selector: 'section',
-    },
-  ],
-  analyzedAt: '2026-09-22T00:00:00.000Z',
-  pageTitle: 'Mock checkout',
-};
+function installChrome(response: unknown): { query: ReturnType<typeof vi.fn>; executeScript: ReturnType<typeof vi.fn>; sendMessage: ReturnType<typeof vi.fn> } {
+  const query = vi.fn().mockResolvedValue([{ id: 42, active: true }]);
+  const executeScript = vi.fn().mockResolvedValue([]);
+  const sendMessage = vi.fn().mockResolvedValue(response);
+  vi.stubGlobal('chrome', { tabs: { query, sendMessage }, scripting: { executeScript } });
+  return { query, executeScript, sendMessage };
+}
 
 async function renderPopup(response: unknown): Promise<HTMLElement> {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
-  vi.stubGlobal('chrome', {
-    tabs: {
-      query: vi.fn().mockResolvedValue([{ id: 42, active: true }]),
-      sendMessage: vi.fn().mockResolvedValue(response),
-    },
-  });
-
-  await import('./main');
-  const button = document.querySelector<HTMLButtonElement>('button');
-  button?.click();
-  await vi.waitFor(() => expect(button?.disabled).toBe(false));
-  return document.querySelector<HTMLElement>('#app')!;
-}
-
-async function renderUnsupportedPopup(): Promise<HTMLElement> {
-  vi.resetModules();
-  document.body.innerHTML = '<div id="app"></div>';
-  vi.stubGlobal('chrome', {
-    tabs: { query: vi.fn().mockResolvedValue([]), sendMessage: vi.fn() },
-  });
+  installChrome(response);
   await import('./main');
   const button = document.querySelector<HTMLButtonElement>('button');
   button?.click();
@@ -52,50 +24,31 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-it('shows the number of findings from a valid successful analysis response', async () => {
-  const app = await renderPopup({ ok: true, result });
-
+it('shows only the safe successful finding count', async () => {
+  const app = await renderPopup({ ok: true, status: 'supported', findingCount: 1 });
   expect(app.querySelector('[role="status"]')?.textContent).toBe('1 finding shown on this page.');
 });
 
-it('uses clear zero and plural finding status messages', async () => {
-  const zero = await renderPopup({ ok: true, result: { ...result, findings: [] } });
-  expect(zero.querySelector('[role="status"]')?.textContent).toBe('No findings shown on this page.');
-
-  const plural = await renderPopup({ ok: true, result: { ...result, findings: [result.findings[0], result.findings[0]] } });
-  expect(plural.querySelector('[role="status"]')?.textContent).toBe('2 findings shown on this page.');
+it('uses the non-claiming unsupported context status', async () => {
+  const app = await renderPopup({ ok: true, status: 'unsupported-context', findingCount: 0 });
+  expect(app.querySelector('[role="status"]')?.textContent).toBe('This page does not look like a supported checkout context.');
 });
 
-it('shows a clean unsupported-page status when no tab accepts analysis', async () => {
-  const app = await renderUnsupportedPopup();
-
-  expect(app.querySelector('[role="status"]')?.textContent).toBe('ClearChoice is available only on the local mock checkout page. Reload that page and try again.');
+it('shows typed adapter errors without exposing page data', async () => {
+  const app = await renderPopup({ ok: false, error: 'restricted-page' });
+  expect(app.querySelector('[role="status"]')?.textContent).toBe('ClearChoice cannot run on this browser page.');
 });
 
-it('offers Restore and sends the typed restore message without analyzing again', async () => {
+it('uses active current-tab injection for Restore without analyzing again', async () => {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
-  const sendMessage = vi.fn().mockResolvedValue({ ok: true });
-  vi.stubGlobal('chrome', {
-    tabs: { query: vi.fn().mockResolvedValue([{ id: 42, active: true }]), sendMessage },
-  });
+  const { query, executeScript, sendMessage } = installChrome({ ok: true });
   await import('./main');
 
-  document.querySelector<HTMLButtonElement>('button')?.click();
-  await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('button')?.disabled).toBe(false));
   document.querySelector<HTMLButtonElement>('button:last-of-type')?.click();
+  await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('button:last-of-type')?.disabled).toBe(false));
 
-  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(42, { type: 'CLEARCHOICE_RESTORE' }));
-});
-
-it('shows a human-readable analysis error response', async () => {
-  const app = await renderPopup({ ok: false, error: 'The checkout could not be analyzed.' });
-
-  expect(app.querySelector('[role="status"]')?.textContent).toBe('The checkout could not be analyzed.');
-});
-
-it('rejects a malformed runtime analysis response without reading findings', async () => {
-  const app = await renderPopup({ ok: true, result: { findings: 'not an array' } });
-
-  expect(app.querySelector('[role="status"]')?.textContent).toBe('ClearChoice received an invalid analysis response. Reload the page and try again.');
+  expect(query).toHaveBeenCalledWith({ active: true, currentWindow: true });
+  expect(executeScript).toHaveBeenCalledWith({ target: { tabId: 42 }, files: ['content.js'] });
+  expect(sendMessage).toHaveBeenCalledWith(42, { type: 'CLEARCHOICE_RESTORE' });
 });

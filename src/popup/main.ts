@@ -1,9 +1,5 @@
-import {
-  CLEARCHOICE_ANALYZE,
-  CLEARCHOICE_RESTORE,
-  isAnalyzeResponse,
-  isRestoreResponse,
-} from '../shared/messages';
+import type { AnalyzeResponse } from '../shared/messages';
+import { analyzeActiveTab, restoreActiveTab } from '../shared/tab-analysis';
 
 const app = document.querySelector<HTMLElement>('#app');
 
@@ -12,7 +8,7 @@ if (!app) throw new Error('ClearChoice popup root is missing.');
 app.innerHTML = `
   <main>
     <h1>ClearChoice</h1>
-    <p>Analyze this local mock checkout for potential recurring charges and preselected paid options.</p>
+    <p>Review the active page for possible recurring charges and preselected paid options.</p>
     <div class="actions">
       <button type="button" data-action="analyze">Analyze</button>
       <button type="button" data-action="restore">Restore</button>
@@ -27,24 +23,20 @@ const status = app.querySelector<HTMLParagraphElement>('[role="status"]');
 
 if (!analyzeButton || !restoreButton || !status) throw new Error('ClearChoice popup controls are missing.');
 
-async function sendToSupportedTab(message: { type: typeof CLEARCHOICE_ANALYZE | typeof CLEARCHOICE_RESTORE }): Promise<unknown> {
-  const tabs = await chrome.tabs.query({ currentWindow: true });
-  const orderedTabs = [...tabs.filter((candidate) => candidate.active), ...tabs.filter((candidate) => !candidate.active)];
-  for (const tab of orderedTabs) {
-    if (tab.id === undefined) continue;
-    try {
-      return await chrome.tabs.sendMessage(tab.id, message);
-    } catch {
-      // A tab without the local content script is not an analysis target.
-    }
-  }
-  throw new Error('No local checkout tab is available.');
-}
-
 function findingStatus(count: number): string {
   if (count === 0) return 'No findings shown on this page.';
   if (count === 1) return '1 finding shown on this page.';
   return `${count} findings shown on this page.`;
+}
+
+function analysisStatus(response: AnalyzeResponse): string {
+  if (!response.ok) {
+    if (response.error === 'restricted-page') return 'ClearChoice cannot run on this browser page.';
+    if (response.error === 'injection-failed') return 'ClearChoice could not start on this page. Reload and try again.';
+    return 'ClearChoice could not analyze this page. Reload and try again.';
+  }
+  if (response.status === 'unsupported-context') return 'This page does not look like a supported checkout context.';
+  return findingStatus(response.findingCount);
 }
 
 analyzeButton.addEventListener('click', async () => {
@@ -52,18 +44,7 @@ analyzeButton.addEventListener('click', async () => {
   status.textContent = 'Analyzing this page…';
 
   try {
-    const response = await sendToSupportedTab({ type: CLEARCHOICE_ANALYZE });
-    if (!isAnalyzeResponse(response)) {
-      status.textContent = 'ClearChoice received an invalid analysis response. Reload the page and try again.';
-      return;
-    }
-    if (!response.ok) {
-      status.textContent = response.error;
-      return;
-    }
-    status.textContent = findingStatus(response.result.findings.length);
-  } catch {
-    status.textContent = 'ClearChoice is available only on the local mock checkout page. Reload that page and try again.';
+    status.textContent = analysisStatus(await analyzeActiveTab());
   } finally {
     analyzeButton.disabled = false;
   }
@@ -74,14 +55,10 @@ restoreButton.addEventListener('click', async () => {
   status.textContent = 'Restoring dismissed findings…';
 
   try {
-    const response = await sendToSupportedTab({ type: CLEARCHOICE_RESTORE });
-    if (!isRestoreResponse(response)) {
-      status.textContent = 'ClearChoice received an invalid restore response. Reload the page and try again.';
-      return;
-    }
-    status.textContent = response.ok ? 'Dismissal restored. Analyze again to show findings.' : response.error;
-  } catch {
-    status.textContent = 'ClearChoice is available only on the local mock checkout page. Reload that page and try again.';
+    const response = await restoreActiveTab();
+    status.textContent = response.ok
+      ? 'Dismissal restored. Analyze again to show findings.'
+      : 'ClearChoice could not restore dismissed findings. Reload and try again.';
   } finally {
     restoreButton.disabled = false;
   }

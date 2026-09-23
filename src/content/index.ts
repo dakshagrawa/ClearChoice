@@ -8,8 +8,11 @@ import type {
 import { getDismissed, setDismissed } from '../shared/storage';
 import { removePanel, renderPanel } from './panel';
 
+const contentSentinel = '__clearchoiceContentListenerInstalled__';
 const CLEARCHOICE_ANALYZE = 'CLEARCHOICE_ANALYZE' as const;
 const CLEARCHOICE_RESTORE = 'CLEARCHOICE_RESTORE' as const;
+
+type ClearChoiceWindow = Window & { [contentSentinel]?: true };
 
 function inDomOrder(left: Finding, right: Finding): number {
   const leftElement = document.querySelector(left.selector);
@@ -24,36 +27,37 @@ function analyzePage(): AnalysisResult {
       ...detectRecurringCharges(document.documentElement),
       ...detectPreselectedAddons(document.documentElement),
     ].sort(inDomOrder),
-    analyzedAt: new Date().toISOString(),
-    pageTitle: document.title,
   };
 }
 
-chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
-  if (!message || typeof message !== 'object') return;
-  const request = message as Partial<ContentRequest>;
-  if (request.type !== CLEARCHOICE_ANALYZE && request.type !== CLEARCHOICE_RESTORE) return;
+const pageWindow = window as ClearChoiceWindow;
+if (!pageWindow[contentSentinel]) {
+  pageWindow[contentSentinel] = true;
 
-  void (async () => {
-    if (request.type === CLEARCHOICE_RESTORE) {
-      removePanel();
-      await setDismissed(false);
-      sendResponse({ ok: true } satisfies RestoreResponse);
-      return;
-    }
+  chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+    if (!message || typeof message !== 'object') return;
+    const request = message as Partial<ContentRequest>;
+    if (request.type !== CLEARCHOICE_ANALYZE && request.type !== CLEARCHOICE_RESTORE) return;
 
-    const result = analyzePage();
-    if (!(await getDismissed())) {
-      renderPanel(result, () => {
-        void setDismissed(true).catch((error: unknown) => console.error('ClearChoice could not save dismissal:', error));
-      });
-    }
-    sendResponse({ ok: true, result } satisfies AnalyzeResponse);
-  })().catch((error: unknown) => {
-    console.error('ClearChoice message failed:', error);
-    const errorMessage = error instanceof Error && error.message !== '' ? error.message : 'ClearChoice request failed.';
-    sendResponse({ ok: false, error: errorMessage } satisfies AnalyzeResponse | RestoreResponse);
+    void (async () => {
+      if (request.type === CLEARCHOICE_RESTORE) {
+        removePanel();
+        await setDismissed(false);
+        sendResponse({ ok: true } satisfies RestoreResponse);
+        return;
+      }
+
+      const result = analyzePage();
+      if (!(await getDismissed())) {
+        renderPanel(result, () => {
+          void setDismissed(true).catch(() => undefined);
+        });
+      }
+      sendResponse({ ok: true, status: 'supported', findingCount: result.findings.length } satisfies AnalyzeResponse);
+    })().catch(() => {
+      sendResponse({ ok: false, error: 'request-failed' } satisfies AnalyzeResponse | RestoreResponse);
+    });
+
+    return true;
   });
-
-  return true;
-});
+}
