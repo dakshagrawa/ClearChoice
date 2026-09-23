@@ -13,7 +13,7 @@ ClearChoice is an **unpublished, non-production Chromium Manifest V3 v0.2.0 rele
 
 This MVP does **not**:
 
-- include emitted runtime artifacts that violate the release verifier's static policy: `fetch`, `XMLHttpRequest`, `WebSocket`, `navigator.sendBeacon`, `EventSource` or `Worker` construction, dynamic `import()`, external absolute/protocol-relative HTML or CSS URLs, or external DOM URL sinks;
+- include emitted runtime artifacts that violate the release verifier's static policy: `fetch`, `XMLHttpRequest`, `WebSocket`, `navigator.sendBeacon`, `EventSource` or `Worker` construction, dynamic `import()`, external absolute/protocol-relative HTML `src`, `href`, `action`, `formaction`, or `poster` values (quoted or unquoted), `srcset` values, CSS `url()` values, or supported DOM URL sinks (location, dot/bracket `href`/`src`/`action` assignments, and `setAttribute`, with quoted or template-literal values);
 - access accounts, payment data, or cancellation flows;
 - perform account, payment, cancellation, or checkout actions;
 - modify checkout controls, selections, prices, forms, or page content (it only adds/removes its own findings panel);

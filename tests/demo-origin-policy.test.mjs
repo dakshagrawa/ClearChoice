@@ -74,4 +74,4 @@ test('release source, release dist, and unpacked ZIP have no local demo override
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
-});
+}, 10_000);

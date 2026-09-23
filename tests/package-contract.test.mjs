@@ -117,9 +117,17 @@ test.each([
   ['dynamic import', 'popup/main.js', 'import("./module.js");'],
   ['absolute HTML URL', 'popup/index.html', '<img src="https://example.test/image.png">'],
   ['protocol-relative HTML URL', 'popup/index.html', '<link href="//example.test/style.css" rel="stylesheet">'],
+  ['unquoted absolute HTML src', 'popup/index.html', '<img src=https://example.test/image.png>'],
+  ['unquoted protocol-relative HTML href', 'popup/index.html', '<link href=//example.test/style.css rel=stylesheet>'],
+  ['absolute HTML srcset URL', 'popup/index.html', '<img srcset="https://example.test/image.png 1x, ./image@2x.png 2x">'],
+  ['protocol-relative HTML srcset URL', 'popup/index.html', '<source srcset="//example.test/image.png 1x">'],
   ['absolute CSS URL', 'popup/style.css', '.logo { background-image: url("https://example.test/image.png"); }'],
   ['protocol-relative CSS URL', 'popup/style.css', '.logo { background-image: url(//example.test/image.png); }'],
   ['DOM URL sink', 'popup/main.js', 'document.querySelector("a").href = "https://example.test/next";'],
+  ['template-literal DOM URL sink', 'popup/main.js', 'element.href = `https://example.test/next`;'],
+  ['protocol-relative template-literal DOM URL sink', 'popup/main.js', 'element.src = `//example.test/image.png`;'],
+  ['bracket DOM URL sink', 'popup/main.js', "element['href'] = 'https://example.test/next';"],
+  ['protocol-relative bracket DOM URL sink', 'popup/main.js', 'element["src"] = "//example.test/image.png";'],
   ['DOM URL sink setter', 'popup/main.js', 'document.querySelector("img").setAttribute("src", "//example.test/image.png");'],
 ])('package verifier rejects emitted artifact network policy bypass: %s', (_label, relativePath, source) => {
   const directory = mkdtempSync(join(tmpdir(), 'clearchoice-dist-'));

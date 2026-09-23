@@ -13,8 +13,9 @@ const forbiddenArtifactPatterns = [
   ['EventSource construction', /\bnew\s+EventSource\s*\(/],
   ['Worker construction', /\bnew\s+(?:Shared)?Worker\s*\(/],
   ['dynamic import', /\bimport\s*\(/],
-  ['external HTML or CSS URL', /(?:\b(?:src|href|action|formaction|poster)\s*=\s*["']|\burl\s*\(\s*["']?)(?:https?:)?\/\//i],
-  ['external DOM URL sink', /(?:\b(?:window\s*\.\s*)?location(?:\s*\.\s*href)?\s*=\s*["']|\b(?:window\s*\.\s*)?location\s*\.\s*(?:assign|replace)\s*\(\s*["']|\.\s*(?:href|src|action|formAction)\s*=\s*["']|\.\s*setAttribute\s*\(\s*["'](?:href|src|action|formaction)["']\s*,\s*["'])(?:https?:)?\/\//i],
+  ['external HTML or CSS URL', /(?:\b(?:src|href|action|formaction|poster)\s*=\s*["']?\s*|\burl\s*\(\s*["']?)(?:https?:)?\/\//i],
+  ['external HTML srcset URL', /\bsrcset\s*=\s*(?:"[^"]*|'[^']*|[^\s>]*)(?:https?:)?\/\//i],
+  ['external DOM URL sink', /(?:\b(?:window\s*\.\s*)?location(?:\s*\.\s*href)?\s*=\s*["'`]|\b(?:window\s*\.\s*)?location\s*\.\s*(?:assign|replace)\s*\(\s*["'`]|(?:\.\s*(?:href|src|action|formAction)|\[\s*["'](?:href|src|action|formAction)["']\s*\])\s*=\s*["'`]|\.\s*setAttribute\s*\(\s*["'](?:href|src|action|formaction)["']\s*,\s*["'`])(?:https?:)?\/\//i],
   ['remote executable URL', /(?:\b(?:import|importScripts)\s*\(?\s*["']https?:\/\/|<script\b[^>]*\bsrc\s*=\s*["']https?:\/\/|https?:\/\/[^\s"'`<>]+\.(?:m?js|cjs)(?:[?#][^\s"'`<>]*)?)/i],
   ['secret-bearing token, key, or password', /\b(?:api[_-]?key|access[_-]?token|auth(?:entication)?[_-]?token|client[_-]?secret|private[_-]?key|token|key|password|secret)\b\s*[:=]/i],
 ];
