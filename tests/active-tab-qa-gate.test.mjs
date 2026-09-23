@@ -34,6 +34,26 @@ test.each([
   expect(validateManualActiveTabMarker(value, { commit, manifestSha256 }).ok).toBe(false);
 });
 
+test.each([
+  ['page title', 'pageTitle', 'ClearChoice'],
+  ['page HTML', 'pageHtml', '<html><body>ClearChoice</body></html>'],
+  ['URL', 'url', 'https://example.test/'],
+  ['evidence', 'evidence', 'checked active tab'],
+  ['selector', 'selector', '#app'],
+  ['an unrelated key', 'unexpected', true],
+])('rejects markers containing %s data', (_label, key, value) => {
+  const result = validateManualActiveTabMarker(marker({ [key]: value }), { commit, manifestSha256 });
+  expect(result).toEqual({ ok: false, error: 'marker must contain exactly the required attestation fields' });
+});
+
+test('rejects required fields inherited through the prototype', () => {
+  const inheritedMarker = Object.create(marker());
+  expect(validateManualActiveTabMarker(inheritedMarker, { commit, manifestSha256 })).toEqual({
+    ok: false,
+    error: 'marker must contain exactly the required attestation fields',
+  });
+});
+
 test('check:beta fails closed unless a marker path is deliberately supplied', () => {
   const result = spawnSync(process.execPath, ['scripts/check-beta.mjs', '--validate-marker-only'], {
     cwd: root,
