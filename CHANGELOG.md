@@ -1,12 +1,20 @@
 # Changelog
 
-## 0.2.0
+## 0.3.0-beta.1 (private opt-in beta target)
 
-- Hardened the private-beta content boundary with exact inbound request schemas, post-injection active-tab rechecking, and panel cleanup when a host removes the extension-owned node.
-- Added packaged-extension direct-popup-denial E2E coverage that launches a persistent Chromium context with the generated `dist/` extension, discovers its runtime ID through `chrome://extensions`, and proves CDP automation does not create a false activeTab grant.
-- Added a separate content-payload/JSDOM dynamic-checkout integrity test with a fake `chrome` bridge; it verifies page snapshots but does not claim packaged MV3 or activeTab validation.
-- Replaced persistent local content-script registration and the retired demo-origin workflow with the private-beta temporary `activeTab` policy.
-- Added `npm run check:release` to run release tests, lint, build, E2E, package creation, ZIP integrity, and manifest policy checks.
+- Documented the production-ready private opt-in beta boundary: local user-initiated temporary activeTab access, no persistent host access, local-only page data, and no telemetry, accounts, or uploads.
+- Added voluntary manual testing and sanitized external feedback guidance. The extension does not collect feedback.
+- Recorded English consumer checkout support, advisory-only notices, false-positive/false-negative risks, and no purchase, payment, account, or cancellation automation.
+- Preserved v0.2.0 as an archived mock-only localhost fixture prototype, not ordinary-site beta support: <https://github.com/dakshagrawa/ClearChoice/releases/tag/v0.2.0>.
+- Recorded Node 22.12+ contributor prerequisite (currently verified: Node 22.23.2) and that Chrome Web Store policy review/submission are future separate work, not complete.
+
+## 0.2.0 (historical mock prototype)
+
+**v0.2.0 remains an archived mock-only localhost fixture prototype.** It was not lost or replaced by the private beta and is not ordinary-site beta support. Its preserved private release is <https://github.com/dakshagrawa/ClearChoice/releases/tag/v0.2.0>.
+
+- Hardened the content boundary with exact inbound request schemas, post-injection active-tab rechecking, and panel cleanup when a host removes the extension-owned node.
+- Added packaged-extension direct-popup-denial E2E coverage; CDP automation does not create a false activeTab grant.
+- Added content-payload/JSDOM dynamic-checkout integrity coverage; it does not claim packaged MV3 or activeTab validation.
 - Renamed the local unpacked archive to `ClearChoice-v0.2.0-unpacked.zip`.
 
 ## 0.1.0

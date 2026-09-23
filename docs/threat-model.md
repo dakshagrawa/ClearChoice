@@ -1,34 +1,25 @@
 # ClearChoice 0.3.0-beta.1 private-beta threat model
 
+ClearChoice is a production-ready **private opt-in beta** targeted as `0.3.0-beta.1`. It is not a Chrome Web Store release or public distribution.
+
 ## System boundary
 
-ClearChoice is an unpublished Linux Chromium Manifest V3 private beta with a popup. Its generated manifest declares exactly `activeTab`, `scripting`, and `storage`, `host_permissions: []`, and exactly one `_execute_action` command with the suggested `Ctrl+Shift+Y` shortcut. It declares no static content script, optional permission, background worker, or external connection. `activeTab` grants temporary access to the active tab after user invocation. The required manual-marker beta gate is Linux-only: it binds the safely opened marker descriptor through Linux `/proc/self/fd` and fails closed with a platform-specific diagnostic on macOS and Windows rather than claiming support.
+A user clicks **Analyze this tab** locally. The browser then grants temporary `activeTab` access to the active tab for that user invocation. The manifest has no persistent host access, static content scripts, optional host permissions, background worker, or external connection declaration. Analyze and Restore recheck the selected active tab around programmatic injection; an observed switch cancels the request. A tab switch after an asynchronous checkpoint is a residual race that extension code cannot make atomic.
 
-Task 2 implements current-tab injection as current beta work; it is not release-ready. Analyze and Restore select the active current tab, recheck it before injection and after awaited injection, then message it only if it remains active at the observed checkpoints. Extension code cannot atomically guarantee focus between those asynchronous operations, so a tab switch just after a checkpoint remains a residual race.
+All page data stays local. There is no telemetry, accounts, or uploads, no network API, and no backend. Analysis runs locally in the injected page context. Typed `input`, `textarea`, `select`, and `contenteditable` values are excluded. Static visible text can be transiently inspected while evaluating candidates, but a static context or finding candidate containing an email, payment card/PAN or masked card, account/bank/routing number, CVV, or security code is discarded whole before evidence, messages, or storage.
 
-Controlled local fixtures remain available for internal testing, but their host is not in the manifest and receives no persistent extension access. See [beta scope](beta-scope.md) and the [beta release checklist](beta-release-checklist.md) for current boundary and acceptance gates.
+## Assets, threats, and limits
 
-## Assets and intended protections
-
-| Asset / concern | Private-beta boundary |
-| --- | --- |
-| Page text and findings | User invocation triggers temporary active-tab processing. All visible-evidence analysis is local; typed form/contenteditable values are excluded and sensitive-looking static candidates are discarded whole. Content requests and popup responses use closed schemas; page data remains in the page context. |
-| Temporary active-tab authorization | A human toolbar-action click is required before popup Analyze/Restore can inject into the current active tab. The `_execute_action` shortcut is a documented user affordance. Automated Playwright/CDP input is intentionally treated as denied and cannot attest to this grant. Automated content-payload/JSDOM integrity tests use a fake bridge and cannot prove packaged MV3 injection. The Linux-only beta gate requires a local schema-version-2 self-attestation for clean and dynamic fake-fixture integrity, bound to the commit and manifest, validates the safely opened descriptor through `/proc/self/fd`, and fails closed on macOS and Windows; its fixed `local-human-attestation` token is not cryptographic proof and cannot prove the human gesture to CI. |
-| Typed credentials and sensitive-looking displayed text | Typed form/contenteditable values are excluded; static context/finding candidates containing email, payment-card/PAN/masked-card, account/bank/routing-number, CVV, or security-code patterns are discarded whole before evidence, messages, or storage. |
-| Local persistence | `chrome.storage.local` is limited to the dismissible findings-panel state. |
-
-## Threats and mitigations
-
-| Threat | Private-beta mitigation | Residual risk / limit |
+| Concern | Mitigation | Residual limit |
 | --- | --- | --- |
-| Broad or persistent host access | Manifest validation requires the ordered `activeTab`, `scripting`, `storage` set and empty host permissions; it rejects optional grants and all content scripts. | Temporary user-invoked access still depends on browser enforcement. |
-| Tab switch during analysis | The target is rechecked before injection and after awaited injection; observed switches cancel before messaging. | Extension code cannot atomically guarantee focus around asynchronous browser APIs, so a switch after a checkpoint cannot be eliminated. |
-| Malformed extension messages | The content listener accepts only exact Analyze and Restore request shapes. | This does not authenticate a compromised extension environment. |
-| Orphaned extension UI listeners | The extension-owned panel cleans its Escape listener and references when its exact node is removed. | A hostile page can affect its own DOM/CSS. |
-| Silent or remote data exfiltration | The verifier rejects emitted assets containing `fetch`, `XMLHttpRequest`, `WebSocket`, `navigator.sendBeacon`, `EventSource`, Worker construction, dynamic `import()`, external resource URL sinks, remote executable URLs, or secret-like patterns. | Static scanning covers specific patterns, not every possible runtime behavior. |
-| Persistent background activity or external callers | The verifier rejects `background` and `externally_connectable`. | Popup code still needs review as beta work evolves. |
-| Unwanted checkout mutation | Analysis is read-only except for the extension-owned findings panel. | A hostile page can still affect its own DOM/CSS. |
+| Broad page access | Temporary `activeTab` access follows a deliberate local user action; no persistent host access is declared. | Browser enforcement and user action remain trusted. |
+| Page data exposure | All page data local; no telemetry, accounts, or uploads. Sensitive-looking static candidates are discarded whole. | Static page text may be transiently read to evaluate a candidate before it is discarded. |
+| Wrong or incomplete notice | English consumer checkout heuristics are advisory only. | False positives and false negatives are expected; a notice does not conclude a site is deceptive, legal, illegal, compliant, safe, or unsafe. |
+| Checkout automation | The extension does not automate purchases, payments, accounts, cancellations, refunds, subscriptions, or submission, and does not modify checkout controls or forms. | A hostile page controls its own DOM and behavior. |
+| Human QA assertion | `check:beta` accepts only a deliberately saved external local marker for the exact commit and manifest. | The marker is self-attestation, not cryptographic proof of a user gesture. Missing markers must fail closed. |
 
 ## Out of scope
 
-This beta is not publish-ready. It has no browser-store distribution, real-site support, authentication, backend, telemetry, payment/account/cancellation handling, legal review, security audit, or consumer-protection guarantee.
+This beta does not support non-English or non-consumer-checkout contexts, restricted or unsupported pages, browser-store distribution, legal/compliance review, or a consumer-protection guarantee. Chrome Web Store policy review and submission are future separate work, not complete.
+
+See [the beta test protocol](beta-test-protocol.md) and [rule catalog](rule-catalog.md) for tester responsibilities and heuristic limits.

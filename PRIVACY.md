@@ -1,25 +1,21 @@
-# ClearChoice 0.3.0-beta.1 Private-Beta Privacy Notice
+# ClearChoice 0.3.0-beta.1 private-beta privacy notice
 
-ClearChoice is an unpublished Linux Chromium private beta. It is not a published service or production privacy program.
+ClearChoice is a production-ready **private opt-in beta** targeted as `0.3.0-beta.1`, not a public service or Chrome Web Store release.
 
 ## Access and data handling
 
-The private-beta manifest declares exactly `activeTab`, `scripting`, and `storage`, plus one `_execute_action` shortcut (`Ctrl+Shift+Y`), with no host permissions, optional permissions, static content scripts, background worker, or external connections. `activeTab` is temporary access to the user-invoked active tab; it does not grant broad or persistent host access.
+The user clicks **Analyze this tab** locally. That action grants temporary `activeTab` access to the active tab. ClearChoice has no persistent host access, no static content scripts, and no automatic page scanning.
 
-Task 2 current-tab injection is implemented as current beta work, not release-ready functionality. It begins after a user invokes Analyze or Restore for the active current tab and briefly inspects visible evidence locally in the injected page context. It excludes typed `input`, `textarea`, `select`, and `contenteditable` values; it also discards any static context or finding candidate containing an email, payment card/PAN or masked-card pattern, account/bank/routing number, CVV, or security-code text. It does not redact or retain partial raw candidate text. It returns only a typed status plus integer finding count to the popup. Controlled local checkout fixtures remain for internal testing but are not named in the manifest.
+All page data stays local. There is no telemetry, accounts, or uploads; ClearChoice has no backend and does not transmit page data. Analysis briefly evaluates visible evidence in the injected page context. It excludes typed `input`, `textarea`, `select`, and `contenteditable` values. Static page text can be transiently inspected to evaluate a candidate, but a sensitive-looking static context or finding candidate containing an email, payment card/PAN or masked-card pattern, account/bank/routing number, CVV, or security-code text is discarded whole rather than redacted or retained. The popup receives only a typed status and integer finding count.
 
-Analyze rechecks the chosen tab before injection and after awaited injection. If a tab switch is observed at those checkpoints, it cancels instead of messaging the old target. An extension cannot atomically lock focus between those checks and asynchronous browser operations, so no claim is made that every micro-race can be prevented.
+A dismissed findings-panel state may be stored in `chrome.storage.local`. It is not used for tracking, analytics, synchronization, advertising, or profiling. The separate human manual-QA marker is voluntary local self-attestation outside the repository; it is not feedback collection by the extension and is not cryptographic proof of a gesture.
 
-A dismissed findings-panel state may be stored in `chrome.storage.local`; it is not used for tracking, analytics, synchronization, advertising, or profiling. After local human attestation, the separate Linux-only manual active-tab QA runner emits—but never writes—a data-free JSON marker. A human runs both clean and dynamic fake fixtures with real toolbar/popup pointer gestures; the dynamic run also covers Dismiss, Restore, repeated Analyze, and replacement without returning page data. To compare fixture integrity, the runner transiently computes an in-page canonical representation and transiently reads controlled fake-fixture data only to derive a SHA-256 digest. Its retained QA state and emitted marker retain only the digest and boolean predicates or attestation fields: no URL, title, DOM text, form value, node reference, name/type, selector, evidence, HTML, or finding. The reviewer manually saves that local self-attestation outside the repository; it records only pass/fail, `cleanFixtureIntegrity: "passed"`, `dynamicFixtureIntegrity: "passed"`, the fixed literal `local-human-attestation`, current Git commit, and manifest hash. `check:beta` deliberately binds that marker's opened descriptor through Linux `/proc/self/fd`; it fails closed with an explicit diagnostic on macOS and Windows, which are not supported by this beta gate. It is not cryptographic proof of a human gesture.
+## What ClearChoice does not do
 
-The release verifier rejects static package patterns for network APIs, remote executable URLs, secrets, dynamic imports, external resource URLs, and supported DOM URL sinks. This fail-closed static policy does not prove every possible browser/runtime networking behavior is absent.
+- It does not have persistent access to any host.
+- It does not read typed form or `contenteditable` values.
+- It does not automate or initiate purchases, payments, accounts, cancellations, refunds, subscriptions, or form submission.
+- It does not modify checkout choices, controls, prices, or forms.
+- It provides advisory-only notices and does not make a legal, compliance, safety, or deceptive-site conclusion.
 
-See [the beta scope](docs/beta-scope.md) and [beta release checklist](docs/beta-release-checklist.md) for the beta boundary and outstanding gates.
-
-## What ClearChoice does not access or do
-
-- It does not have persistent access to any host, including the internal fixtures.
-- It does not read typed form or `contenteditable` values; sensitive-looking static display candidates are excluded from context cues, findings, and evidence.
-- It does not initiate purchases, cancellations, refunds, subscriptions, or other checkout actions.
-- It does not modify checkout choices or forms.
-- It does not make legal or regulatory determinations.
+See [the threat model](docs/threat-model.md), [beta test protocol](docs/beta-test-protocol.md), and [beta release checklist](docs/beta-release-checklist.md) for boundaries and testing requirements. Chrome Web Store policy review and submission are future separate work, not complete.
