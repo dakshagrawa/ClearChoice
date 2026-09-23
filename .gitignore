@@ -5,7 +5,4 @@ test-results/
 .env
 .env.*
 *.zip
-.demo-origin.local
-.demo-manifest.json
 .release-manifest.json
-demo-dist/

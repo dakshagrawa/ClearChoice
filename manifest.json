@@ -2,16 +2,10 @@
   "manifest_version": 3,
   "name": "ClearChoice",
   "version": "0.2.0",
-  "description": "A local Chromium extension popup for mock checkout analysis.",
+  "description": "A private-beta Chromium extension popup for checkout analysis.",
   "action": {
     "default_popup": "popup/index.html"
   },
-  "permissions": ["storage"],
-  "host_permissions": [],
-  "content_scripts": [
-    {
-      "matches": ["http://127.0.0.1/*"],
-      "js": ["content.js"]
-    }
-  ]
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": []
 }

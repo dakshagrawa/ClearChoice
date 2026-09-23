@@ -8,9 +8,9 @@
     "test": "vitest",
     "build": "tsc --noEmit && node scripts/build-manifest.mjs --release --output .release-manifest.json && npm run build:assets && npm run verify:package",
     "build:assets": "vite build",
-    "build:demo": "tsc --noEmit && node scripts/build-manifest.mjs --demo --output .demo-manifest.json && CLEARCHOICE_MANIFEST_MODE=demo npm run build:assets",
     "serve:fixtures": "node scripts/serve-fixtures.mjs",
     "verify:package": "node scripts/verify-package.mjs --dist dist",
+    "verify:archive": "node scripts/verify-package.mjs --zip ClearChoice-v0.2.0-unpacked.zip",
     "package:unpacked": "npm run build && node scripts/package-unpacked.mjs",
     "e2e": "playwright test",
     "check:release": "node scripts/check-release.mjs"

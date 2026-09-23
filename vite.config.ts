@@ -4,16 +4,15 @@ import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
 const projectRoot = fileURLToPath(new URL('.', import.meta.url));
-const demoBuild = process.env.CLEARCHOICE_MANIFEST_MODE === 'demo';
-const generatedManifest = resolve(projectRoot, demoBuild ? '.demo-manifest.json' : '.release-manifest.json');
-const manifestSource = demoBuild || existsSync(generatedManifest)
+const generatedManifest = resolve(projectRoot, '.release-manifest.json');
+const manifestSource = existsSync(generatedManifest)
   ? generatedManifest
   : resolve(projectRoot, 'manifest.json');
 
 export default defineConfig({
   root: 'src',
   build: {
-    outDir: demoBuild ? '../demo-dist' : '../dist',
+    outDir: '../dist',
     emptyOutDir: true,
     modulePreload: false,
     rollupOptions: {
@@ -30,7 +29,7 @@ export default defineConfig({
     {
       name: 'copy-extension-manifest',
       closeBundle() {
-        cpSync(manifestSource, resolve(projectRoot, demoBuild ? 'demo-dist/manifest.json' : 'dist/manifest.json'));
+        cpSync(manifestSource, resolve(projectRoot, 'dist/manifest.json'));
       },
     },
   ],

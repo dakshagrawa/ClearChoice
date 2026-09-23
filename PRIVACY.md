@@ -1,26 +1,21 @@
 # ClearChoice v0.2.0 Privacy Notice
 
-ClearChoice is a local, unpublished Chromium v0.2.0 release candidate for mock checkout pages at `http://127.0.0.1/*`. A private developer may use `npm run build:demo` to add one exact HTTP Tailnet origin from the gitignored `.demo-origin.local` file to a separate demo-only output.
+ClearChoice is an unpublished Chromium private beta. It is not a published service or production privacy program.
 
-## Data handling
+## Access and data handling
 
-When the user clicks **Analyze**, the content script examines visible text and qualifying checked checkbox/radio labels in the local page to generate findings. The result is sent only between the extension popup and its content script through Chromium's local extension messaging.
+The private-beta manifest declares exactly `activeTab`, `scripting`, and `storage`, with no host permissions, optional permissions, static content scripts, background worker, or external connections. `activeTab` is temporary access to the user-invoked active tab; it does not grant broad or persistent host access.
 
-The release manifest declares exactly `storage`; it does not declare `activeTab`, `scripting`, host, or optional permissions. The content script is registered automatically for the local mock origin, so popup messaging does not require an on-demand script injection permission.
+Task 1 defines that least-privilege manifest contract only. Current-tab script injection is not implemented yet. Controlled local checkout fixtures remain for internal testing but are not named in the manifest.
 
-The release verifier statically rejects emitted runtime assets containing `fetch`, `XMLHttpRequest`, `WebSocket`, `navigator.sendBeacon`, `EventSource` or `Worker` construction, dynamic `import()`, external absolute/protocol-relative HTML `src`, `href`, `action`, `formaction`, or `poster` values (quoted or unquoted), `srcset` values, CSS `url()` values, or supported DOM URL sinks (location, dot/bracket `href`/`src`/`action` assignments, and `setAttribute`, with quoted or template-literal values). This fail-closed artifact policy is not proof that every possible browser or runtime networking behavior is absent.
+When analysis is enabled in a later task, it will examine visible text and qualifying checked checkbox/radio labels only after user invocation. A dismissed findings panel may be stored in `chrome.storage.local`; it is not used for tracking, analytics, synchronization, advertising, or profiling.
 
-## Local persistence
-
-If the user dismisses the findings panel, ClearChoice records that dismissal using `chrome.storage.local`. This local flag prevents the panel from being rendered again after a reload. The MVP does not use the flag for tracking, advertising, profiling, synchronization, or analytics.
+The release verifier rejects static package patterns for network APIs, remote executable URLs, secrets, dynamic imports, external resource URLs, and supported DOM URL sinks. This fail-closed static policy does not prove every possible browser/runtime networking behavior is absent.
 
 ## What ClearChoice does not access or do
 
-- The release build is registered only for `http://127.0.0.1/*`, not real checkout sites or arbitrary network hosts. A Tailnet match can exist only in the ignored local demo configuration and separate `demo-dist/` output.
-- It does not access accounts or account credentials.
-- It does not access, collect, or act on payment data.
-- It does not initiate or perform cancellation, purchase, refund, subscription, or other checkout actions.
+- It does not have persistent access to any host, including the internal fixtures.
+- It does not access accounts, credentials, or payment data.
+- It does not initiate purchases, cancellations, refunds, subscriptions, or other checkout actions.
 - It does not modify checkout choices or forms.
 - It does not make legal or regulatory determinations.
-
-This notice describes the current MVP only. ClearChoice is not production-ready, has no Firefox or browser-store release, and must not be represented as a published privacy program or legal assurance.

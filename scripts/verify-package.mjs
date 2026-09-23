@@ -1,11 +1,10 @@
+import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-const allowedPermissions = ['storage'];
-const allowedContentScriptMatches = ['http://127.0.0.1/*'];
+const allowedPermissions = ['activeTab', 'scripting', 'storage'];
 const secretManifestKeys = new Set(['api_key', 'apiKey', 'token', 'secret', 'password']);
 const executableManifestKeys = new Set(['service_worker', 'js']);
-// Extension runtime modules may be emitted as .mjs or .cjs as well as .js.
 const runtimeAssetExtension = /\.(?:css|html|js|mjs|cjs|json)$/i;
 const forbiddenArtifactPatterns = [
   ['network API', /\b(?:fetch|XMLHttpRequest|WebSocket)\b/],
@@ -26,10 +25,9 @@ function fail(message) {
 }
 
 function parseArguments(argv) {
-  if (argv.length !== 2 || !['--manifest', '--dist'].includes(argv[0])) {
-    fail('usage: node scripts/verify-package.mjs --manifest PATH | --dist DIRECTORY');
+  if (argv.length !== 2 || !['--manifest', '--dist', '--zip'].includes(argv[0])) {
+    fail('usage: node scripts/verify-package.mjs --manifest PATH | --dist DIRECTORY | --zip ARCHIVE');
   }
-
   return { mode: argv[0], path: argv[1] };
 }
 
@@ -39,14 +37,12 @@ function findUnsafeString(value, path = '$') {
     if (/(fetch|xhr|websocket)/i.test(value)) return `${path} contains a network API string`;
     return null;
   }
-
   if (Array.isArray(value)) {
     for (const [index, item] of value.entries()) {
       const result = findUnsafeString(item, `${path}[${index}]`);
       if (result) return result;
     }
   }
-
   if (value && typeof value === 'object') {
     for (const [key, item] of Object.entries(value)) {
       if (secretManifestKeys.has(key)) return `manifest key ${key} is not allowed`;
@@ -54,7 +50,6 @@ function findUnsafeString(value, path = '$') {
       if (result) return result;
     }
   }
-
   return null;
 }
 
@@ -65,108 +60,87 @@ function findRemoteExecutableUrl(value, path = '$') {
       if (result) return result;
     }
   }
-
   if (value && typeof value === 'object') {
     for (const [key, item] of Object.entries(value)) {
       const itemPath = `${path}.${key}`;
       if (executableManifestKeys.has(key)) {
-        const executableUrls = Array.isArray(item) ? item : [item];
-        for (const executableUrl of executableUrls) {
-          if (typeof executableUrl === 'string' && /^https?:\/\//i.test(executableUrl)) {
-            return `${itemPath} contains a remote executable URL`;
-          }
+        for (const executableUrl of (Array.isArray(item) ? item : [item])) {
+          if (typeof executableUrl === 'string' && /^https?:\/\//i.test(executableUrl)) return `${itemPath} contains a remote executable URL`;
         }
       }
-
       const result = findRemoteExecutableUrl(item, itemPath);
       if (result) return result;
     }
   }
-
   return null;
 }
 
 function validateManifest(manifest) {
   if (manifest.manifest_version !== 3) return 'manifest_version must be 3';
   if (!Array.isArray(manifest.permissions) || manifest.permissions.length !== allowedPermissions.length ||
-    !allowedPermissions.every((permission) => manifest.permissions.includes(permission))) {
-    return 'permissions must be exactly storage';
+    !allowedPermissions.every((permission, index) => manifest.permissions[index] === permission) ||
+    new Set(manifest.permissions).size !== manifest.permissions.length) {
+    return 'permissions must be exactly activeTab, scripting, storage in that order without duplicates';
   }
-  if (!Array.isArray(manifest.host_permissions) || manifest.host_permissions.length !== 0) {
-    return 'host_permissions must be exactly []';
-  }
-  if (Object.hasOwn(manifest, 'optional_host_permissions') &&
-    (!Array.isArray(manifest.optional_host_permissions) || manifest.optional_host_permissions.length !== 0)) {
-    return 'optional_host_permissions must be absent or exactly []';
-  }
+  if (!Array.isArray(manifest.host_permissions) || manifest.host_permissions.length !== 0) return 'host_permissions must be exactly []';
   const remoteExecutableError = findRemoteExecutableUrl(manifest);
   if (remoteExecutableError) return remoteExecutableError;
-  const contentScriptMatches = manifest.content_scripts?.[0]?.matches;
-  if (!Array.isArray(manifest.content_scripts) || manifest.content_scripts.length !== 1 ||
-    !Array.isArray(contentScriptMatches) || contentScriptMatches.length !== allowedContentScriptMatches.length ||
-    !allowedContentScriptMatches.every((match, index) => contentScriptMatches[index] === match) ||
-    manifest.content_scripts[0]?.js?.length !== 1 || manifest.content_scripts[0].js[0] !== 'content.js') {
-    return 'content_scripts must contain exactly the approved mock-demo content.js matches';
-  }
-  if (Object.hasOwn(manifest, 'optional_permissions') &&
-    (!Array.isArray(manifest.optional_permissions) || manifest.optional_permissions.length !== 0)) {
-    return 'optional_permissions must be absent or exactly []';
-  }
+  if (Object.hasOwn(manifest, 'optional_permissions')) return 'optional_permissions is not allowed';
+  if (Object.hasOwn(manifest, 'optional_host_permissions')) return 'optional_host_permissions is not allowed';
+  if (Object.hasOwn(manifest, 'content_scripts')) return 'content_scripts is not allowed';
+  if (Object.hasOwn(manifest, 'background')) return 'background is not allowed';
   if (Object.hasOwn(manifest, 'externally_connectable')) return 'externally_connectable is not allowed';
-  if (manifest.background?.service_worker) return 'background.service_worker is not allowed';
-
   return findRemoteExecutableUrl(manifest) ?? findUnsafeString(manifest);
 }
 
-function readManifest(manifestPath) {
-  try {
-    return JSON.parse(readFileSync(manifestPath, 'utf8'));
-  } catch (error) {
-    fail(`unable to read manifest: ${error.message}`);
-  }
-}
-
-function runtimeAssets(directory) {
+function directoryAssets(directory) {
   const assets = [];
   const visit = (path) => {
     for (const entry of readdirSync(path, { withFileTypes: true })) {
       const entryPath = join(path, entry.name);
       if (entry.isDirectory()) visit(entryPath);
-      else if (entry.isFile() && runtimeAssetExtension.test(entry.name)) assets.push(entryPath);
+      else if (entry.isFile() && runtimeAssetExtension.test(entry.name)) assets.push([entryPath, readFileSync(entryPath, 'utf8')]);
     }
   };
-
   try {
     if (!statSync(directory).isDirectory()) fail(`dist path is not a directory: ${directory}`);
     visit(directory);
-  } catch (error) {
-    fail(`unable to read dist: ${error.message}`);
-  }
-
+  } catch (error) { fail(`unable to read dist: ${error.message}`); }
   return assets;
 }
 
-function findForbiddenArtifactPattern(directory) {
-  for (const asset of runtimeAssets(directory)) {
-    const source = readFileSync(asset, 'utf8');
+function archiveAssets(archive) {
+  try {
+    const names = execFileSync('unzip', ['-Z1', archive], { encoding: 'utf8' }).split(/\r?\n/).filter(Boolean);
+    if (!names.includes('manifest.json')) fail('ZIP does not contain manifest.json at its root');
+    if (names.some((name) => name.startsWith('dist/'))) fail('ZIP must not wrap files in dist/');
+    return names.filter((name) => runtimeAssetExtension.test(name)).map((name) => [name, execFileSync('unzip', ['-p', archive, name], { encoding: 'utf8' })]);
+  } catch (error) { fail(`unable to read ZIP: ${error.message}`); }
+}
+
+function findForbiddenArtifactPattern(assets) {
+  for (const [path, source] of assets) {
     for (const [label, pattern] of forbiddenArtifactPatterns) {
-      if (pattern.test(source)) return `${asset} contains forbidden runtime pattern: ${label}`;
+      if (pattern.test(source)) return `${path} contains forbidden runtime pattern: ${label}`;
     }
   }
-
   return null;
 }
 
 const argument = parseArguments(process.argv.slice(2));
-const manifestPath = argument.mode === '--dist' ? join(argument.path, 'manifest.json') : argument.path;
-const manifest = readManifest(manifestPath);
+const isDist = argument.mode === '--dist';
+const isZip = argument.mode === '--zip';
+const assets = isDist ? directoryAssets(argument.path) : isZip ? archiveAssets(argument.path) : [];
+const manifestSource = isDist ? assets.find(([path]) => path.endsWith('/manifest.json'))?.[1]
+  : isZip ? assets.find(([path]) => path === 'manifest.json')?.[1]
+    : readFileSync(argument.path, 'utf8');
+if (!manifestSource) fail('manifest.json is missing');
+let manifest;
+try { manifest = JSON.parse(manifestSource); } catch (error) { fail(`unable to read manifest: ${error.message}`); }
 const manifestError = validateManifest(manifest);
 if (manifestError) fail(manifestError);
-
-if (argument.mode === '--dist') {
-  const artifactError = findForbiddenArtifactPattern(argument.path);
+if (isDist || isZip) {
+  const artifactError = findForbiddenArtifactPattern(assets);
   if (artifactError) fail(`artifact policy check failed: ${artifactError}`);
-  process.stdout.write('artifact policy check passed (static package policy only; does not prove all runtime behavior)\n');
-} else {
-  process.stdout.write('manifest contract passed\n');
-}
+  process.stdout.write(`artifact policy check passed (${isZip ? 'ZIP' : 'dist'}; static package policy only; does not prove all runtime behavior)\n`);
+} else process.stdout.write('manifest contract passed\n');

@@ -2,7 +2,7 @@
 
 > This checklist defines future beta acceptance gates. It does not indicate that the beta has been implemented or released. For the v0.2.0 mock-only historical evidence, see [release-checklist.md](release-checklist.md).
 
-- [ ] The beta manifest has exactly `storage`, `activeTab`, and `scripting`; `host_permissions`, `optional_permissions`, and `optional_host_permissions` are empty/absent; it has no `content_scripts`, background service worker, external connection declaration, or remote executable code.
+- [ ] The beta manifest has exactly ordered `activeTab`, `scripting`, and `storage`; `host_permissions` is `[]`; it declares no optional permissions, static content scripts, background service worker, external connection declaration, or remote executable code.
 - [ ] The popup can analyze only the active current tab after a deliberate button press. It injects no code on popup load, never searches or messages non-active tabs, and reports restricted/unsupported pages without crashing.
 - [ ] The content script cannot register duplicate listeners or panels after repeated Analyze presses or SPA rerenders. It analyzes only visible non-form-field text and checked paid controls; it never reads typed input, textarea, select, password, payment, or contenteditable values.
 - [ ] Page analysis stays page-local: popup responses contain only a status and integer count. No URL, title, evidence, selector, DOM text, timestamps, page HTML, form value, payment data, or finding is stored or sent outside the content-script context.

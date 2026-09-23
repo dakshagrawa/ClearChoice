@@ -77,7 +77,7 @@ test('package verifier rejects optional permissions', () => {
   const result = verify({ ...safeManifest, optional_permissions: ['tabs'] });
 
   expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain('optional_permissions must be absent or exactly []');
+  expect(result.stderr).toContain('optional_permissions is not allowed');
 });
 
 test('repository manifest satisfies package validation', () => {
@@ -196,7 +196,18 @@ test('built dist manifest and runtime assets satisfy package validation', () => 
   const result = verifyDist(dist);
   expect(result.status, result.stderr).toBe(0);
   expect(runtimeAssetContents(dist)).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket)\b/);
-});
+}, 15_000);
+
+test('unpacked ZIP manifest and runtime assets satisfy package validation', () => {
+  const packageResult = spawnSync('npm', ['run', 'package:unpacked'], { cwd: repositoryRoot, encoding: 'utf8' });
+  expect(packageResult.status, packageResult.stderr).toBe(0);
+
+  const result = spawnSync(process.execPath, [verifier, '--zip', resolve(repositoryRoot, 'ClearChoice-v0.2.0-unpacked.zip')], {
+    encoding: 'utf8',
+  });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain('artifact policy check passed (ZIP');
+}, 15_000);
 
 test('package verifier rejects unsafe MV3 manifest capabilities', () => {
   for (const [label, manifest] of [
@@ -222,7 +233,7 @@ test('package verifier rejects background service workers', () => {
   const result = verify({ ...safeManifest, background: { service_worker: 'worker.js' } });
 
   expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain('background.service_worker is not allowed');
+  expect(result.stderr).toContain('background is not allowed');
 });
 
 test('package verifier rejects remote executable URLs', () => {
