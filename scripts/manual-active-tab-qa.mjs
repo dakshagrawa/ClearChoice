@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFile, realpath, writeFile } from 'node:fs/promises';
+import { lstat, open, readFile, realpath } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -64,18 +64,87 @@ function parseArguments(argv) {
   return { markerPath };
 }
 
+function isInsideRepository(path) {
+  const pathFromRoot = relative(root, path);
+  return pathFromRoot === '' || (!pathFromRoot.startsWith('..') && !pathFromRoot.startsWith('/'));
+}
+
+function assertOutsideRepository(path) {
+  if (isInsideRepository(path)) {
+    throw new Error('marker path must resolve outside the repository so it cannot be committed or archived');
+  }
+}
+
+export async function validateMarkerDestination(requestedMarkerPath) {
+  await mkdir(dirname(requestedMarkerPath), { recursive: true, mode: 0o700 });
+
+  let requestedStatus;
+  try {
+    requestedStatus = await lstat(requestedMarkerPath);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+
+  if (requestedStatus?.isSymbolicLink()) {
+    try {
+      assertOutsideRepository(await realpath(requestedMarkerPath));
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('marker path must resolve outside')) throw error;
+    }
+    throw new Error('marker destination must not be a symlink');
+  }
+
+  if (requestedStatus) {
+    assertOutsideRepository(await realpath(requestedMarkerPath));
+    throw new Error('marker destination must not already exist');
+  }
+
+  const markerPath = resolve(await realpath(dirname(requestedMarkerPath)), basename(requestedMarkerPath));
+  assertOutsideRepository(markerPath);
+
+  try {
+    const statusAfterParentResolution = await lstat(markerPath);
+    if (statusAfterParentResolution.isSymbolicLink()) {
+      try {
+        assertOutsideRepository(await realpath(markerPath));
+      } catch (error) {
+        if (error instanceof Error && error.message.startsWith('marker path must resolve outside')) throw error;
+      }
+      throw new Error('marker destination must not be a symlink');
+    }
+    throw new Error('marker destination must not already exist');
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+
+  return markerPath;
+}
+
+async function writeMarker(markerPath, marker) {
+  const handle = await open(markerPath, 'wx', 0o600);
+  try {
+    const [openedStatus, pathStatus, canonicalMarkerPath] = await Promise.all([
+      handle.stat(),
+      lstat(markerPath),
+      realpath(markerPath),
+    ]);
+    if (pathStatus.isSymbolicLink() || openedStatus.dev !== pathStatus.dev || openedStatus.ino !== pathStatus.ino) {
+      throw new Error('marker destination changed before write');
+    }
+    assertOutsideRepository(canonicalMarkerPath);
+    await handle.writeFile(`${JSON.stringify(marker, null, 2)}\n`);
+  } finally {
+    await handle.close();
+  }
+}
+
 function closeServer(server) {
   return new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
 }
 
 export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
   const { markerPath: requestedMarkerPath } = parseArguments(argv);
-  await mkdir(dirname(requestedMarkerPath), { recursive: true, mode: 0o700 });
-  const markerPath = resolve(await realpath(dirname(requestedMarkerPath)), basename(requestedMarkerPath));
-  const canonicalPathFromRoot = relative(root, markerPath);
-  if (canonicalPathFromRoot === '' || (!canonicalPathFromRoot.startsWith('..') && !canonicalPathFromRoot.startsWith('/'))) {
-    throw new Error('marker path must resolve outside the repository so it cannot be committed or archived');
-  }
+  const markerPath = await validateMarkerDestination(requestedMarkerPath);
   await readFile(resolve(extensionPath, 'manifest.json'));
   const fixture = await readFile(fixturePath);
   const server = createServer((_request, response) => {
@@ -117,7 +186,7 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
       manifestSha256: sha256(await readFile(resolve(root, 'manifest.json'))),
       reviewer: LOCAL_HUMAN_ATTESTATION,
     };
-    await writeFile(markerPath, `${JSON.stringify(marker, null, 2)}\n`, { mode: 0o600 });
+    await writeMarker(markerPath, marker);
     process.stdout.write('manual active-tab QA passed; wrote pass-only marker without page data\n');
   } finally {
     await context?.close();

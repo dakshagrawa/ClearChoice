@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { lstat, mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
@@ -10,6 +10,7 @@ import {
   fixtureOriginForServerAddress,
   restrictedBrowserArgs,
   reviewBrowserLaunchOptions,
+  runManualActiveTabQa,
 } from '../scripts/manual-active-tab-qa.mjs';
 
 const root = resolve(process.cwd());
@@ -63,6 +64,30 @@ test('restricts review Chromium to only its 127.0.0.1 fixture and disables impli
   for (const origin of ['http://localhost:43123', 'http://127.0.0.2:43123', 'https://127.0.0.1:43123', 'http://127.0.0.1:0']) {
     expect(() => assertFixtureOrigin(origin)).toThrow('fixture origin must be exactly http://127.0.0.1:<port>');
   }
+});
+
+test('manual runner rejects an external marker symlink into the repository before writing its target', async () => {
+  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-marker-symlink-'));
+  temporaryPaths.push(markerDirectory);
+  const target = resolve(root, 'fixtures/clean-checkout.html');
+  const before = await readFile(target);
+  const markerPath = resolve(markerDirectory, 'manual-active-tab-qa.json');
+  await symlink(target, markerPath);
+
+  await expect(runManualActiveTabQa(['--marker', markerPath])).rejects.toThrow('marker path must resolve outside the repository');
+  expect(await readFile(target)).toEqual(before);
+  expect((await lstat(markerPath)).isSymbolicLink()).toBe(true);
+});
+
+test('manual runner rejects a dangling marker symlink without creating its repository target', async () => {
+  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-dangling-marker-'));
+  temporaryPaths.push(markerDirectory);
+  const target = resolve(root, '.manual-active-tab-qa-dangling-target.json');
+  const markerPath = resolve(markerDirectory, 'manual-active-tab-qa.json');
+  await symlink(target, markerPath);
+
+  await expect(runManualActiveTabQa(['--marker', markerPath])).rejects.toThrow('marker destination must not be a symlink');
+  await expect(lstat(target)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 test('Chromium reaches the exact fixture but cannot reach 127.0.0.2 or a non-loopback address', async () => {
