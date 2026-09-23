@@ -6,6 +6,8 @@ ClearChoice is a local, unpublished Chromium v0.2.0 release candidate for mock c
 
 When the user clicks **Analyze**, the content script examines visible text and qualifying checked checkbox/radio labels in the local page to generate findings. The result is sent only between the extension popup and its content script through Chromium's local extension messaging.
 
+The release manifest declares exactly `storage`; it does not declare `activeTab`, `scripting`, host, or optional permissions. The content script is registered automatically for the local mock origin, so popup messaging does not require an on-demand script injection permission.
+
 The release verifier statically rejects emitted runtime assets containing `fetch`, `XMLHttpRequest`, `WebSocket`, `navigator.sendBeacon`, `EventSource` or `Worker` construction, dynamic `import()`, external absolute/protocol-relative HTML `src`, `href`, `action`, `formaction`, or `poster` values (quoted or unquoted), `srcset` values, CSS `url()` values, or supported DOM URL sinks (location, dot/bracket `href`/`src`/`action` assignments, and `setAttribute`, with quoted or template-literal values). This fail-closed artifact policy is not proof that every possible browser or runtime networking behavior is absent.
 
 ## Local persistence

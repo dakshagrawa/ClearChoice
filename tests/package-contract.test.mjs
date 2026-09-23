@@ -14,7 +14,7 @@ const safeManifest = {
   version: '0.2.0',
   description: 'A local extension popup.',
   action: { default_popup: 'popup/index.html' },
-  permissions: ['activeTab', 'scripting', 'storage'],
+  permissions: ['storage'],
   host_permissions: [],
   content_scripts: [{
     matches: ['http://127.0.0.1/*'],
@@ -61,7 +61,7 @@ function runtimeAssetContents(directory) {
   return files.join('\n');
 }
 
-test('package verifier accepts the safe MV3 manifest with the exact mock-demo content-script matches', () => {
+test('package verifier accepts an MV3 manifest with exactly storage and the approved mock-demo content-script match', () => {
   const safe = verify(safeManifest);
   expect(safe.status, safe.stderr).toBe(0);
   expect(safe.stdout).toBe('manifest contract passed\n');
@@ -197,7 +197,7 @@ test('package verifier rejects unsafe popup-referenced CJS module artifacts', ()
 });
 
 test('built dist manifest and runtime assets satisfy package validation', () => {
-  const build = spawnSync('npm', ['run', 'build:assets'], { cwd: repositoryRoot, encoding: 'utf8' });
+  const build = spawnSync('npm', ['run', 'build'], { cwd: repositoryRoot, encoding: 'utf8' });
   expect(build.status, build.stderr).toBe(0);
 
   const dist = resolve(repositoryRoot, 'dist');
@@ -209,6 +209,8 @@ test('built dist manifest and runtime assets satisfy package validation', () => 
 test('package verifier rejects unsafe MV3 manifest capabilities', () => {
   for (const [label, manifest] of [
     ['all URLs', { ...safeManifest, host_permissions: ['<all_urls>'] }],
+    ['restored activeTab', { ...safeManifest, permissions: ['activeTab', 'storage'] }],
+    ['restored scripting', { ...safeManifest, permissions: ['scripting', 'storage'] }],
     ['tabs', { ...safeManifest, permissions: [...safeManifest.permissions, 'tabs'] }],
     ['webRequest', { ...safeManifest, permissions: [...safeManifest.permissions, 'webRequest'] }],
     ['optional host grant', { ...safeManifest, optional_host_permissions: ['https://example.test/*'] }],

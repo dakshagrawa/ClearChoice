@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 const archive = resolve(root, 'ClearChoice-v0.2.0-unpacked.zip');
 const releaseMatch = 'http://127.0.0.1/*';
+const releasePermissions = ['storage'];
 const tailnetHostname = /(?:^|[^a-z0-9-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+ts\.net(?:$|[^a-z0-9-])/i;
 
 function run(command, args) {
@@ -36,7 +37,10 @@ function assertReleaseArchive() {
   } catch (error) {
     fail(`ZIP manifest is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (!Array.isArray(manifest.permissions) || manifest.permissions.length === 0) fail('manifest permissions must be explicitly declared');
+  if (!Array.isArray(manifest.permissions) || manifest.permissions.length !== releasePermissions.length ||
+    !releasePermissions.every((permission) => manifest.permissions.includes(permission))) {
+    fail('manifest permissions must be exactly storage');
+  }
   if (!Array.isArray(manifest.host_permissions) || manifest.host_permissions.length !== 0) fail('manifest host_permissions must be []');
   if ('optional_permissions' in manifest || 'optional_host_permissions' in manifest) fail('manifest must not declare optional permissions');
   if (manifest.background?.service_worker) fail('manifest must not declare a service worker');

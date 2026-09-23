@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-const allowedPermissions = ['activeTab', 'scripting', 'storage'];
+const allowedPermissions = ['storage'];
 const allowedContentScriptMatches = ['http://127.0.0.1/*'];
 const secretManifestKeys = new Set(['api_key', 'apiKey', 'token', 'secret', 'password']);
 const executableManifestKeys = new Set(['service_worker', 'js']);
@@ -90,7 +90,7 @@ function validateManifest(manifest) {
   if (manifest.manifest_version !== 3) return 'manifest_version must be 3';
   if (!Array.isArray(manifest.permissions) || manifest.permissions.length !== allowedPermissions.length ||
     !allowedPermissions.every((permission) => manifest.permissions.includes(permission))) {
-    return 'permissions must be exactly activeTab, scripting, storage';
+    return 'permissions must be exactly storage';
   }
   if (!Array.isArray(manifest.host_permissions) || manifest.host_permissions.length !== 0) {
     return 'host_permissions must be exactly []';

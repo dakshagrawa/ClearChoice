@@ -5,6 +5,7 @@ ClearChoice is an **unpublished, non-production Chromium Manifest V3 v0.2.0 rele
 ## Scope
 
 - The release content script is registered only for `http://127.0.0.1/*`. `npm run build:demo` may add one exact HTTP Tailnet origin from the gitignored `.demo-origin.local` file to the separate `demo-dist/` output.
+- The release manifest declares exactly the `storage` permission. It has no `activeTab`, `scripting`, host, or optional permissions: the automatically registered content script receives the popup's local message.
 - Open the extension popup and click **Analyze** to request analysis of an available local mock-checkout tab.
 - The analysis reads visible page text and checked checkbox/radio labels, then displays informational findings in a dismissible panel.
 - The current rules are documented in [docs/rule-catalog.md](docs/rule-catalog.md).
