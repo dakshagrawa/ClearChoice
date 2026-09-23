@@ -164,6 +164,15 @@ describe('detectRecurringCharges', () => {
     expectSensitiveCandidateSuppressed(findings, card);
   });
 
+  it.each([
+    'Card:**** 4242',
+    'Card ending:•••• 4242',
+  ])('suppresses recurring evidence containing a punctuation-adjacent masked card display', (card) => {
+    const findings = detectRecurringCharges(root(`<section>Membership renews every month for $5. ${card}</section>`));
+
+    expectSensitiveCandidateSuppressed(findings, card);
+  });
+
   it('suppresses recurring evidence beginning with a bullet-masked card display', () => {
     const card = '•••• 4242';
     const findings = detectRecurringCharges(root(`<section>${card} membership renews every month for $5</section>`));
@@ -254,6 +263,15 @@ describe('detectPreselectedAddons', () => {
 
   it('suppresses a checked add-on label containing a labeled asterisk-masked card display', () => {
     const card = 'Card **** 4242';
+    const findings = detectPreselectedAddons(root(`<label><input type="checkbox" checked> Add recurring protection for $5. ${card}</label>`));
+
+    expectSensitiveCandidateSuppressed(findings, card);
+  });
+
+  it.each([
+    'Card:**** 4242',
+    'Card ending:•••• 4242',
+  ])('suppresses a checked add-on label containing a punctuation-adjacent masked card display', (card) => {
     const findings = detectPreselectedAddons(root(`<label><input type="checkbox" checked> Add recurring protection for $5. ${card}</label>`));
 
     expectSensitiveCandidateSuppressed(findings, card);
