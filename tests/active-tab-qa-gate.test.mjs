@@ -1,11 +1,12 @@
 // @vitest-environment node
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { readFileSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { expect, test } from 'vitest';
+import { readManualActiveTabMarker } from '../scripts/check-beta.mjs';
 import { validateManualActiveTabMarker } from '../scripts/active-tab-qa.mjs';
 
 const root = resolve(process.cwd());
@@ -108,6 +109,68 @@ test('check:beta rejects an external marker symlink before reading it', async ()
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('must not be a symlink');
   } finally {
+    await rm(markerDirectory, { recursive: true, force: true });
+  }
+});
+
+test('check:beta accepts a marker reached through an external parent-directory symlink', async () => {
+  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-beta-marker-parent-external-'));
+  const parentPath = resolve(markerDirectory, 'parent');
+  const targetDirectory = resolve(markerDirectory, 'target');
+  try {
+    await mkdir(targetDirectory);
+    await writeFile(resolve(targetDirectory, 'marker.json'), `${JSON.stringify(marker())}\n`);
+    await symlink(targetDirectory, parentPath);
+
+    const result = spawnSync(process.execPath, ['scripts/check-beta.mjs', '--validate-marker-only'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, CLEARCHOICE_ACTIVE_TAB_QA_MARKER: resolve(parentPath, 'marker.json') },
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('marker accepted');
+  } finally {
+    await rm(markerDirectory, { recursive: true, force: true });
+  }
+});
+
+test('check:beta rejects a marker reached through a parent-directory symlink into the repository', async () => {
+  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-beta-marker-parent-repo-'));
+  try {
+    const parentPath = resolve(markerDirectory, 'parent');
+    await symlink(root, parentPath);
+    const result = spawnSync(process.execPath, ['scripts/check-beta.mjs', '--validate-marker-only'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, CLEARCHOICE_ACTIVE_TAB_QA_MARKER: resolve(parentPath, 'manifest.json') },
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('outside the repository');
+  } finally {
+    await rm(markerDirectory, { recursive: true, force: true });
+  }
+});
+
+test('check:beta rejects an opened repository marker after a controlled parent symlink swap', async () => {
+  const markerDirectory = await mkdtemp(resolve(tmpdir(), 'clearchoice-beta-marker-parent-swap-'));
+  const parentPath = resolve(markerDirectory, 'parent');
+  const targetDirectory = resolve(markerDirectory, 'target');
+  const repositoryMarkerPath = resolve(root, '.beta-marker-race.json');
+  const markerName = '.beta-marker-race.json';
+  try {
+    await mkdir(targetDirectory);
+    await writeFile(resolve(targetDirectory, markerName), `${JSON.stringify(marker())}\n`);
+    writeFileSync(repositoryMarkerPath, `${JSON.stringify(marker())}\n`);
+    symlinkSync(targetDirectory, parentPath);
+
+    expect(() => readManualActiveTabMarker(resolve(parentPath, markerName), {
+      beforeOpen() {
+        unlinkSync(parentPath);
+        symlinkSync(root, parentPath);
+      },
+    })).toThrow('outside the repository');
+  } finally {
+    await rm(repositoryMarkerPath, { force: true });
     await rm(markerDirectory, { recursive: true, force: true });
   }
 });
