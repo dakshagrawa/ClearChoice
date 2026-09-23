@@ -103,3 +103,18 @@ it('re-renders by removing only the prior extension-owned panel', () => {
   expect(firstExtensionPanel.isConnected).toBe(false);
   expect(secondExtensionPanel.isConnected).toBe(true);
 });
+
+it('cleans ownership and Escape handling when the host removes its panel, then re-renders', async () => {
+  const onDismiss = vi.fn();
+  const firstPanel = renderPanel(result, onDismiss);
+  firstPanel.remove();
+  await Promise.resolve();
+
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  expect(onDismiss).not.toHaveBeenCalled();
+
+  const secondPanel = renderPanel(result, onDismiss);
+  expect(secondPanel.isConnected).toBe(true);
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  expect(onDismiss).toHaveBeenCalledTimes(1);
+});

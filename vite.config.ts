@@ -9,30 +9,36 @@ const manifestSource = existsSync(generatedManifest)
   ? generatedManifest
   : resolve(projectRoot, 'manifest.json');
 
-export default defineConfig({
-  root: 'src',
-  build: {
-    outDir: '../dist',
-    emptyOutDir: true,
-    modulePreload: false,
-    rollupOptions: {
-      input: {
-        popup: resolve(projectRoot, 'src/popup/index.html'),
-        content: resolve(projectRoot, 'src/content/index.ts'),
-      },
-      output: {
-        intro: '(function () {',
-        outro: '})();',
-        entryFileNames: (chunk) => (chunk.name === 'content' ? 'content.js' : 'assets/[name]-[hash].js'),
-      },
-    },
-  },
-  plugins: [
-    {
-      name: 'copy-extension-manifest',
-      closeBundle() {
-        cpSync(manifestSource, resolve(projectRoot, 'dist/manifest.json'));
+export default defineConfig(() => {
+  const contentBuild = process.env.CLEARCHOICE_CONTENT_BUILD === '1';
+
+  return {
+    root: 'src',
+    build: {
+      outDir: '../dist',
+      emptyOutDir: !contentBuild,
+      modulePreload: false,
+      rollupOptions: {
+        input: contentBuild
+          ? resolve(projectRoot, 'src/content/index.ts')
+          : resolve(projectRoot, 'src/popup/index.html'),
+        output: contentBuild
+          ? {
+              format: 'iife',
+              entryFileNames: 'content.js',
+            }
+          : {
+              entryFileNames: 'assets/[name]-[hash].js',
+            },
       },
     },
-  ],
+    plugins: [
+      {
+        name: 'copy-extension-manifest',
+        closeBundle() {
+          if (!contentBuild) cpSync(manifestSource, resolve(projectRoot, 'dist/manifest.json'));
+        },
+      },
+    ],
+  };
 });

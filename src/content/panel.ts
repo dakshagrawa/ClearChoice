@@ -44,6 +44,7 @@ export function renderPanel(result: AnalysisResult, onDismiss: () => void): HTML
   container.innerHTML = '<div class="clearchoice-header"><h2>ClearChoice findings</h2></div>';
 
   let dismissed = false;
+  let removalObserver: MutationObserver | undefined;
   const dismissPanel = () => {
     if (dismissed || !panel.isConnected) return;
     dismissed = true;
@@ -55,6 +56,8 @@ export function renderPanel(result: AnalysisResult, onDismiss: () => void): HTML
     if (event.key.localeCompare('Escape') === 0 || event.code === 'Escape') dismissPanel();
   };
   const cleanup = () => {
+    removalObserver?.disconnect();
+    removalObserver = undefined;
     document.removeEventListener('keydown', onKeydown);
     panelCleanup.delete(panel);
     extensionPanels.delete(panel);
@@ -89,6 +92,10 @@ export function renderPanel(result: AnalysisResult, onDismiss: () => void): HTML
 
   root.append(container);
   document.documentElement.append(panel);
+  removalObserver = new MutationObserver((records) => {
+    if (records.some((record) => Array.from(record.removedNodes).includes(panel))) cleanup();
+  });
+  removalObserver.observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('keydown', onKeydown);
   panelCleanup.set(panel, cleanup);
   return panel;

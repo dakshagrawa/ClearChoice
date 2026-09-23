@@ -69,6 +69,30 @@ it('does not message when the active tab switches while injection awaits', async
   expect(sendMessage).not.toHaveBeenCalled();
 });
 
+it('rechecks after deferred injection and blocks the message when the observed tab changed', async () => {
+  let finishInjection: (() => void) | undefined;
+  const { query, executeScript, sendMessage } = installChrome({
+    tabs: {
+      query: vi.fn()
+        .mockResolvedValueOnce([{ id: 42, active: true }])
+        .mockResolvedValueOnce([{ id: 42, active: true }])
+        .mockResolvedValueOnce([{ id: 7, active: true }]),
+      sendMessage: vi.fn(),
+    },
+    scripting: {
+      executeScript: vi.fn().mockImplementation(() => new Promise<void>((resolve) => { finishInjection = resolve; })),
+    },
+  });
+
+  const pending = analyzeActiveTab();
+  await vi.waitFor(() => expect(executeScript).toHaveBeenCalledTimes(1));
+  finishInjection?.();
+
+  await expect(pending).resolves.toEqual({ ok: false, error: 'request-failed' });
+  expect(query).toHaveBeenCalledTimes(3);
+  expect(sendMessage).not.toHaveBeenCalled();
+});
+
 it('does not inject or message when the current active tab has no ID', async () => {
   const { executeScript, sendMessage } = installChrome({
     tabs: { query: vi.fn().mockResolvedValue([{ active: true }]), sendMessage: vi.fn() },

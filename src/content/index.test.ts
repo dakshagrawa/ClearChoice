@@ -63,3 +63,21 @@ it('preserves host panel markup through Analyze and Restore', async () => {
   expect(hostPanel.isConnected).toBe(true);
   expect(hostPanel.textContent).toBe('Host checkout sidebar');
 });
+
+it('ignores malformed inbound requests without analyzing or restoring', async () => {
+  const { addListener } = installChrome();
+  await import('./index');
+  const listener = addListener.mock.calls[0]?.[0] as (
+    message: unknown,
+    sender: unknown,
+    sendResponse: (response: unknown) => void,
+  ) => boolean | undefined;
+  const sendResponse = vi.fn();
+
+  expect(listener({ type: 'CLEARCHOICE_ANALYZE', pageTitle: 'private' }, {}, sendResponse)).toBeUndefined();
+  expect(listener({ type: 'CLEARCHOICE_RESTORE', checkoutHtml: '<form>' }, {}, sendResponse)).toBeUndefined();
+  await Promise.resolve();
+
+  expect(sendResponse).not.toHaveBeenCalled();
+  expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
+});

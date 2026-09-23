@@ -6,11 +6,15 @@ ClearChoice is an unpublished Chromium private beta. It is not a published servi
 
 The private-beta manifest declares exactly `activeTab`, `scripting`, and `storage`, with no host permissions, optional permissions, static content scripts, background worker, or external connections. `activeTab` is temporary access to the user-invoked active tab; it does not grant broad or persistent host access.
 
-Task 1 defines that least-privilege manifest contract only. Current-tab script injection is not implemented yet. Controlled local checkout fixtures remain for internal testing but are not named in the manifest.
+Task 2 current-tab injection is implemented as current beta work, not release-ready functionality. It begins after a user invokes Analyze or Restore for the active current tab, processes visible text and qualifying checked checkbox/radio labels locally in the injected page context, and returns only a typed status plus integer finding count to the popup. Controlled local checkout fixtures remain for internal testing but are not named in the manifest.
 
-When analysis is enabled in a later task, it will examine visible text and qualifying checked checkbox/radio labels only after user invocation. A dismissed findings panel may be stored in `chrome.storage.local`; it is not used for tracking, analytics, synchronization, advertising, or profiling.
+Analyze rechecks the chosen tab before injection and after awaited injection. If a tab switch is observed at those checkpoints, it cancels instead of messaging the old target. An extension cannot atomically lock focus between those checks and asynchronous browser operations, so no claim is made that every micro-race can be prevented.
+
+A dismissed findings-panel state may be stored in `chrome.storage.local`; it is not used for tracking, analytics, synchronization, advertising, or profiling.
 
 The release verifier rejects static package patterns for network APIs, remote executable URLs, secrets, dynamic imports, external resource URLs, and supported DOM URL sinks. This fail-closed static policy does not prove every possible browser/runtime networking behavior is absent.
+
+See [the beta scope](docs/beta-scope.md) and [beta release checklist](docs/beta-release-checklist.md) for the beta boundary and outstanding gates.
 
 ## What ClearChoice does not access or do
 

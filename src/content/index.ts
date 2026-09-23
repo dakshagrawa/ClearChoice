@@ -1,16 +1,17 @@
 import { detectPreselectedAddons, detectRecurringCharges } from '../core/detector';
 import type { AnalysisResult, Finding } from '../core/types';
+import {
+  CLEARCHOICE_RESTORE,
+  isContentRequest,
+} from '../shared/messages';
 import type {
   AnalyzeResponse,
-  ContentRequest,
   RestoreResponse,
 } from '../shared/messages';
 import { getDismissed, setDismissed } from '../shared/storage';
 import { removePanel, renderPanel } from './panel';
 
 const contentSentinel = '__clearchoiceContentListenerInstalled__';
-const CLEARCHOICE_ANALYZE = 'CLEARCHOICE_ANALYZE' as const;
-const CLEARCHOICE_RESTORE = 'CLEARCHOICE_RESTORE' as const;
 
 type ClearChoiceWindow = Window & { [contentSentinel]?: true };
 
@@ -35,9 +36,8 @@ if (!pageWindow[contentSentinel]) {
   pageWindow[contentSentinel] = true;
 
   chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
-    if (!message || typeof message !== 'object') return;
-    const request = message as Partial<ContentRequest>;
-    if (request.type !== CLEARCHOICE_ANALYZE && request.type !== CLEARCHOICE_RESTORE) return;
+    if (!isContentRequest(message)) return;
+    const request = message;
 
     void (async () => {
       if (request.type === CLEARCHOICE_RESTORE) {

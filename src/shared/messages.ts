@@ -20,6 +20,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+export function isContentRequest(value: unknown): value is ContentRequest {
+  return isRecord(value)
+    && Object.keys(value).length === 1
+    && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE);
+}
+
 export function isAnalyzeResponse(value: unknown): value is AnalyzeResponse {
   if (!isRecord(value)) return false;
   if (value.ok === false) {

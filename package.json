@@ -7,7 +7,7 @@
     "lint": "eslint .",
     "test": "vitest",
     "build": "tsc --noEmit && node scripts/build-manifest.mjs --release --output .release-manifest.json && npm run build:assets && npm run verify:package",
-    "build:assets": "vite build",
+    "build:assets": "vite build && CLEARCHOICE_CONTENT_BUILD=1 vite build",
     "serve:fixtures": "node scripts/serve-fixtures.mjs",
     "verify:package": "node scripts/verify-package.mjs --dist dist",
     "verify:archive": "node scripts/verify-package.mjs --zip ClearChoice-v0.2.0-unpacked.zip",

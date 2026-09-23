@@ -1,10 +1,11 @@
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
-import { expect, test, type Page } from 'playwright/test';
+import { chromium, expect, test, type BrowserContext, type Page } from 'playwright/test';
 
 const repositoryRoot = resolve(process.cwd());
-const contentPayload = resolve(repositoryRoot, 'dist/content.js');
+const extensionPath = resolve(repositoryRoot, 'dist');
 
 function startFixtureServer(): Promise<{ server: Server; origin: string }> {
   return new Promise((resolveServer, reject) => {
@@ -32,10 +33,7 @@ function startFixtureServer(): Promise<{ server: Server; origin: string }> {
     server.once('error', reject);
     server.listen(0, '127.0.0.1', () => {
       const address = server.address();
-      if (!address || typeof address === 'string') {
-        reject(new Error('Fixture server did not expose a TCP port.'));
-        return;
-      }
+      if (!address || typeof address === 'string') return reject(new Error('Fixture server did not expose a TCP port.'));
       resolveServer({ server, origin: `http://127.0.0.1:${address.port}` });
     });
   });
@@ -52,57 +50,41 @@ function watchErrors(page: Page, errors: string[]): void {
   page.on('pageerror', (error) => errors.push(`pageerror: ${error.message}`));
 }
 
-async function installContentApi(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    const storageKey = '__clearchoice_e2e_dismissed__';
-    let listener: ((message: unknown, sender: unknown, sendResponse: (response: unknown) => void) => boolean) | undefined;
-    Object.assign(window, {
-      chrome: {
-        runtime: { onMessage: { addListener: (candidate: typeof listener) => { listener = candidate; } } },
-        storage: {
-          local: {
-            get: async () => ({ dismissed: window.localStorage.getItem(storageKey) === 'true' }),
-            set: async (value: { dismissed?: unknown }) => {
-              window.localStorage.setItem(storageKey, value.dismissed === true ? 'true' : 'false');
-            },
-          },
-        },
-      },
-      __clearchoiceE2eMessage: (message: unknown) => new Promise((resolveMessage, rejectMessage) => {
-        if (!listener) {
-          rejectMessage(new Error('Content payload did not register a message listener.'));
-          return;
-        }
-        const keepChannel = listener(message, {}, resolveMessage);
-        if (keepChannel !== true) rejectMessage(new Error('Content payload did not keep its async message channel open.'));
-      }),
-    });
+async function extensionId(context: BrowserContext): Promise<string> {
+  const extensionsPage = await context.newPage();
+  await extensionsPage.goto('chrome://extensions/');
+  const id = await extensionsPage.locator('extensions-manager').evaluate((manager) => {
+    const list = manager.shadowRoot?.querySelector('extensions-item-list');
+    return list?.shadowRoot?.querySelector('extensions-item')?.id;
   });
+  await extensionsPage.close();
+  if (!id || !/^[a-p]{32}$/.test(id)) throw new Error('Could not discover the loaded extension ID from chrome://extensions.');
+  return id;
 }
 
-async function injectContent(page: Page): Promise<void> {
-  await page.addScriptTag({ path: contentPayload });
+async function launchExtension(): Promise<{ context: BrowserContext; userDataDir: string; popup: Page }> {
+  const userDataDir = await mkdtemp(resolve(tmpdir(), 'clearchoice-e2e-'));
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: 'chromium',
+    headless: false,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+  const id = await extensionId(context);
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${id}/popup/index.html`);
+  return { context, userDataDir, popup };
 }
 
-async function sendContentMessage(page: Page, type: 'CLEARCHOICE_ANALYZE' | 'CLEARCHOICE_RESTORE'): Promise<unknown> {
-  return page.evaluate((messageType) => {
-    const target = window as Window & { __clearchoiceE2eMessage?: (message: unknown) => Promise<unknown> };
-    if (!target.__clearchoiceE2eMessage) throw new Error('E2E content message bridge is unavailable.');
-    return target.__clearchoiceE2eMessage({ type: messageType });
-  }, type);
+async function closeExtension(context: BrowserContext, userDataDir: string): Promise<void> {
+  await context.close();
+  await rm(userDataDir, { recursive: true, force: true });
 }
 
-async function openFixture(page: Page, origin: string, fixture: string, errors: string[]): Promise<void> {
-  watchErrors(page, errors);
-  await installContentApi(page);
-  await page.goto(`${origin}/checkout/${fixture}`);
+async function analyzeFixture(popup: Page, fixture: Page): Promise<void> {
+  await fixture.bringToFront();
+  await fixture.keyboard.press('Control+Shift+Y');
+  await popup.getByRole('button', { name: 'Analyze' }).click();
 }
-
-test.beforeAll(async () => {
-  const manifest = JSON.parse(await readFile(resolve(repositoryRoot, 'dist/manifest.json'), 'utf8')) as { version?: unknown; content_scripts?: unknown };
-  expect(manifest.version).toBe('0.2.0');
-  expect(manifest.content_scripts).toBeUndefined();
-});
 
 const cases = [
   ['clean', 0, []],
@@ -112,48 +94,56 @@ const cases = [
 ] as const;
 
 for (const [fixture, findingCount, expectedTitles] of cases) {
-  test(`programmatically injected built payload reports ${findingCount} finding type(s) for ${fixture}`, async ({ page }) => {
+  test(`packaged popup injects and analyzes ${fixture} through the MV3 scripting API`, async () => {
     const { server, origin } = await startFixtureServer();
+    const { context, userDataDir, popup } = await launchExtension();
+    const fixturePage = await context.newPage();
     const errors: string[] = [];
+    watchErrors(popup, errors);
+    watchErrors(fixturePage, errors);
     try {
-      await openFixture(page, origin, fixture, errors);
-      await injectContent(page);
-      await injectContent(page);
-      await expect.poll(() => sendContentMessage(page, 'CLEARCHOICE_ANALYZE')).toEqual({ ok: true, status: 'supported', findingCount });
-      const panel = page.locator('aside[data-clearchoice-panel]');
+      await fixturePage.goto(`${origin}/checkout/${fixture}`);
+      await analyzeFixture(popup, fixturePage);
+      const panel = fixturePage.locator('aside[data-clearchoice-panel]');
       await expect(panel).toHaveCount(1);
       await expect(panel.locator('article')).toHaveCount(findingCount);
       for (const title of expectedTitles) await expect(panel).toContainText(title);
+      await expect(popup.getByRole('status')).toHaveText(findingCount === 1 ? '1 finding shown on this page.' : `${findingCount} findings shown on this page.`);
       expect(errors).toEqual([]);
     } finally {
+      await closeExtension(context, userDataDir);
       await closeServer(server);
     }
   });
 }
 
-test('programmatic injection preserves checkbox and URL through dismiss, reload, and Restore', async ({ page }) => {
+test('packaged popup preserves checkbox and URL through dismiss, reload, and Restore', async () => {
   const { server, origin } = await startFixtureServer();
+  const { context, userDataDir, popup } = await launchExtension();
+  const fixturePage = await context.newPage();
   const url = `${origin}/checkout/mixed`;
   const errors: string[] = [];
+  watchErrors(popup, errors);
+  watchErrors(fixturePage, errors);
   try {
-    await openFixture(page, origin, 'mixed', errors);
-    await injectContent(page);
-    await expect.poll(() => sendContentMessage(page, 'CLEARCHOICE_ANALYZE')).toEqual({ ok: true, status: 'supported', findingCount: 2 });
-    const panel = page.locator('aside[data-clearchoice-panel]');
+    await fixturePage.goto(url);
+    await analyzeFixture(popup, fixturePage);
+    const panel = fixturePage.locator('aside[data-clearchoice-panel]');
     await expect(panel).toHaveCount(1);
     await panel.locator('[data-clearchoice-dismiss]').click();
     await expect(panel).toHaveCount(0);
-    await page.reload();
-    await injectContent(page);
-    await expect(panel).toHaveCount(0);
-    await expect(page).toHaveURL(url);
-    await expect(page.locator('input[type="checkbox"]')).toBeChecked();
+    await fixturePage.reload();
+    await expect(fixturePage).toHaveURL(url);
+    await expect(fixturePage.locator('input[type="checkbox"]')).toBeChecked();
 
-    await expect.poll(() => sendContentMessage(page, 'CLEARCHOICE_RESTORE')).toEqual({ ok: true });
-    await expect(page).toHaveURL(url);
-    await expect(page.locator('input[type="checkbox"]')).toBeChecked();
+    await fixturePage.bringToFront();
+    await popup.getByRole('button', { name: 'Restore' }).click();
+    await expect(popup.getByRole('status')).toHaveText('Dismissal restored. Analyze again to show findings.');
+    await expect(fixturePage).toHaveURL(url);
+    await expect(fixturePage.locator('input[type="checkbox"]')).toBeChecked();
     expect(errors).toEqual([]);
   } finally {
+    await closeExtension(context, userDataDir);
     await closeServer(server);
   }
 });
