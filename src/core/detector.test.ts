@@ -12,6 +12,11 @@ function root(html: string): HTMLElement {
   return fixture;
 }
 
+function expectSensitiveCandidateSuppressed(findings: unknown, sensitiveText: string): void {
+  expect(findings).toEqual([]);
+  expect(JSON.stringify(findings)).not.toContain(sensitiveText);
+}
+
 describe('normalizeVisibleText', () => {
   it('folds whitespace and trims', () => {
     expect(normalizeVisibleText(' \n  billed\t  every   month \r ')).toBe(
@@ -145,6 +150,27 @@ describe('detectRecurringCharges', () => {
     expect(serialized).not.toContain(account);
   });
 
+  it('suppresses recurring evidence beginning with an asterisk-masked card display', () => {
+    const card = '**** 4242';
+    const findings = detectRecurringCharges(root(`<section>${card} membership renews every month for $5</section>`));
+
+    expectSensitiveCandidateSuppressed(findings, card);
+  });
+
+  it('suppresses recurring evidence containing a labeled asterisk-masked card display', () => {
+    const card = 'Card **** 4242';
+    const findings = detectRecurringCharges(root(`<section>Membership renews every month for $5. ${card}</section>`));
+
+    expectSensitiveCandidateSuppressed(findings, card);
+  });
+
+  it('suppresses recurring evidence beginning with a bullet-masked card display', () => {
+    const card = '•••• 4242';
+    const findings = detectRecurringCharges(root(`<section>${card} membership renews every month for $5</section>`));
+
+    expectSensitiveCandidateSuppressed(findings, card);
+  });
+
   it('uses deterministic IDs and no duplicate explanations for equivalent analysis', () => {
     const html = '<section>Membership renews automatically every year.</section>';
 
@@ -217,6 +243,27 @@ describe('detectPreselectedAddons', () => {
     expect(serialized).not.toContain(email);
     expect(serialized).not.toContain(card);
     expect(serialized).not.toContain(routing);
+  });
+
+  it('suppresses a checked add-on label beginning with an asterisk-masked card display', () => {
+    const card = '**** 4242';
+    const findings = detectPreselectedAddons(root(`<label><input type="checkbox" checked> ${card} Add recurring protection for $5</label>`));
+
+    expectSensitiveCandidateSuppressed(findings, card);
+  });
+
+  it('suppresses a checked add-on label containing a labeled asterisk-masked card display', () => {
+    const card = 'Card **** 4242';
+    const findings = detectPreselectedAddons(root(`<label><input type="checkbox" checked> Add recurring protection for $5. ${card}</label>`));
+
+    expectSensitiveCandidateSuppressed(findings, card);
+  });
+
+  it('suppresses a checked add-on label beginning with a bullet-masked card display', () => {
+    const card = '•••• 4242';
+    const findings = detectPreselectedAddons(root(`<label><input type="checkbox" checked> ${card} Add recurring protection for $5</label>`));
+
+    expectSensitiveCandidateSuppressed(findings, card);
   });
 
   it('finds a checked paid radio', () => {

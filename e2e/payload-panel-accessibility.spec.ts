@@ -92,6 +92,22 @@ test('browser payload-level accessibility injects only the content payload in li
       if (dismissReached) break;
     }
     expect(dismissReached).toBe(true);
+    const focusIndicator = await page.evaluate(() => {
+      const panel = document.querySelector('aside[data-clearchoice-panel]');
+      const dismiss = panel?.shadowRoot?.querySelector<HTMLButtonElement>('[data-clearchoice-dismiss]');
+      if (!dismiss || !dismiss.matches(':focus-visible')) return null;
+
+      const style = getComputedStyle(dismiss);
+      return {
+        outlineStyle: style.outlineStyle,
+        outlineWidth: Number.parseFloat(style.outlineWidth),
+        outlineOffset: Number.parseFloat(style.outlineOffset),
+      };
+    });
+    expect(focusIndicator).not.toBeNull();
+    expect(focusIndicator?.outlineStyle).toBe('solid');
+    expect(focusIndicator?.outlineWidth).toBeGreaterThanOrEqual(3);
+    expect(focusIndicator?.outlineOffset).toBeGreaterThanOrEqual(2);
 
     await page.keyboard.press('Escape');
     await expect(page.locator('aside[data-clearchoice-panel]')).toHaveCount(0);

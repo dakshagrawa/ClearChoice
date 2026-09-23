@@ -1,9 +1,9 @@
 const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
 const PAN = /\b(?:\d[ -]?){12,19}\b/;
-const MASKED_CARD = /\b(?:\*|x|X|•){4,}(?:[ -]?(?:\*|x|X|•){2,4}){0,3}[ -]?\d{2,4}\b/;
+const MASKED_CARD = /(?:^|(?<!\S))(?:\*|x|X|•){4,}(?:[ -]?(?:\*|x|X|•){2,4}){0,3}[ -]?\d{2,4}\b/;
 const ACCOUNT_NUMBER = /\b(?:account|acct)\s*(?:number|no\.?|#)?\s*[:#-]?\s*\d(?:[ -]?\d){3,}\b/i;
 const BANK_OR_ROUTING_NUMBER = /\b(?:bank|routing)\s*(?:account\s*)?(?:number|no\.?)?\s*[:#-]?\s*\d(?:[ -]?\d){3,}\b/i;
-const SECURITY_CODE = /\b(?:cvv2?|cvc|security\s*code)\b/i;
+const SECURITY_CODE = /\b(?:cvv2?|cvc|security[\s-]*code)\b\s*(?:[:#-]\s*)?\d{3,4}\b/i;
 
 /**
  * Returns true when a static-text candidate could expose display-sensitive data.

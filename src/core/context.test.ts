@@ -75,4 +75,16 @@ describe('classifyCheckoutContext', () => {
 
     expect(classifyCheckoutContext(fixture)).toBe('unsupported');
   });
+
+  it('keeps static checkout context analyzable when security-code wording has no displayed value', () => {
+    const fixture = root(`
+      <main>
+        <h1>Checkout</h1>
+        <aside>Order summary — A security code is needed to sign in.</aside>
+        <button>Place order</button>
+      </main>
+    `);
+
+    expect(classifyCheckoutContext(fixture)).toBe('supported');
+  });
 });
