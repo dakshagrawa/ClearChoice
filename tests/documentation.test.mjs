@@ -1,9 +1,10 @@
 // @vitest-environment node
+import { execFileSync, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test } from 'vitest';
 
-const root = process.cwd();
+const root = resolve(import.meta.dirname, '..');
 const read = (path) => readFileSync(resolve(root, path), 'utf8');
 
 const officialChromeReferences = [
@@ -61,6 +62,42 @@ test('tester protocol limits voluntary sanitized external feedback', () => {
     expect(template).toContain(prohibitedItem);
   }
   expect(template).toMatch(/Rule.*Expected.*Actual.*Browser/is);
+});
+
+test('executes the documented fail-closed beta command without forging a marker', () => {
+  const env = { ...process.env };
+  delete env.CLEARCHOICE_ACTIVE_TAB_QA_MARKER;
+
+  const result = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'check:beta', '--', '--validate-marker-only'], {
+    cwd: root,
+    encoding: 'utf8',
+    env,
+  });
+
+  expect(env.CLEARCHOICE_ACTIVE_TAB_QA_MARKER).toBeUndefined();
+  expect(result.status).toBe(1);
+  expect(result.signal).toBeNull();
+  expect(result.stderr).toBe('check:beta failed: CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point to a deliberate local manual-QA marker\n');
+});
+
+test('retrieves the preserved v0.2.0 mock-only localhost contract from the local tag', () => {
+  const taggedManifest = JSON.parse(execFileSync('git', ['show', 'v0.2.0:manifest.json'], {
+    cwd: root,
+    encoding: 'utf8',
+  }));
+  const taggedPackage = JSON.parse(execFileSync('git', ['show', 'v0.2.0:package.json'], {
+    cwd: root,
+    encoding: 'utf8',
+  }));
+
+  expect(taggedPackage.version).toBe('0.2.0');
+  expect(taggedManifest.version).toBe('0.2.0');
+  expect(taggedManifest.host_permissions).toEqual([]);
+  expect(taggedManifest.permissions).toEqual(['storage']);
+  expect(taggedManifest.content_scripts).toEqual([{
+    matches: ['http://127.0.0.1/*'],
+    js: ['content.js'],
+  }]);
 });
 
 test('documentation preserves the archived v0.2.0 mock prototype and official references', () => {
