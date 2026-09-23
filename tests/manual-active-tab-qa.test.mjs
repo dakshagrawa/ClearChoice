@@ -1,4 +1,5 @@
 // @vitest-environment node
+/* global window */
 import { createServer } from 'node:http';
 import { lstat, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -7,8 +8,11 @@ import { chromium } from 'playwright';
 import { afterEach, expect, test } from 'vitest';
 import {
   assertFixtureOrigin,
+  captureIntegrityBaseline,
+  createManualActiveTabQaMarker,
   fixtureOriginForServerAddress,
   fixtureForRequest,
+  integrityPassed,
   restrictedBrowserArgs,
   reviewBrowserLaunchOptions,
   runManualActiveTabQa,
@@ -70,6 +74,43 @@ test('restricts review Chromium to only its 127.0.0.1 fixture and disables impli
   expect(() => assertFixtureOrigin('http://127.0.0.1:43123')).not.toThrow();
   for (const origin of ['http://localhost:43123', 'http://127.0.0.2:43123', 'https://127.0.0.1:43123', 'http://127.0.0.1:0']) {
     expect(() => assertFixtureOrigin(origin)).toThrow('fixture origin must be exactly http://127.0.0.1:<port>');
+  }
+});
+
+test('retains digest and boolean predicates only, and detects a changed host field', async () => {
+  const browser = await chromium.launch({ channel: 'chromium', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(`
+      <form action="https://fixture.invalid/checkout"><input name="email" value="fixture@example.invalid"></form>
+      <button type="button">Continue</button><a href="/terms">Terms</a>
+    `);
+
+    await captureIntegrityBaseline(page);
+    const retainedState = await page.evaluate(() => window.__clearchoiceManualIntegrityBaseline);
+    expect(Object.keys(retainedState).sort()).toEqual(['digest', 'predicates']);
+    expect(Object.keys(retainedState.predicates)).toEqual(['integrity']);
+    expect(retainedState.predicates.integrity).toBe(true);
+    expect(retainedState.digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(retainedState)).not.toContain('fixture@example.invalid');
+    expect(JSON.stringify(retainedState)).not.toContain('fixture.invalid');
+
+    await page.locator('input').fill('changed@example.invalid');
+    await expect(integrityPassed(page)).resolves.toBe(false);
+    await expect(page.evaluate(() => window.__clearchoiceManualIntegrityBaseline.predicates.integrity)).resolves.toBe(false);
+
+    const outputMarker = createManualActiveTabQaMarker({ commit: 'a'.repeat(40), manifestSha256: 'b'.repeat(64) });
+    expect(Object.keys(outputMarker).sort()).toEqual([
+      'cleanFixtureIntegrity',
+      'commit',
+      'dynamicFixtureIntegrity',
+      'manifestSha256',
+      'outcome',
+      'reviewer',
+      'schemaVersion',
+    ]);
+  } finally {
+    await browser.close();
   }
 });
 

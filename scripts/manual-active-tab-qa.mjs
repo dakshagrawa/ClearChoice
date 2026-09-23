@@ -71,35 +71,42 @@ function closeServer(server) {
   return new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
 }
 
-async function captureIntegrityBaseline(page) {
-  await page.evaluate(() => {
+async function integrityDigest(page) {
+  const snapshot = await page.evaluate(() => {
     const owned = (node) => node.closest('[data-clearchoice-panel]') !== null;
-    window.__clearchoiceManualIntegrityBaseline = {
+    return JSON.stringify({
       href: location.href,
       forms: Array.from(document.forms, (form) => form.action),
       controls: Array.from(document.querySelectorAll('input, select'))
         .filter((node) => !owned(node))
         .map((node) => [node.tagName, node.name, node.type, node.value, node.checked, node.disabled]),
-      nodes: Array.from(document.querySelectorAll('input, button, a')).filter((node) => !owned(node)),
-    };
+      hostNodes: Array.from(document.querySelectorAll('input, button, a'))
+        .filter((node) => !owned(node))
+        .map((node) => node.outerHTML),
+    });
   });
+  return sha256(snapshot);
 }
 
-async function integrityPassed(page) {
-  return page.evaluate(() => {
+export async function captureIntegrityBaseline(page) {
+  const digest = await integrityDigest(page);
+  await page.evaluate((value) => {
+    window.__clearchoiceManualIntegrityBaseline = {
+      digest: value,
+      predicates: { integrity: true },
+    };
+  }, digest);
+}
+
+export async function integrityPassed(page) {
+  const digest = await integrityDigest(page);
+  return page.evaluate((value) => {
     const baseline = window.__clearchoiceManualIntegrityBaseline;
     if (!baseline) return false;
-    const owned = (node) => node.closest('[data-clearchoice-panel]') !== null;
-    const controls = Array.from(document.querySelectorAll('input, select'))
-      .filter((node) => !owned(node))
-      .map((node) => [node.tagName, node.name, node.type, node.value, node.checked, node.disabled]);
-    const nodes = Array.from(document.querySelectorAll('input, button, a')).filter((node) => !owned(node));
-    return location.href === baseline.href
-      && JSON.stringify(Array.from(document.forms, (form) => form.action)) === JSON.stringify(baseline.forms)
-      && JSON.stringify(controls) === JSON.stringify(baseline.controls)
-      && nodes.length === baseline.nodes.length
-      && nodes.every((node, index) => node === baseline.nodes[index]);
-  });
+    const passed = value === baseline.digest;
+    baseline.predicates.integrity &&= passed;
+    return passed;
+  }, digest);
 }
 
 async function assertIntegrity(page, phase) {
@@ -108,6 +115,18 @@ async function assertIntegrity(page, phase) {
 
 async function waitForPanel(page, state) {
   await page.locator('aside[data-clearchoice-panel]').waitFor({ state, timeout: 300_000 });
+}
+
+export function createManualActiveTabQaMarker({ commit, manifestSha256 }) {
+  return {
+    schemaVersion: 2,
+    outcome: 'passed',
+    cleanFixtureIntegrity: 'passed',
+    dynamicFixtureIntegrity: 'passed',
+    commit,
+    manifestSha256,
+    reviewer: LOCAL_HUMAN_ATTESTATION,
+  };
 }
 
 export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
@@ -146,7 +165,7 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
     process.stdout.write('\nManual active-tab QA is waiting. In the runner-provided visible Chromium window:\n');
     process.stdout.write('That Chromium can access only the local 127.0.0.1 fixtures and the extension; its dead proxy blocks non-loopback sites, so it cannot validate real sites. This boundary applies only to Chromium launched by this runner, not other browser instances.\n');
     process.stdout.write('CLEAN FIXTURE: click the ClearChoice toolbar icon with the pointer, then click Analyze in the browser-owned popup with the pointer.\n');
-    process.stdout.write('The runner captures only panel/integrity pass-fail predicates and never writes or prints page data.\n\n');
+    process.stdout.write('The runner retains only SHA-256 integrity digests and panel/integrity pass-fail predicates; it never writes or prints page data.\n\n');
 
     await waitForPanel(cleanPage, 'attached');
     await assertIntegrity(cleanPage, 'clean-fixture Analyze');
@@ -177,15 +196,10 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
     if (!replacementPassed) throw new Error('manual dynamic-fixture replacement predicate failed');
     await assertIntegrity(dynamicPage, 'dynamic-fixture Restore/repeated Analyze/replacement');
 
-    const marker = {
-      schemaVersion: 2,
-      outcome: 'passed',
-      cleanFixtureIntegrity: 'passed',
-      dynamicFixtureIntegrity: 'passed',
+    const marker = createManualActiveTabQaMarker({
       commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
       manifestSha256: sha256(await readFile(resolve(root, 'manifest.json'))),
-      reviewer: LOCAL_HUMAN_ATTESTATION,
-    };
+    });
     process.stdout.write('manual active-tab QA passed; save this local self-attestation outside the repository (for example ~/.local/state/clearchoice/active-tab-qa.json), then pass that path through CLEARCHOICE_ACTIVE_TAB_QA_MARKER:\n');
     process.stdout.write(`${JSON.stringify(marker, null, 2)}\n`);
   } finally {
