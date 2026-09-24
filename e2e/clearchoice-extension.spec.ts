@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -28,14 +28,21 @@ function closeServer(server: Server): Promise<void> {
   return new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
 }
 
-async function extensionId(context: BrowserContext): Promise<string> {
+async function extensionIds(context: BrowserContext): Promise<string[]> {
   const extensionsPage = await context.newPage();
   await extensionsPage.goto('chrome://extensions/');
-  const id = await extensionsPage.locator('extensions-manager').evaluate((manager) => {
+  const ids = await extensionsPage.locator('extensions-manager').evaluate((manager) => {
     const list = manager.shadowRoot?.querySelector('extensions-item-list');
-    return list?.shadowRoot?.querySelector('extensions-item')?.id;
+    return [...(list?.shadowRoot?.querySelectorAll('extensions-item') ?? [])]
+      .map((item) => item.id)
+      .filter((id) => /^[a-p]{32}$/.test(id));
   });
   await extensionsPage.close();
+  return ids;
+}
+
+async function extensionId(context: BrowserContext): Promise<string> {
+  const [id] = await extensionIds(context);
   if (!id || !/^[a-p]{32}$/.test(id)) throw new Error('Could not discover the loaded extension ID from chrome://extensions.');
   return id;
 }
@@ -59,6 +66,32 @@ test('built extension path loads in Chromium with the Chrome numeric beta manife
     await expect(popup.getByRole('button', { name: 'Analyze' })).toBeVisible();
   } finally {
     await closeExtension(context, userDataDir);
+  }
+});
+
+test('Chromium rejects a built extension whose manifest version is a prerelease string', async () => {
+  const invalidExtensionPath = await mkdtemp(resolve(tmpdir(), 'clearchoice-invalid-version-extension-'));
+  const userDataDir = await mkdtemp(resolve(tmpdir(), 'clearchoice-invalid-version-profile-'));
+  await cp(extensionPath, invalidExtensionPath, { recursive: true });
+  const manifestPath = resolve(invalidExtensionPath, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.version = '0.3.0-beta.1';
+  await writeFile(manifestPath, JSON.stringify(manifest));
+
+  let context: BrowserContext | undefined;
+  try {
+    context = await chromium.launchPersistentContext(userDataDir, {
+      channel: 'chromium',
+      headless: false,
+      args: ['--noerrdialogs', `--disable-extensions-except=${invalidExtensionPath}`, `--load-extension=${invalidExtensionPath}`],
+    });
+
+    await new Promise((resolveWait) => setTimeout(resolveWait, 1_000));
+    expect(await extensionIds(context)).toEqual([]);
+  } finally {
+    await context?.close();
+    await rm(userDataDir, { recursive: true, force: true });
+    await rm(invalidExtensionPath, { recursive: true, force: true });
   }
 });
 
