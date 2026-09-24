@@ -77,8 +77,17 @@ test('Chromium rejects a built extension whose manifest version is a prerelease 
   const originalManifest = await readFile(manifestPath);
   const originalManifestText = originalManifest.toString('utf8');
   const numericVersion = /("version"\s*:\s*")0\.3\.0(")/g;
-  expect([...originalManifestText.matchAll(numericVersion)]).toHaveLength(1);
-  const invalidManifest = Buffer.from(originalManifestText.replace(numericVersion, '$10.3.0-beta.1$2'));
+  const numericVersionMatches = [...originalManifestText.matchAll(numericVersion)];
+  expect(numericVersionMatches).toHaveLength(1);
+  const [numericVersionMatch] = numericVersionMatches;
+  const versionStart = numericVersionMatch.index! + numericVersionMatch[1].length;
+  const originalVersion = '0.3.0';
+  const invalidVersion = '0.3.0-beta.1';
+  const originalVersionEnd = versionStart + originalVersion.length;
+  const invalidVersionEnd = versionStart + invalidVersion.length;
+  const invalidManifest = Buffer.from(`${originalManifestText.slice(0, versionStart)}${invalidVersion}${originalManifestText.slice(originalVersionEnd)}`);
+  expect(invalidManifest.subarray(0, versionStart)).toEqual(originalManifest.subarray(0, versionStart));
+  expect(invalidManifest.subarray(invalidVersionEnd)).toEqual(originalManifest.subarray(originalVersionEnd));
   await writeFile(manifestPath, invalidManifest);
   expect(await readFile(manifestPath)).toEqual(invalidManifest);
 
