@@ -38,9 +38,9 @@ npm run check:beta
 
 The manual marker protocol is Linux Chromium-only because it verifies an opened marker descriptor through `/proc/self/fd`; macOS and Windows fail closed. See [the beta release checklist](docs/beta-release-checklist.md) for the exact gate and [the threat model](docs/threat-model.md) for residual risks.
 
-## Historical v0.2.0 prototype
+## Historical prototypes
 
-**v0.2.0 remains an archived mock-only localhost fixture prototype.** It has not been lost or replaced by this beta, and it is not ordinary-site beta support. Its private release is preserved at <https://github.com/dakshagrawa/ClearChoice/releases/tag/v0.2.0>. Use only its controlled localhost fixtures and its historical [release checklist](docs/release-checklist.md); do not interpret the archived prototype as real-site support.
+**v0.1.0 and v0.2.0 are archived mock-only localhost fixture prototypes, not beta support.** Their preserved private releases are <https://github.com/dakshagrawa/ClearChoice/releases/tag/v0.1.0> and <https://github.com/dakshagrawa/ClearChoice/releases/tag/v0.2.0>. Use only their controlled localhost fixtures and the v0.2.0 historical [release checklist](docs/release-checklist.md); do not interpret either archive as real-site support, production readiness, or beta eligibility.
 
 ## External compliance references
 

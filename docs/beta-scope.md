@@ -19,4 +19,4 @@ This scope excludes:
 
 ## Release boundary
 
-This document defines future private-beta requirements only. v0.2.0 remains the mock-only baseline until every beta gate passes. The historical v0.2.0 release evidence remains in [release-checklist.md](release-checklist.md); the future beta gates are tracked in [beta-release-checklist.md](beta-release-checklist.md).
+This document defines future private-beta requirements only. v0.1.0 and v0.2.0 are archived mock-only localhost fixture prototypes, not beta support: <https://github.com/dakshagrawa/ClearChoice/releases/tag/v0.1.0> and <https://github.com/dakshagrawa/ClearChoice/releases/tag/v0.2.0>. The historical v0.2.0 release evidence remains in [release-checklist.md](release-checklist.md); the future beta gates are tracked in [beta-release-checklist.md](beta-release-checklist.md).

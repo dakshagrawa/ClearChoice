@@ -44,6 +44,14 @@ test('beta documentation states the private opt-in scope and local data boundary
   expect(threatModel).toMatch(/sensitive-looking static.*discarded whole/i);
 });
 
+test('changelog qualifies beta readiness as pending the human marker and beta gate', () => {
+  const changelog = read('CHANGELOG.md');
+
+  expect(changelog).not.toMatch(/Documented the production-ready private opt-in beta boundary/i);
+  expect(changelog).toMatch(/production-ready private opt-in beta target/i);
+  expect(changelog).toMatch(/pending.*deliberate human activeTab QA marker.*passing `npm run check:beta`/i);
+});
+
 test('rule catalog documents supported use and heuristic limitations', () => {
   const catalog = read('docs/rule-catalog.md');
 
@@ -90,8 +98,8 @@ test('executes the documented fail-closed beta command without forging a marker'
   expect(result.stderr).toBe('check:beta failed: CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point to a deliberate local manual-QA marker\n');
 });
 
-test('retrieves the preserved v0.2.0 mock-only localhost contract from the peeled local tag', () => {
-  const historicalCommit = execFileSync('git', ['rev-parse', 'v0.2.0^{}'], {
+function readPeeledTagContract(tag) {
+  const historicalCommit = execFileSync('git', ['rev-parse', `${tag}^{}`], {
     cwd: root,
     encoding: 'utf8',
   }).trim();
@@ -104,7 +112,15 @@ test('retrieves the preserved v0.2.0 mock-only localhost contract from the peele
     encoding: 'utf8',
   }));
 
+  return { taggedManifest, taggedPackage };
+}
+
+test('retrieves the preserved v0.2.0 mock-only localhost contract from the peeled local tag', () => {
+  const { taggedManifest, taggedPackage } = readPeeledTagContract('v0.2.0');
+
+  expect(taggedPackage.name).toBe('clearchoice');
   expect(taggedPackage.version).toBe('0.2.0');
+  expect(taggedPackage.private).toBe(true);
   expect(taggedManifest.version).toBe('0.2.0');
   expect(taggedManifest.host_permissions).toEqual([]);
   expect(taggedManifest.permissions).toEqual(['storage']);
@@ -114,14 +130,48 @@ test('retrieves the preserved v0.2.0 mock-only localhost contract from the peele
   }]);
 });
 
-test('documentation preserves the archived v0.2.0 mock prototype and official references', () => {
+test('retrieves the preserved v0.1.0 mock-only localhost contract from the peeled local tag', () => {
+  const { taggedManifest, taggedPackage } = readPeeledTagContract('v0.1.0');
+
+  expect(taggedPackage.name).toBe('clearchoice');
+  expect(taggedPackage.version).toBe('0.1.0');
+  expect(taggedPackage.private).toBe(true);
+  expect(taggedManifest.version).toBe('0.1.0');
+  expect(taggedManifest.host_permissions).toEqual([]);
+  expect(taggedManifest.permissions).toEqual(['activeTab', 'scripting', 'storage']);
+  expect(taggedManifest.content_scripts).toEqual([{
+    matches: ['http://127.0.0.1/*'],
+    js: ['content.js'],
+  }]);
+});
+
+test('final v1 scope matches the peeled v0.2.0 contract and distinguishes beta architecture', () => {
+  const scope = read('docs/final-v1-scope.md');
+  const { taggedManifest, taggedPackage } = readPeeledTagContract('v0.2.0');
+
+  expect(taggedPackage.version).toBe('0.2.0');
+  expect(scope).toContain(`v${taggedManifest.version}`);
+  expect(scope).toMatch(/only `storage`/i);
+  expect(scope).toMatch(/static content script/i);
+  expect(scope).toContain('`http://127.0.0.1/*`');
+  expect(scope).toMatch(/superseding.*beta.*`activeTab`, `scripting`, and `storage`/is);
+  expect(scope).toMatch(/no static content scripts/i);
+});
+
+test('documentation preserves both archived mock-only prototypes and official references', () => {
   const readme = read('README.md');
   const checklist = read('docs/beta-release-checklist.md');
   const changelog = read('CHANGELOG.md');
+  const scope = read('docs/final-v1-scope.md');
+  const betaScope = read('docs/beta-scope.md');
+  const releaseChecklist = read('docs/release-checklist.md');
 
-  for (const document of [readme, checklist, changelog]) {
-    expect(document).toMatch(/v0\.2\.0.*archived mock-only localhost fixture prototype/i);
+  for (const document of [readme, checklist, changelog, scope, betaScope, releaseChecklist]) {
+    expect(document).toMatch(/v0\.1\.0.*archiv(?:ed|al).*mock-only/i);
+    expect(document).toMatch(/v0\.2\.0.*archiv(?:ed|al).*mock-only/i);
+    expect(document).toContain('https://github.com/dakshagrawa/ClearChoice/releases/tag/v0.1.0');
     expect(document).toContain('https://github.com/dakshagrawa/ClearChoice/releases/tag/v0.2.0');
+    expect(document).toMatch(/not beta/i);
   }
 
   expect(readme).toMatch(/Node\s+\**22\.12\+\**/);
