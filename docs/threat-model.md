@@ -1,6 +1,6 @@
 # ClearChoice 0.3.0-beta.1 private-beta threat model
 
-ClearChoice is a production-ready **private opt-in beta** targeted as `0.3.0-beta.1`. It is not a Chrome Web Store release or public distribution.
+ClearChoice's production-ready target is a **private opt-in beta** as `0.3.0-beta.1`. Readiness remains pending required checklist and gate completion; the final human activeTab QA marker remains required, and `npm run check:beta` must pass before readiness can be claimed. It is not a Chrome Web Store release or public distribution.
 
 ## System boundary
 

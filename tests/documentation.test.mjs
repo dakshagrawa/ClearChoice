@@ -27,8 +27,16 @@ test('beta documentation states the private opt-in scope and local data boundary
     expect(document).toMatch(/all page data (stays )?local/i);
     expect(document).toMatch(/no telemetry, accounts, or uploads/i);
     expect(document).toMatch(/advisory[- ]only/i);
+    expect(document).not.toMatch(/is a production-ready.*private opt-in beta/i);
+    expect(document).toMatch(/production-ready.*target|target.*production-ready/i);
+    expect(document).toMatch(/readiness remains pending|required.*checklist.*gate.*completion/i);
   }
 
+  expect(readme).toMatch(/check:beta.*real external human activeTab QA marker/i);
+  for (const document of [privacy, threatModel]) {
+    expect(document).toMatch(/final human activeTab QA marker remains required/i);
+    expect(document).toMatch(/check:beta.*must pass before readiness can be claimed/i);
+  }
   expect(readme).toMatch(/Chrome Web Store.*future separate work.*not complete/i);
   expect(privacy).toMatch(/sensitive-looking static.*discarded whole/i);
   expect(threatModel).toMatch(/sensitive-looking static.*discarded whole/i);
@@ -80,12 +88,16 @@ test('executes the documented fail-closed beta command without forging a marker'
   expect(result.stderr).toBe('check:beta failed: CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point to a deliberate local manual-QA marker\n');
 });
 
-test('retrieves the preserved v0.2.0 mock-only localhost contract from the local tag', () => {
-  const taggedManifest = JSON.parse(execFileSync('git', ['show', 'v0.2.0:manifest.json'], {
+test('retrieves the preserved v0.2.0 mock-only localhost contract from the peeled local tag', () => {
+  const historicalCommit = execFileSync('git', ['rev-parse', 'v0.2.0^{}'], {
+    cwd: root,
+    encoding: 'utf8',
+  }).trim();
+  const taggedManifest = JSON.parse(execFileSync('git', ['show', `${historicalCommit}:manifest.json`], {
     cwd: root,
     encoding: 'utf8',
   }));
-  const taggedPackage = JSON.parse(execFileSync('git', ['show', 'v0.2.0:package.json'], {
+  const taggedPackage = JSON.parse(execFileSync('git', ['show', `${historicalCommit}:package.json`], {
     cwd: root,
     encoding: 'utf8',
   }));

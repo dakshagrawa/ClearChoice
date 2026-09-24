@@ -1,6 +1,6 @@
 # ClearChoice 0.3.0-beta.1 private-beta release checklist
 
-> This is the production-ready **private opt-in beta** acceptance checklist for target `0.3.0-beta.1`. It is not a Chrome Web Store release checklist; policy review and submission are future separate work, not complete. For the v0.2.0 mock-only historical evidence, see [release-checklist.md](release-checklist.md).
+> This checklist tracks work required for the production-ready **private opt-in beta** target `0.3.0-beta.1`; it does not claim the beta is release-ready. All criteria below remain unchecked, so readiness is pending required checklist and gate completion, including the final human activeTab QA marker and a passing `npm run check:beta`. It is not a Chrome Web Store release checklist; policy review and submission are future separate work, not complete. For the v0.2.0 mock-only historical evidence, see [release-checklist.md](release-checklist.md).
 
 - [ ] The beta manifest has exactly ordered `activeTab`, `scripting`, and `storage`; `host_permissions` is `[]`; it declares exactly `_execute_action` with suggested `Ctrl+Shift+Y`, and no optional permissions, static content scripts, background service worker, external connection declaration, or remote executable code.
 - [ ] The popup can analyze only the active current tab after a deliberate button press. It injects no code on popup load, never searches or messages non-active tabs, and reports restricted/unsupported pages without crashing.

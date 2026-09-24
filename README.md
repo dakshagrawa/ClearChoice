@@ -1,6 +1,6 @@
 # ClearChoice 0.3.0-beta.1 private opt-in beta
 
-ClearChoice is a production-ready **private opt-in beta** targeted as `0.3.0-beta.1`. It is distributed only for invited testing from this private repository; it is not a Chrome Web Store release or a public store listing.
+ClearChoice's production-ready target is a **private opt-in beta** as `0.3.0-beta.1`. Readiness remains pending required checklist and gate completion, including a final human activeTab QA marker and a passing `npm run check:beta`. It is distributed only for invited testing from this private repository; it is not a Chrome Web Store release or a public store listing.
 
 ## What the beta does
 

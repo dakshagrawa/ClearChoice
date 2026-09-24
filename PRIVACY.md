@@ -1,6 +1,6 @@
 # ClearChoice 0.3.0-beta.1 private-beta privacy notice
 
-ClearChoice is a production-ready **private opt-in beta** targeted as `0.3.0-beta.1`, not a public service or Chrome Web Store release.
+ClearChoice's production-ready target is a **private opt-in beta** as `0.3.0-beta.1`, not a public service or Chrome Web Store release. Readiness remains pending required checklist and gate completion; the final human activeTab QA marker remains required, and `npm run check:beta` must pass before readiness can be claimed.
 
 ## Access and data handling
 
