@@ -191,6 +191,14 @@ test('documentation preserves both archived mock-only prototypes and official re
     expect(document).toMatch(/not beta/i);
   }
 
+  expect(readme).toMatch(/Sign in to GitHub.*invited collaborator/i);
+  expect(readme).toMatch(/ask the repository owner to grant repository access/i);
+  expect(readme).toMatch(/chrome:\/\/extensions/i);
+  expect(readme).toMatch(/Developer mode/i);
+  expect(readme).toMatch(/Load unpacked/i);
+  expect(readme).toMatch(/contains `manifest\.json`/i);
+  expect(readme).toMatch(/check out that tag, run `npm ci`, then run `npm run serve:fixtures`/i);
+  expect(readme).toMatch(/Do not load it on third-party checkout pages/i);
   expect(readme).toMatch(/Node\s+\**22\.12\+\**/);
   expect(readme).toMatch(/current verified (version is )?\**Node 22\.23\.2\**/i);
   expect(readme).toContain('2026-09-23');

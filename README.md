@@ -42,6 +42,13 @@ The manual marker protocol is Linux Chromium-only because it verifies an opened 
 
 **v0.1.0 and v0.2.0 are archived mock-only localhost fixture prototypes, not beta support.** Their preserved private releases are <https://github.com/dakshagrawa/ClearChoice/releases/tag/v0.1.0> and <https://github.com/dakshagrawa/ClearChoice/releases/tag/v0.2.0>. Use only their controlled localhost fixtures and the v0.2.0 historical [release checklist](docs/release-checklist.md); do not interpret either archive as real-site support, production readiness, or beta eligibility.
 
+### Access and load an archived prototype
+
+1. Sign in to GitHub with the repository-owner account or an invited collaborator account. If either private release link is unavailable, ask the repository owner to grant repository access; do not request a public copy.
+2. Download the release ZIP, extract it locally, open `chrome://extensions`, turn on **Developer mode**, select **Load unpacked**, and choose the extracted directory that contains `manifest.json`.
+3. For the matching archived tag's controlled fixture server, check out that tag, run `npm ci`, then run `npm run serve:fixtures`. Follow the release notes for its exact local fixture route.
+4. Use the archive only with that localhost fixture. Do not load it on third-party checkout pages or treat it as the current beta.
+
 ## External compliance references
 
 Retrieved **2026-09-23**:
