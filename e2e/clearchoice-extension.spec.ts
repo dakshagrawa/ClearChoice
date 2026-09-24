@@ -74,9 +74,13 @@ test('Chromium rejects a built extension whose manifest version is a prerelease 
   const userDataDir = await mkdtemp(resolve(tmpdir(), 'clearchoice-invalid-version-profile-'));
   await cp(extensionPath, invalidExtensionPath, { recursive: true });
   const manifestPath = resolve(invalidExtensionPath, 'manifest.json');
-  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-  manifest.version = '0.3.0-beta.1';
-  await writeFile(manifestPath, JSON.stringify(manifest));
+  const originalManifest = await readFile(manifestPath);
+  const originalManifestText = originalManifest.toString('utf8');
+  const numericVersion = /("version"\s*:\s*")0\.3\.0(")/g;
+  expect([...originalManifestText.matchAll(numericVersion)]).toHaveLength(1);
+  const invalidManifest = Buffer.from(originalManifestText.replace(numericVersion, '$10.3.0-beta.1$2'));
+  await writeFile(manifestPath, invalidManifest);
+  expect(await readFile(manifestPath)).toEqual(invalidManifest);
 
   let context: BrowserContext | undefined;
   try {
