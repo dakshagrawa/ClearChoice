@@ -18,8 +18,9 @@ test('beta documentation states the private opt-in scope and local data boundary
   const readme = read('README.md');
   const privacy = read('PRIVACY.md');
   const threatModel = read('docs/threat-model.md');
+  const checklist = read('docs/beta-release-checklist.md');
 
-  for (const document of [readme, privacy, threatModel]) {
+  for (const document of [readme, privacy, threatModel, checklist]) {
     expect(document).toContain('private opt-in beta');
     expect(document).toContain('0.3.0-beta.1');
     expect(document).toMatch(/temporary.*activeTab.*access/i);
@@ -33,6 +34,7 @@ test('beta documentation states the private opt-in scope and local data boundary
   }
 
   expect(readme).toMatch(/check:beta.*real external human activeTab QA marker/i);
+  expect(checklist).toMatch(/readiness is pending.*deliberate human activeTab QA marker.*passing `npm run check:beta`/i);
   for (const document of [privacy, threatModel]) {
     expect(document).toMatch(/final human activeTab QA marker remains required/i);
     expect(document).toMatch(/check:beta.*must pass before readiness can be claimed/i);
