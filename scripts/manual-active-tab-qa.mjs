@@ -23,6 +23,19 @@ export function fixtureForRequest(url) {
   throw new Error('unknown manual QA fixture request');
 }
 
+export function serveFixture(url, response, fixtures) {
+  let fixture;
+  try {
+    fixture = fixtures[fixtureForRequest(url)];
+  } catch {
+    response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    response.end('not found');
+    return;
+  }
+  response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+  response.end(fixture);
+}
+
 export function assertFixtureOrigin(origin) {
   const match = fixtureOriginPattern.exec(origin);
   if (!match || Number(match[1]) > 65_535) {
@@ -137,13 +150,7 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
     Object.entries(fixturePaths).map(async ([name, path]) => [name, await readFile(path)]),
   ));
   const server = createServer((request, response) => {
-    try {
-      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      response.end(fixtures[fixtureForRequest(request.url)]);
-    } catch {
-      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-      response.end('not found');
-    }
+    serveFixture(request.url, response, fixtures);
   });
   await new Promise((resolveListen, reject) => {
     server.once('error', reject);

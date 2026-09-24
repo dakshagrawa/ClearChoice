@@ -5,7 +5,7 @@ import { lstat, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
-import { afterEach, expect, test } from 'vitest';
+import { afterEach, expect, test, vi } from 'vitest';
 import {
   assertFixtureOrigin,
   captureIntegrityBaseline,
@@ -16,6 +16,7 @@ import {
   restrictedBrowserArgs,
   reviewBrowserLaunchOptions,
   runManualActiveTabQa,
+  serveFixture,
 } from '../scripts/manual-active-tab-qa.mjs';
 
 const root = resolve(process.cwd());
@@ -49,6 +50,21 @@ test('serves separate clean and dynamic fake checkout fixtures for manual integr
   expect(fixtureForRequest('/checkout/clean')).toBe('clean');
   expect(fixtureForRequest('/checkout/dynamic-beta')).toBe('dynamic');
   expect(() => fixtureForRequest('/')).toThrow('unknown manual QA fixture request');
+});
+
+test('responds once with a 404 for incidental manual-runner requests', () => {
+  const response = { writeHead: vi.fn(), end: vi.fn() };
+  serveFixture('/favicon.ico', response, { clean: 'clean', dynamic: 'dynamic' });
+  expect(response.writeHead).toHaveBeenCalledExactlyOnceWith(404, { 'content-type': 'text/plain; charset=utf-8' });
+  expect(response.end).toHaveBeenCalledExactlyOnceWith('not found');
+});
+
+test('responds once with the requested manual fixture', () => {
+  const response = { writeHead: vi.fn(), end: vi.fn() };
+  const cleanFixture = 'clean';
+  serveFixture('/checkout/clean', response, { clean: cleanFixture, dynamic: 'dynamic' });
+  expect(response.writeHead).toHaveBeenCalledExactlyOnceWith(200, { 'content-type': 'text/html; charset=utf-8' });
+  expect(response.end).toHaveBeenCalledExactlyOnceWith(cleanFixture);
 });
 
 test('derives the navigated fixture origin only from the runner-owned 127.0.0.1 listener', () => {
