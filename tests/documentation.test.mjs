@@ -52,6 +52,23 @@ test('changelog qualifies beta readiness as pending the human marker and beta ga
   expect(changelog).toMatch(/pending.*deliberate human activeTab QA marker.*passing `npm run check:beta`/i);
 });
 
+test('evidence separates the historical v0.2.0 artifact from the untagged beta candidate', () => {
+  const historicalEvidence = read('docs/test-evidence.md');
+  const candidateEvidence = read('docs/beta-candidate-test-evidence.md');
+  const checklist = read('docs/beta-release-checklist.md');
+
+  expect(historicalEvidence).toMatch(/v0\.2\.0.*historical/i);
+  expect(candidateEvidence).toMatch(/0\.3\.0-beta\.1/);
+  expect(candidateEvidence).toMatch(/untagged.*QA candidate/i);
+  expect(candidateEvidence).toMatch(/awaiting.*real human.*toolbar-click.*popup/i);
+  expect(candidateEvidence).toMatch(/Chrome.*numeric.*`0\.3\.0`/i);
+  expect(candidateEvidence).toMatch(/version_name.*`0\.3\.0-beta\.1`/i);
+  expect(checklist).toMatch(/Chrome.*numeric.*`0\.3\.0`/i);
+  expect(checklist).toMatch(/version_name.*`0\.3\.0-beta\.1`/i);
+  expect(candidateEvidence).not.toMatch(/check:beta.*passed/i);
+  expect(checklist).toMatch(/untagged.*QA candidate.*awaiting.*real human/i);
+});
+
 test('rule catalog documents supported use and heuristic limitations', () => {
   const catalog = read('docs/rule-catalog.md');
 

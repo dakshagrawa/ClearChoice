@@ -3,6 +3,7 @@ import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync }
 import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sha256, validateManualActiveTabMarker } from './active-tab-qa.mjs';
+import { readCandidateVersionMapping, unpackedArchivePath } from './release-artifact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 
@@ -83,6 +84,7 @@ function run(command, args) {
 
 const argv = process.argv.slice(2);
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  readCandidateVersionMapping(root);
   if (argv.length === 1 && argv[0] === '--validate-marker-only') {
     assertManualActiveTabMarker();
   } else if (argv.length === 0) {
@@ -92,7 +94,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     run('npm', ['run', 'build']);
     run('npm', ['run', 'e2e']);
     run('npm', ['run', 'package:unpacked']);
-    run('node', ['scripts/verify-package.mjs', '--zip', resolve(root, 'ClearChoice-v0.2.0-unpacked.zip')]);
+    run('node', ['scripts/verify-package.mjs', '--zip', unpackedArchivePath(root)]);
   } else {
     fail('usage: node scripts/check-beta.mjs [--validate-marker-only]');
   }

@@ -45,6 +45,23 @@ async function closeExtension(context: BrowserContext, userDataDir: string): Pro
   await rm(userDataDir, { recursive: true, force: true });
 }
 
+test('built extension path loads in Chromium with the Chrome numeric beta manifest version', async () => {
+  const userDataDir = await mkdtemp(resolve(tmpdir(), 'clearchoice-version-load-'));
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    channel: 'chromium',
+    headless: false,
+    args: [`--disable-extensions-except=${extensionPath}`, `--load-extension=${extensionPath}`],
+  });
+  try {
+    const id = await extensionId(context);
+    const popup = await context.newPage();
+    await popup.goto(`chrome-extension://${id}/popup/index.html`);
+    await expect(popup.getByRole('button', { name: 'Analyze' })).toBeVisible();
+  } finally {
+    await closeExtension(context, userDataDir);
+  }
+});
+
 test('packaged direct-popup automation does not claim an activeTab grant', async () => {
   const { server, origin } = await startFixtureServer();
   const userDataDir = await mkdtemp(resolve(tmpdir(), 'clearchoice-e2e-'));

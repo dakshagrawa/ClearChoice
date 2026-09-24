@@ -1,6 +1,6 @@
 {
   "name": "clearchoice",
-  "version": "0.2.0",
+  "version": "0.3.0-beta.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "build:assets": "vite build && CLEARCHOICE_CONTENT_BUILD=1 vite build",
     "serve:fixtures": "node scripts/serve-fixtures.mjs",
     "verify:package": "node scripts/verify-package.mjs --dist dist",
-    "verify:archive": "node scripts/verify-package.mjs --zip ClearChoice-v0.2.0-unpacked.zip",
+    "verify:archive": "node scripts/verify-archive.mjs",
     "package:unpacked": "npm run build && node scripts/package-unpacked.mjs",
     "e2e": "playwright test",
     "check:beta": "node scripts/check-beta.mjs",

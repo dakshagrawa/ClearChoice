@@ -2,8 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+import { unpackedArchivePath } from './release-artifact.mjs';
+
 const root = resolve(import.meta.dirname, '..');
-const archive = resolve(root, 'ClearChoice-v0.2.0-unpacked.zip');
+const archive = unpackedArchivePath(root);
 
 function run(command, args) {
   process.stdout.write(`\n$ ${command} ${args.join(' ')}\n`);

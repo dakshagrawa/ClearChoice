@@ -1,6 +1,6 @@
-# ClearChoice v0.2.0 test evidence
+# ClearChoice v0.2.0 historical test evidence
 
-This document records commands that must be rerun for the v0.2.0 local release artifact. It is not a production-readiness claim or a security audit.
+This document records historical commands for the archived v0.2.0 local release artifact. It is not evidence for the 0.3.0-beta.1 QA candidate, a production-readiness claim, or a security audit.
 
 ## Required release commands
 

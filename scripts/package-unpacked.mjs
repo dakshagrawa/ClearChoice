@@ -2,9 +2,11 @@ import { existsSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
+import { unpackedArchivePath } from './release-artifact.mjs';
+
 const repositoryRoot = resolve(import.meta.dirname, '..');
 const dist = resolve(repositoryRoot, 'dist');
-const archive = resolve(repositoryRoot, 'ClearChoice-v0.2.0-unpacked.zip');
+const archive = unpackedArchivePath(repositoryRoot);
 
 if (!existsSync(resolve(dist, 'manifest.json'))) {
   throw new Error('dist/manifest.json is missing; run npm run build first.');

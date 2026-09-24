@@ -5,6 +5,9 @@ import { expect, test } from 'vitest';
 import { generateManifest } from '../scripts/build-manifest.mjs';
 
 const repositoryRoot = resolve(process.cwd());
+const candidatePackageVersion = '0.3.0-beta.1';
+const candidateChromeVersion = '0.3.0';
+const chromeVersionPattern = /^\d+(?:\.\d+){0,3}$/;
 const betaPermissions = ['activeTab', 'scripting', 'storage'];
 const betaCommands = { _execute_action: { suggested_key: { default: 'Ctrl+Shift+Y' } } };
 
@@ -12,7 +15,8 @@ function betaManifest() {
   return {
     manifest_version: 3,
     name: 'ClearChoice',
-    version: '0.2.0',
+    version: candidateChromeVersion,
+    version_name: candidatePackageVersion,
     description: 'Private beta popup.',
     action: { default_popup: 'popup/index.html' },
     commands: structuredClone(betaCommands),
@@ -22,6 +26,9 @@ function betaManifest() {
 }
 
 function assertBetaManifestPolicy(manifest) {
+  expect(manifest.version).toMatch(chromeVersionPattern);
+  expect(manifest.version).toBe(candidateChromeVersion);
+  expect(manifest.version_name).toBe(candidatePackageVersion);
   expect(manifest.permissions).toEqual(betaPermissions);
   expect(manifest.commands).toEqual(betaCommands);
   expect(new Set(manifest.permissions)).toHaveLength(betaPermissions.length);
@@ -35,6 +42,11 @@ function assertBetaManifestPolicy(manifest) {
 }
 
 test('accepts exactly the temporary active-tab private-beta permission shape', () => {
+  assertBetaManifestPolicy(betaManifest());
+});
+
+test('Chrome manifest version rejects prerelease strings while version_name carries the beta display identity', () => {
+  expect('0.3.0-beta.1').not.toMatch(chromeVersionPattern);
   assertBetaManifestPolicy(betaManifest());
 });
 
@@ -62,6 +74,13 @@ test.each([
 
 test('source and generated manifests conform to the private-beta policy', () => {
   const sourceManifest = JSON.parse(readFileSync(resolve(repositoryRoot, 'manifest.json'), 'utf8'));
+  const sourcePackage = JSON.parse(readFileSync(resolve(repositoryRoot, 'package.json'), 'utf8'));
   assertBetaManifestPolicy(sourceManifest);
-  assertBetaManifestPolicy(generateManifest({ mode: 'release' }));
+  const generatedManifest = generateManifest({ mode: 'release' });
+  assertBetaManifestPolicy(generatedManifest);
+  expect(sourcePackage.version).toBe(candidatePackageVersion);
+  expect(sourceManifest.version).toBe(candidateChromeVersion);
+  expect(sourceManifest.version_name).toBe(candidatePackageVersion);
+  expect(generatedManifest.version).toBe(candidateChromeVersion);
+  expect(generatedManifest.version_name).toBe(candidatePackageVersion);
 });

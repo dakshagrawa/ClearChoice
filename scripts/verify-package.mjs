@@ -78,6 +78,10 @@ function findRemoteExecutableUrl(value, path = '$') {
 
 function validateManifest(manifest) {
   if (manifest.manifest_version !== 3) return 'manifest_version must be 3';
+  if (typeof manifest.version !== 'string' || !/^\d+(?:\.\d+){0,3}$/.test(manifest.version)) {
+    return 'version must be one to four dot-separated integers';
+  }
+  if (typeof manifest.version_name !== 'string' || manifest.version_name.length === 0) return 'version_name must be a nonempty display string';
   if (!Array.isArray(manifest.permissions) || manifest.permissions.length !== allowedPermissions.length ||
     !allowedPermissions.every((permission, index) => manifest.permissions[index] === permission) ||
     new Set(manifest.permissions).size !== manifest.permissions.length) {

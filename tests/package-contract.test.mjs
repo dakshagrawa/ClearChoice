@@ -4,14 +4,19 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { expect, test } from 'vitest';
+import { readCandidateVersionMapping } from '../scripts/release-artifact.mjs';
 
 const verifier = resolve(process.cwd(), 'scripts/verify-package.mjs');
 const repositoryRoot = process.cwd();
+const candidatePackageVersion = '0.3.0-beta.1';
+const candidateChromeVersion = '0.3.0';
+const candidateArchive = `ClearChoice-v${candidatePackageVersion}-unpacked.zip`;
 
 const safeManifest = {
   manifest_version: 3,
   name: 'ClearChoice',
-  version: '0.2.0',
+  version: candidateChromeVersion,
+  version_name: candidatePackageVersion,
   description: 'A local extension popup.',
   action: { default_popup: 'popup/index.html' },
   commands: { _execute_action: { suggested_key: { default: 'Ctrl+Shift+Y' } } },
@@ -64,6 +69,13 @@ test('package verifier accepts an MV3 manifest with exactly temporary active-tab
   expect(safe.stdout).toBe('manifest contract passed\n');
 });
 
+test('package verifier rejects Chrome-invalid prerelease manifest versions', () => {
+  const result = verify({ ...safeManifest, version: candidatePackageVersion });
+
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('version must be one to four dot-separated integers');
+});
+
 test.each([
   ['missing action command', { ...safeManifest, commands: {} }],
   ['wrong action shortcut', { ...safeManifest, commands: { _execute_action: { suggested_key: { default: 'Ctrl+Shift+X' } } } }],
@@ -95,6 +107,22 @@ test('repository manifest satisfies package validation', () => {
   const result = verify(JSON.parse(readFileSync(resolve(repositoryRoot, 'manifest.json'), 'utf8')));
 
   expect(result.status, result.stderr).toBe(0);
+});
+
+test('source package and manifest map the untagged beta identity to a Chrome-valid manifest version and derived archive name', () => {
+  const sourceManifest = JSON.parse(readFileSync(resolve(repositoryRoot, 'manifest.json'), 'utf8'));
+  const sourcePackage = JSON.parse(readFileSync(resolve(repositoryRoot, 'package.json'), 'utf8'));
+
+  const mapping = readCandidateVersionMapping(repositoryRoot);
+  expect(mapping).toEqual({
+    packageVersion: candidatePackageVersion,
+    manifestVersion: candidateChromeVersion,
+    manifestVersionName: candidatePackageVersion,
+  });
+  expect(sourcePackage.version).toBe(candidatePackageVersion);
+  expect(sourceManifest.version).toBe(candidateChromeVersion);
+  expect(sourceManifest.version_name).toBe(candidatePackageVersion);
+  expect(sourcePackage.scripts['verify:archive']).toBe('node scripts/verify-archive.mjs');
 });
 
 test('package verifier rejects forbidden runtime artifact APIs', () => {
@@ -206,6 +234,9 @@ test('built dist manifest and runtime assets satisfy package validation', () => 
   const dist = resolve(repositoryRoot, 'dist');
   const result = verifyDist(dist);
   expect(result.status, result.stderr).toBe(0);
+  const distManifest = JSON.parse(readFileSync(resolve(dist, 'manifest.json'), 'utf8'));
+  expect(distManifest.version).toBe(candidateChromeVersion);
+  expect(distManifest.version_name).toBe(candidatePackageVersion);
   expect(runtimeAssetContents(dist)).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket)\b/);
 }, 15_000);
 
@@ -213,11 +244,15 @@ test('unpacked ZIP manifest and runtime assets satisfy package validation', () =
   const packageResult = spawnSync('npm', ['run', 'package:unpacked'], { cwd: repositoryRoot, encoding: 'utf8' });
   expect(packageResult.status, packageResult.stderr).toBe(0);
 
-  const result = spawnSync(process.execPath, [verifier, '--zip', resolve(repositoryRoot, 'ClearChoice-v0.2.0-unpacked.zip')], {
+  const archive = resolve(repositoryRoot, candidateArchive);
+  const result = spawnSync(process.execPath, [verifier, '--zip', archive], {
     encoding: 'utf8',
   });
   expect(result.status, result.stderr).toBe(0);
   expect(result.stdout).toContain('artifact policy check passed (ZIP');
+  const archiveManifest = JSON.parse(spawnSync('unzip', ['-p', archive, 'manifest.json'], { encoding: 'utf8' }).stdout);
+  expect(archiveManifest.version).toBe(candidateChromeVersion);
+  expect(archiveManifest.version_name).toBe(candidatePackageVersion);
 }, 15_000);
 
 test('package verifier rejects unsafe MV3 manifest capabilities', () => {
