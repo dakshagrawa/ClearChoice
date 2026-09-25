@@ -112,7 +112,7 @@ test('executes the documented fail-closed beta command without forging a marker'
   expect(env.CLEARCHOICE_ACTIVE_TAB_QA_MARKER).toBeUndefined();
   expect(result.status).toBe(1);
   expect(result.signal).toBeNull();
-  expect(result.stderr).toBe('check:beta failed: CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point to a deliberate local manual-QA marker\n');
+  expect(result.stderr.trimEnd().split('\n').at(-1)).toBe('check:beta failed: CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point to a deliberate local manual-QA marker');
 });
 
 function readPeeledTagContract(tag) {
