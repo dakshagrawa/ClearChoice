@@ -17,6 +17,7 @@ import {
   reviewBrowserLaunchOptions,
   runManualActiveTabQa,
   runManualCheckpoints,
+  runCleanupSteps,
   serveFixture,
 } from '../scripts/manual-active-tab-qa.mjs';
 
@@ -96,6 +97,18 @@ test('manual checkpoints gate dynamic and reopened Analyze behind Escape detach 
   expect(events.indexOf('restore:clean')).toBeLessThan(events.indexOf('open:dynamic'));
   expect(events.indexOf('dynamic:detached')).toBeLessThan(events.indexOf('restore:dynamic'));
   expect(events.at(-1)).toBe('integrity:dynamic-fixture Restore/repeated Analyze/replacement');
+});
+
+test('manual QA cleanup attempts every resource even when Chromium close rejects', async () => {
+  const firstFailure = new Error('Chromium close failed');
+  const closeTerminal = vi.fn();
+  const closeBrowser = vi.fn().mockRejectedValue(firstFailure);
+  const closeFixtureServer = vi.fn();
+  const removeProfile = vi.fn();
+  await expect(runCleanupSteps([closeTerminal, closeBrowser, closeFixtureServer, removeProfile])).rejects.toBe(firstFailure);
+  for (const cleanup of [closeTerminal, closeBrowser, closeFixtureServer, removeProfile]) {
+    expect(cleanup).toHaveBeenCalledOnce();
+  }
 });
 
 test('serves separate clean and dynamic fake checkout fixtures for manual integrity QA', () => {

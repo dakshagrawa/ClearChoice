@@ -84,6 +84,18 @@ function closeServer(server) {
   return new Promise((resolveClose, reject) => server.close((error) => error ? reject(error) : resolveClose()));
 }
 
+export async function runCleanupSteps(steps) {
+  let firstFailure;
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      firstFailure ??= error;
+    }
+  }
+  if (firstFailure) throw firstFailure;
+}
+
 async function integrityDigest(page) {
   const snapshot = await page.evaluate(() => {
     const owned = (node) => node.closest('[data-clearchoice-panel]') !== null;
@@ -260,10 +272,12 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
     process.stdout.write('manual active-tab QA passed; save this local self-attestation outside the repository (for example ~/.local/state/clearchoice/active-tab-qa.json), then pass that path through CLEARCHOICE_ACTIVE_TAB_QA_MARKER:\n');
     process.stdout.write(`${JSON.stringify(marker, null, 2)}\n`);
   } finally {
-    terminal?.close();
-    await context?.close();
-    await closeServer(server);
-    if (profile) await rm(profile, { recursive: true, force: true });
+    await runCleanupSteps([
+      () => terminal?.close(),
+      () => context?.close(),
+      () => closeServer(server),
+      () => profile && rm(profile, { recursive: true, force: true }),
+    ]);
   }
 }
 
