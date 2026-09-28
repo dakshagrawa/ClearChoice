@@ -50,8 +50,10 @@ afterEach(async () => {
 test('manual checkpoints gate dynamic and reopened Analyze behind Escape detach and pointer Restore confirmation', async () => {
   const events = [];
   let releaseCleanEscape;
+  let releaseCleanRestore;
   let releaseDynamicRestore;
   const cleanEscape = new Promise((resolve) => { releaseCleanEscape = resolve; });
+  const cleanRestore = new Promise((resolve) => { releaseCleanRestore = resolve; });
   const dynamicRestore = new Promise((resolve) => { releaseDynamicRestore = resolve; });
   const run = runManualCheckpoints({
     cleanPage: 'clean', getDynamicPage: () => 'dynamic',
@@ -63,6 +65,7 @@ test('manual checkpoints gate dynamic and reopened Analyze behind Escape detach 
     assertIntegrity: async (_page, phase) => { events.push(`integrity:${phase}`); },
     confirmRestore: async (page) => {
       events.push(`restore:${page}`);
+      if (page === 'clean') await cleanRestore;
       if (page === 'dynamic' && events.filter((event) => event === 'restore:dynamic').length === 1) await dynamicRestore;
     },
     openDynamic: async () => { events.push('open:dynamic'); },
@@ -73,6 +76,10 @@ test('manual checkpoints gate dynamic and reopened Analyze behind Escape detach 
   expect(events).not.toContain('open:dynamic');
   expect(events.filter((event) => /^\d+\./.test(event))).toHaveLength(2);
   releaseCleanEscape();
+  await vi.waitFor(() => expect(events).toContain('restore:clean'));
+  expect(events).not.toContain('open:dynamic');
+  expect(events.filter((event) => /^\d+\./.test(event))).toHaveLength(3);
+  releaseCleanRestore();
   await vi.waitFor(() => expect(events).toContain('restore:dynamic'));
   expect(events).not.toContain('repeated');
   expect(events.filter((event) => event === 'dynamic:attached')).toHaveLength(1);
