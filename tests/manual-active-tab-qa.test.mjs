@@ -16,6 +16,7 @@ import {
   restrictedBrowserArgs,
   reviewBrowserLaunchOptions,
   runManualActiveTabQa,
+  runManualCheckpoints,
   serveFixture,
 } from '../scripts/manual-active-tab-qa.mjs';
 
@@ -44,6 +45,50 @@ function close(server) {
 
 afterEach(async () => {
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+
+test('manual checkpoints gate dynamic and reopened Analyze behind Escape detach and pointer Restore confirmation', async () => {
+  const events = [];
+  let releaseCleanEscape;
+  let releaseDynamicRestore;
+  const cleanEscape = new Promise((resolve) => { releaseCleanEscape = resolve; });
+  const dynamicRestore = new Promise((resolve) => { releaseDynamicRestore = resolve; });
+  const run = runManualCheckpoints({
+    cleanPage: 'clean', getDynamicPage: () => 'dynamic',
+    instruct: (text) => { events.push(text); },
+    waitForPanel: async (page, state) => {
+      events.push(`${page}:${state}`);
+      if (page === 'clean' && state === 'detached') await cleanEscape;
+    },
+    assertIntegrity: async (_page, phase) => { events.push(`integrity:${phase}`); },
+    confirmRestore: async (page) => {
+      events.push(`restore:${page}`);
+      if (page === 'dynamic' && events.filter((event) => event === 'restore:dynamic').length === 1) await dynamicRestore;
+    },
+    openDynamic: async () => { events.push('open:dynamic'); },
+    waitForReplacement: async () => { events.push('replacement'); },
+    confirmRepeatedAnalyze: async () => { events.push('repeated'); },
+  });
+  await vi.waitFor(() => expect(events).toContain('clean:detached'));
+  expect(events).not.toContain('open:dynamic');
+  expect(events.filter((event) => /^\d+\./.test(event))).toHaveLength(2);
+  releaseCleanEscape();
+  await vi.waitFor(() => expect(events).toContain('restore:dynamic'));
+  expect(events).not.toContain('repeated');
+  expect(events.filter((event) => event === 'dynamic:attached')).toHaveLength(1);
+  expect(events.filter((event) => /^\d+\./.test(event))).toHaveLength(6);
+  releaseDynamicRestore();
+  await run;
+  const instructions = events.filter((event) => /^\d+\./.test(event));
+  expect(instructions.map((line) => Number(line.split('.')[0]))).toEqual(Array.from({ length: 12 }, (_, index) => index + 1));
+  expect(instructions[2]).toContain('Restore');
+  expect(instructions[5]).toContain('Restore');
+  expect(instructions[6]).toContain('Analyze');
+  expect(events.filter((event) => event === 'restore:dynamic')).toHaveLength(2);
+  expect(events.filter((event) => event === 'dynamic:attached')).toHaveLength(3);
+  expect(events.indexOf('restore:clean')).toBeLessThan(events.indexOf('open:dynamic'));
+  expect(events.indexOf('dynamic:detached')).toBeLessThan(events.indexOf('restore:dynamic'));
+  expect(events.at(-1)).toBe('integrity:dynamic-fixture Restore/repeated Analyze/replacement');
 });
 
 test('serves separate clean and dynamic fake checkout fixtures for manual integrity QA', () => {

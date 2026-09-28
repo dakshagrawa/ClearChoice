@@ -130,6 +130,49 @@ async function waitForPanel(page, state) {
   await page.locator('aside[data-clearchoice-panel]').waitFor({ state, timeout: 300_000 });
 }
 
+// Gesture checkpoints are human-operated: this function never clicks the browser UI.
+export async function runManualCheckpoints({ cleanPage, getDynamicPage, instruct, waitForPanel: wait, assertIntegrity: check, confirmRestore, openDynamic, waitForReplacement, confirmRepeatedAnalyze }) {
+  instruct('1. CLEAN: pointer-click the toolbar icon, then pointer-click Analyze in its popup.');
+  await wait(cleanPage, 'attached');
+  await check(cleanPage, 'clean-fixture Analyze');
+  instruct('2. CLEAN: press Tab until Dismiss visibly has focus, then press Escape. Confirm only the panel closes.');
+  await wait(cleanPage, 'detached');
+  await check(cleanPage, 'clean-fixture Escape');
+  instruct('3. CLEAN: pointer-click the toolbar icon, then pointer-click Restore in its popup. Confirm in the terminal only after doing both.');
+  await confirmRestore(cleanPage);
+  await check(cleanPage, 'clean-fixture Restore');
+
+  await openDynamic();
+  const dynamicPage = getDynamicPage();
+  instruct('4. DYNAMIC: pointer-click the toolbar icon, then pointer-click Analyze in its popup.');
+  await wait(dynamicPage, 'attached');
+  await check(dynamicPage, 'dynamic-fixture Analyze');
+  instruct('5. DYNAMIC: press Tab until Dismiss visibly has focus, then press Escape. Confirm only the panel closes.');
+  await wait(dynamicPage, 'detached');
+  await check(dynamicPage, 'dynamic-fixture Escape');
+  instruct('6. DYNAMIC: pointer-click the toolbar icon, then pointer-click Restore in its popup. Confirm in the terminal only after doing both.');
+  await confirmRestore(dynamicPage);
+  await check(dynamicPage, 'dynamic-fixture Restore after Escape');
+  instruct('7. DYNAMIC: pointer-click the toolbar icon, then pointer-click Analyze in its popup to reopen the panel.');
+  await wait(dynamicPage, 'attached');
+  await check(dynamicPage, 'dynamic-fixture reopened Analyze');
+  instruct('8. DYNAMIC: pointer-click Dismiss on the visible findings panel.');
+  await wait(dynamicPage, 'detached');
+  await check(dynamicPage, 'dynamic-fixture Dismiss');
+  instruct('9. DYNAMIC: pointer-click the toolbar icon, then pointer-click Restore in its popup. Confirm in the terminal only after doing both.');
+  await confirmRestore(dynamicPage);
+  await check(dynamicPage, 'dynamic-fixture Restore after Dismiss');
+  instruct('10. DYNAMIC: pointer-click the toolbar icon, then pointer-click Analyze in its popup.');
+  await wait(dynamicPage, 'attached');
+  await check(dynamicPage, 'dynamic-fixture repeated Analyze');
+  instruct('11. DYNAMIC: pointer-click the toolbar icon and popup Analyze once more. Confirm in the terminal only after doing both.');
+  await confirmRepeatedAnalyze();
+  await check(dynamicPage, 'dynamic-fixture second repeated Analyze');
+  instruct('12. DYNAMIC: pointer-click Replace fake order summary.');
+  await waitForReplacement();
+  await check(dynamicPage, 'dynamic-fixture Restore/repeated Analyze/replacement');
+}
+
 export function createManualActiveTabQaMarker({ commit, manifestSha256 }) {
   return {
     schemaVersion: 2,
@@ -158,6 +201,7 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
   });
   let profile;
   let context;
+  let terminal;
   try {
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('fixture server did not expose a TCP port');
@@ -172,37 +216,42 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
 
     process.stdout.write('\nManual active-tab QA is waiting. In the runner-provided visible Chromium window:\n');
     process.stdout.write('That Chromium can access only the local 127.0.0.1 fixtures and the extension; its dead proxy blocks non-loopback sites, so it cannot validate real sites. This boundary applies only to Chromium launched by this runner, not other browser instances.\n');
-    process.stdout.write('CLEAN FIXTURE: click the ClearChoice toolbar icon with the pointer, then click Analyze in the browser-owned popup with the pointer. With the actual visible panel open, press Tab and confirm visible focus reaches Dismiss, then press Escape and confirm only the ClearChoice panel closes.\n');
     process.stdout.write('The runner retains only SHA-256 integrity digests and panel/integrity pass-fail predicates; it never writes or prints page data.\n\n');
-
-    await waitForPanel(cleanPage, 'attached');
-    await assertIntegrity(cleanPage, 'clean-fixture Analyze');
-
-    const dynamicPage = await context.newPage();
-    await dynamicPage.goto(`${fixtureOrigin}/checkout/dynamic-beta#checkout`);
-    await captureIntegrityBaseline(dynamicPage);
-    await dynamicPage.bringToFront();
-    process.stdout.write('DYNAMIC FIXTURE: click the toolbar icon with the pointer, then click Analyze in its popup with the pointer. With the actual visible panel open, press Tab and confirm visible focus reaches Dismiss, then press Escape and confirm only the ClearChoice panel closes. Reopen it with a toolbar pointer click and popup pointer Analyze before continuing.\n');
-    await waitForPanel(dynamicPage, 'attached');
-    await assertIntegrity(dynamicPage, 'dynamic-fixture Analyze');
-
-    process.stdout.write('DYNAMIC FIXTURE: dismiss the findings panel with its pointer control.\n');
-    await waitForPanel(dynamicPage, 'detached');
-    await assertIntegrity(dynamicPage, 'dynamic-fixture Dismiss');
-
-    process.stdout.write('DYNAMIC FIXTURE: use a toolbar pointer click and popup pointer click to Restore, then repeat toolbar/popup pointer Analyze twice. Click Replace fake order summary with the pointer.\n');
+    terminal = createInterface({ input: process.stdin, output: process.stdout });
+    let dynamicPage;
+    await runManualCheckpoints({
+      cleanPage,
+      getDynamicPage: () => dynamicPage,
+      instruct: (text) => process.stdout.write(`${text}\n`),
+      waitForPanel,
+      assertIntegrity,
+      confirmRestore: async () => {
+        if (await terminal.question('Type RESTORED after both pointer clicks (anything else aborts): ') !== 'RESTORED') {
+          throw new Error('manual pointer Restore was not confirmed; marker was not emitted');
+        }
+      },
+      openDynamic: async () => {
+        dynamicPage = await context.newPage();
+        await dynamicPage.goto(`${fixtureOrigin}/checkout/dynamic-beta#checkout`);
+        await captureIntegrityBaseline(dynamicPage);
+        await dynamicPage.bringToFront();
+      },
+      confirmRepeatedAnalyze: async () => {
+        if (await terminal.question('Type ANALYZED after both pointer clicks (anything else aborts): ') !== 'ANALYZED') {
+          throw new Error('manual repeated Analyze was not confirmed; marker was not emitted');
+        }
+        if (await dynamicPage.locator('aside[data-clearchoice-panel]').count() !== 1) {
+          throw new Error('manual dynamic-fixture repeated Analyze panel predicate failed');
+        }
+      },
+      waitForReplacement: async () => {
+        await dynamicPage.locator('#fake-order-summary').waitFor({ state: 'attached', timeout: 300_000 });
+        await dynamicPage.waitForFunction(() => document.querySelector('#fake-order-summary')?.textContent?.includes('updated') === true, undefined, { timeout: 300_000 });
+      },
+    });
     process.stdout.write('After those steps, return to this terminal and type ATTEST only if you personally observed all pointer actions complete.\n');
-    const terminal = createInterface({ input: process.stdin, output: process.stdout });
     const attestation = await terminal.question('Type ATTEST to evaluate final pass/fail predicates and emit the marker: ');
-    terminal.close();
     if (attestation !== 'ATTEST') throw new Error('manual human attestation was not confirmed; marker was not emitted');
-
-    await waitForPanel(dynamicPage, 'attached');
-    if (await dynamicPage.locator('aside[data-clearchoice-panel]').count() !== 1) throw new Error('manual dynamic-fixture repeated Analyze panel predicate failed');
-    await dynamicPage.locator('#fake-order-summary').waitFor({ state: 'attached', timeout: 300_000 });
-    const replacementPassed = await dynamicPage.locator('#fake-order-summary').evaluate((summary) => summary.textContent?.includes('updated') === true);
-    if (!replacementPassed) throw new Error('manual dynamic-fixture replacement predicate failed');
-    await assertIntegrity(dynamicPage, 'dynamic-fixture Restore/repeated Analyze/replacement');
 
     const marker = createManualActiveTabQaMarker({
       commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
@@ -211,6 +260,7 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
     process.stdout.write('manual active-tab QA passed; save this local self-attestation outside the repository (for example ~/.local/state/clearchoice/active-tab-qa.json), then pass that path through CLEARCHOICE_ACTIVE_TAB_QA_MARKER:\n');
     process.stdout.write(`${JSON.stringify(marker, null, 2)}\n`);
   } finally {
+    terminal?.close();
     await context?.close();
     await closeServer(server);
     if (profile) await rm(profile, { recursive: true, force: true });
