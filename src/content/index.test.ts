@@ -53,6 +53,19 @@ it('rejects a malformed batch receipt and does not render or report success', as
   expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
 });
 
+it('reports only persisted eligible findings when checkout evidence is screened out', async () => {
+  const { addListener, sendMessage } = installChrome();
+  document.body.innerHTML = '<main><aside>Order summary — Subtotal: $24</aside><section>Membership renews automatically every month for $12. example.com/checkout?token=private</section><button>Place order</button></main>';
+  await import('./index');
+  const listener = addListener.mock.calls[0]?.[0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
+  const reply = vi.fn();
+  listener({ type: 'CLEARCHOICE_ANALYZE', requestId: 'req1', nonce: 'nonce1' }, {}, reply);
+  await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+  const submission = sendMessage.mock.calls.find(([message]) => message.type === 'CLEARCHOICE_SUBMIT')?.[0];
+  expect(submission?.batch.findings).toHaveLength(0);
+  expect(reply).toHaveBeenCalledWith({ ok: true, status: 'supported', findingCount: 0 });
+});
+
 it('registers one listener and renders one panel when the payload is injected repeatedly', async () => {
   const { addListener } = installChrome();
   setSupportedCheckoutContext();

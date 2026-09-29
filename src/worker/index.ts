@@ -117,7 +117,7 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       if (pending.get(documentId) !== scan || !(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
       if (!isAnalyzeResponse(response)) return { ok: false, error: 'request-failed' };
       if (response.ok && response.status === 'supported') {
-        if (scan.count === undefined) return { ok: false, error: 'request-failed' };
+        if (scan.count === undefined || response.findingCount !== scan.count) return { ok: false, error: 'request-failed' };
         await chrome.storage.session.set({ [authorizationKey(tabId)]: { tabId, documentId, origin } });
         if (pending.get(documentId) !== scan) return { ok: false, error: 'request-failed' };
       }

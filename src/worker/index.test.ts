@@ -63,6 +63,17 @@ it('accepts only a challenged top-frame batch from the same document and returns
   expect(await dispatch({ type: 'CLEARCHOICE_SUBMIT', nonce: 'late', batch: { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: 'late', findings: [] } }, content)).toEqual({ ok: false, error: 'request-failed' });
 });
 
+it('rejects a content count that disagrees with the persisted screened batch', async () => {
+  await boot();
+  sendMessage.mockImplementationOnce(async (_tab: number, challenge: { requestId: string; nonce: string }) => {
+    const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: challenge.requestId, findings: [] };
+    expect(await dispatch({ type: 'CLEARCHOICE_SUBMIT', nonce: challenge.nonce, batch }, content)).toEqual({ ok: true, findingCount: 0 });
+    return { ok: true, status: 'supported', findingCount: 1 };
+  });
+  expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: false, error: 'request-failed' });
+  expect(state.reviewHistory).toEqual([]);
+});
+
 it('persists a challenged screened finding while returning only count and status to popup', async () => {
   await boot();
   sendMessage.mockImplementationOnce(async (_tab: number, challenge: { requestId: string; nonce: string }) => {

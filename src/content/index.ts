@@ -71,8 +71,10 @@ if (!pageWindow[contentSentinel]) {
       }
 
       const result = analyzePage();
+      let findingCount = result.findings.length;
       if (request.requestId && request.nonce) {
         const batch = await buildFindingBatch(result.findings, request.requestId);
+        findingCount = batch.findings.length;
         const receipt: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_SUBMIT, nonce: request.nonce, batch });
         if (typeof receipt !== 'object' || receipt === null || Object.keys(receipt).length !== 2
           || !('ok' in receipt) || receipt.ok !== true || !('findingCount' in receipt)
@@ -83,7 +85,7 @@ if (!pageWindow[contentSentinel]) {
           void setDismissed(true).catch(() => undefined);
         });
       }
-      sendResponse({ ok: true, status: 'supported', findingCount: result.findings.length } satisfies AnalyzeResponse);
+      sendResponse({ ok: true, status: 'supported', findingCount } satisfies AnalyzeResponse);
     })().catch(() => {
       sendResponse({ ok: false, error: 'request-failed' } satisfies AnalyzeResponse | RestoreResponse);
     });
