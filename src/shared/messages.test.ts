@@ -4,6 +4,20 @@ import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, isAnalyzeResponse, isContentR
 import { toFindingDto } from './finding-dto';
 import type { Finding } from '../core/types';
 import type { AnalyzeRequest, AnalyzeResponse, RestoreResponse } from './messages';
+import { isFindingsChallengeResponse } from './messages';
+
+it('accepts only exact automatic observation and challenge response shapes', () => {
+  const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: 'scan-1', findings: [] };
+  const observation = { type: 'CLEARCHOICE_AUTO_SUBMIT', version: 1, generation: 1, batch };
+  const reply = { type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: 'scan-1', nonce: 'opaque-1' };
+  expect(isWorkerRequest(observation)).toBe(true);
+  expect(isWorkerRequest({ ...observation, url: '/checkout' })).toBe(false);
+  expect(isWorkerRequest({ ...observation, generation: 0 })).toBe(false);
+  expect(isWorkerRequest({ ...observation, batch: { ...batch, findings: [{ evidence: 'raw' }] } })).toBe(false);
+  expect(isFindingsChallengeResponse(reply)).toBe(true);
+  expect(isFindingsChallengeResponse({ ...reply, selector: '#private' })).toBe(false);
+  expect(isContentRequest({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId: 'scan-1', nonce: 'opaque-1' })).toBe(true);
+});
 
 it('requires exact worker control, dismissal, and challenged batch shapes', () => {
   expect(isWorkerRequest({ type: 'CLEARCHOICE_ANALYZE' })).toBe(true);

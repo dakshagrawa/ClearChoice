@@ -1,4 +1,4 @@
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, isAnalyzeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_SUBMIT, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
 import { canonicalOrigin } from '../shared/models';
 import { getDismissed, setDismissed, loadGrantState } from '../shared/storage';
 import { isCurrentActiveTab } from '../shared/tab-analysis';
@@ -51,6 +51,32 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
     if (!(await ready)) return { ok: false, error: 'request-failed' };
     if (!isWorkerRequest(message)) return { ok: false, error: 'request-failed' };
     const request = message as Record<string, unknown>;
+    if (request.type === CLEARCHOICE_AUTO_SUBMIT) {
+      if (!isAutomaticObservation(message) || !contentSender(sender)) return { ok: false, error: 'request-failed' };
+      const tabId = sender.tab!.id!;
+      const documentId = sender.documentId!;
+      const origin = senderOrigin(sender.origin ?? sender.url);
+      if (!origin || senderOrigin(sender.url) !== origin) return { ok: false, error: 'request-failed' };
+      const checkpoint = async (): Promise<boolean> => {
+        if (!await grants.isEnabled(origin, message.generation)) return false;
+        const tab = await chrome.tabs.get(tabId);
+        return tab.id === tabId && senderOrigin(tab.url) === origin
+          && await grants.isEnabled(origin, message.generation);
+      };
+      const challenge = async (): Promise<boolean> => {
+        const nonce = token();
+        const response: unknown = await chrome.tabs.sendMessage(tabId, {
+          type: CLEARCHOICE_FINDINGS_CHALLENGE, version: 1,
+          requestId: message.batch.requestId, nonce,
+        }, { documentId });
+        return isFindingsChallengeResponse(response) && response.requestId === message.batch.requestId
+          && response.nonce === nonce;
+      };
+      if (!await checkpoint() || !await challenge() || !await checkpoint()) return { ok: false, error: 'request-failed' };
+      const result = await store.upsertFindings(message.batch, origin, async () =>
+        await checkpoint() && await challenge() && await checkpoint());
+      return { ok: true, findingCount: result.ids.length };
+    }
     if (request.type === CLEARCHOICE_SUBMIT) {
       if (!contentSender(sender)) return { ok: false, error: 'request-failed' };
       const scan = pending.get(sender.documentId!);

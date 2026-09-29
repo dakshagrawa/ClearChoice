@@ -3,6 +3,10 @@ import { detectPreselectedAddons, detectRecurringCharges } from '../core/detecto
 import type { AnalysisResult, Finding } from '../core/types';
 import {
   CLEARCHOICE_DISMISSED_GET,
+  CLEARCHOICE_AUTO_SUBMIT,
+  CLEARCHOICE_FINDINGS_CHALLENGE,
+  CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE,
+  isAutomaticObservation,
   CLEARCHOICE_DISABLE,
   CLEARCHOICE_DISMISSED_SET,
   CLEARCHOICE_RESTORE,
@@ -11,12 +15,28 @@ import {
 } from '../shared/messages';
 import type {
   AnalyzeResponse,
+  FindingsBatchRequest,
   RestoreResponse,
 } from '../shared/messages';
 import { buildFindingBatchWithSources } from './candidates';
 import { removePanel, renderPanel } from './panel';
 
 const contentSentinel = '__clearchoiceContentListenerInstalled__';
+let automaticRequestId: string | undefined;
+
+/** Task 10 will call this only after its opt-in checkout observer screens a batch. */
+export async function submitAutomaticObservation(generation: number, batch: FindingsBatchRequest): Promise<{ ok: true; findingCount: number }> {
+  const request = { type: CLEARCHOICE_AUTO_SUBMIT, version: 1, generation, batch };
+  if (automaticRequestId || !isAutomaticObservation(request)) throw new Error('Automatic observation unavailable');
+  automaticRequestId = batch.requestId;
+  try {
+    const reply: unknown = await chrome.runtime.sendMessage(request);
+    if (typeof reply !== 'object' || reply === null || Object.keys(reply).length !== 2
+      || !('ok' in reply) || reply.ok !== true || !('findingCount' in reply)
+      || reply.findingCount !== batch.findings.length) throw new Error('Automatic observation refused');
+    return { ok: true, findingCount: batch.findings.length };
+  } finally { automaticRequestId = undefined; }
+}
 
 async function getDismissed(): Promise<boolean> {
   const response: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_DISMISSED_GET });
@@ -53,11 +73,18 @@ const pageWindow = window as ClearChoiceWindow;
 if (!pageWindow[contentSentinel]) {
   pageWindow[contentSentinel] = true;
 
-  chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
     if (!isContentRequest(message)) return;
     const request = message;
 
     void (async () => {
+      if (request.type === CLEARCHOICE_FINDINGS_CHALLENGE) {
+        if (sender.id === chrome.runtime.id && automaticRequestId === request.requestId) {
+          sendResponse({ type: CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE, version: 1,
+            requestId: request.requestId, nonce: request.nonce });
+        } else sendResponse({ ok: false, error: 'request-failed' });
+        return;
+      }
       if (request.type === CLEARCHOICE_DISABLE) {
         removePanel();
         sendResponse({ ok: true });

@@ -4,7 +4,7 @@ function installChrome(): { addListener: ReturnType<typeof vi.fn>; sendMessage: 
   const addListener = vi.fn();
   const sendMessage = vi.fn().mockImplementation(async (message: { type: string }) => message.type === 'CLEARCHOICE_DISMISSED_GET' ? { ok: true, dismissed: false } : message.type === 'CLEARCHOICE_DISMISSED_SET' ? { ok: true } : { ok: true, findingCount: 0 });
   vi.stubGlobal('chrome', {
-    runtime: { onMessage: { addListener }, sendMessage },
+    runtime: { id: 'extension', onMessage: { addListener }, sendMessage },
     storage: {
       local: {
         get: vi.fn().mockResolvedValue({ dismissed: false }),
@@ -26,6 +26,47 @@ afterEach(() => {
 function setSupportedCheckoutContext(): void {
   document.body.innerHTML = '<main><aside>Order summary — Subtotal: $24</aside><button>Place order</button></main>';
 }
+
+it('does not scan or answer an unsolicited automatic document challenge', async () => {
+  const { addListener, sendMessage } = installChrome();
+  setSupportedCheckoutContext();
+  await import('./index');
+  const listener = addListener.mock.calls[0]?.[0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
+  const reply = vi.fn();
+  expect(listener({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId: 'auto-1', nonce: 'nonce-1' }, {}, reply)).toBe(true);
+  await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ ok: false, error: 'request-failed' }));
+  expect(sendMessage).not.toHaveBeenCalled();
+  expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
+});
+
+it('attests only the matching in-flight automatic observation without scanning', async () => {
+  const { addListener, sendMessage } = installChrome();
+  setSupportedCheckoutContext();
+  const { submitAutomaticObservation } = await import('./index');
+  const listener = addListener.mock.calls[0]?.[0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
+  let complete!: (value: unknown) => void;
+  sendMessage.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve; }));
+  const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH' as const, version: 1 as const, requestId: 'auto-1', findings: [] };
+  const submission = submitAutomaticObservation(1, batch);
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_AUTO_SUBMIT', version: 1, generation: 1, batch }));
+  const request = { type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId: 'auto-1', nonce: 'nonce-1' };
+  const reply = vi.fn();
+  listener(request, { id: 'other' }, reply);
+  await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ ok: false, error: 'request-failed' }));
+  const valid = vi.fn();
+  listener({ ...request, requestId: 'other' }, { id: 'extension' }, valid);
+  await vi.waitFor(() => expect(valid).toHaveBeenCalledWith({ ok: false, error: 'request-failed' }));
+  const attested = vi.fn();
+  listener(request, { id: 'extension' }, attested);
+  await vi.waitFor(() => expect(attested).toHaveBeenCalledWith({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: 'auto-1', nonce: 'nonce-1' }));
+  expect(sendMessage).toHaveBeenCalledTimes(1);
+  expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
+  complete({ ok: true, findingCount: 0 });
+  await expect(submission).resolves.toEqual({ ok: true, findingCount: 0 });
+  const late = vi.fn();
+  listener(request, { id: 'extension' }, late);
+  await vi.waitFor(() => expect(late).toHaveBeenCalledWith({ ok: false, error: 'request-failed' }));
+});
 
 it('disable removes the current owned panel without scanning or changing dismissal and rejects extra fields', async () => {
   const { addListener, sendMessage } = installChrome();

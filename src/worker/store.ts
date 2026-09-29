@@ -92,6 +92,7 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
           if (prior.digest !== digest) throw new Error('Request ID collision');
           if (prior.outcome.ids.length !== ids.length || prior.outcome.ids.some((id, index) => id !== ids[index]))
             throw new Error('Corrupt receipt outcome');
+          if (beforeCommit && !(await beforeCommit())) throw new Error('Scan no longer authorized');
           return { ids: [...prior.outcome.ids] };
         }
         const now = (options.now ?? (() => new Date()))();

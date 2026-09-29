@@ -74,7 +74,7 @@ it('accepts distinct evidence with its own fingerprint and replays the identical
   expect(clock).toHaveBeenCalledTimes(2);
 });
 
-it('a commit veto leaves history and receipts unchanged while an identical receipt replay skips the checkpoint', async () => {
+it('a commit veto leaves history and receipts unchanged, including on an identical receipt replay', async () => {
   const storage = fakeStorage();
   Object.assign(storage.data, { version: 1, subscriptions: [], reviewHistory: [], receipts: [], retentionPolicy: 30 });
   const store = createWorkerStore();
@@ -87,9 +87,11 @@ it('a commit veto leaves history and receipts unchanged while an identical recei
   expect(storage.set).not.toHaveBeenCalled();
   const first = await store.upsertFindings(batch('req-1'), 'https://example.com');
   const writes = storage.set.mock.calls.length;
-  await expect(store.upsertFindings(batch('req-1'), 'https://example.com', beforeCommit)).resolves.toEqual(first);
-  expect(beforeCommit).toHaveBeenCalledTimes(1);
+  await expect(store.upsertFindings(batch('req-1'), 'https://example.com', beforeCommit))
+    .rejects.toThrow('no longer authorized');
+  expect(beforeCommit).toHaveBeenCalledTimes(2);
   expect(storage.set).toHaveBeenCalledTimes(writes);
+  await expect(store.upsertFindings(batch('req-1'), 'https://example.com', async () => true)).resolves.toEqual(first);
 });
 
 it('writes history and receipt in exactly one payload on a versioned store', async () => {

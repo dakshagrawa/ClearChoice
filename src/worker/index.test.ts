@@ -35,6 +35,125 @@ async function dispatch(message: unknown, sender: chrome.runtime.MessageSender):
 }
 afterEach(() => { listeners.length = 0; permissionRemoved.length = 0; registeredScripts.length = 0; grantedOrigins.clear(); for (const key of Object.keys(state)) delete state[key]; for (const key of Object.keys(sessionState)) delete sessionState[key]; vi.clearAllMocks(); get.mockReset().mockImplementation(async () => ({ ...state })); sendMessage.mockReset().mockResolvedValue({ ok: true, status: 'unsupported-context', findingCount: 0 }); query.mockReset().mockResolvedValue([{ id: 42 }]); tabGet.mockReset().mockResolvedValue({ id: 42, url: 'https://merchant.test/checkout' }); vi.resetModules(); vi.unstubAllGlobals(); });
 
+const autoBatch = (requestId = 'auto-1') => {
+  const screenedExcerpt = 'Monthly plan $10.00';
+  const opaqueFingerprint = createHash('sha256').update(`recurring-charge\0price-cadence\0${screenedExcerpt}`).digest('hex');
+  return { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId,
+    findings: [{ version: 1, requestId, kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt, opaqueFingerprint, ordinal: 1 }] };
+};
+const autoRequest = (generation = 1) => ({ type: 'CLEARCHOICE_AUTO_SUBMIT', version: 1, generation, batch: autoBatch() });
+async function enabledAuto() {
+  grantedOrigins.add('https://merchant.test/*');
+  await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' }, popup)).toEqual({ ok: true, enabled: true, permitted: true });
+  sendMessage.mockImplementation(async (_tab: number, challenge: { requestId: string; nonce: string }) => ({
+    type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: challenge.requestId, nonce: challenge.nonce,
+  }));
+}
+
+it('challenges the exact automatic top document and persists only a count acknowledgement', async () => {
+  await enabledAuto();
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });
+  expect(sendMessage).toHaveBeenCalledWith(42, expect.objectContaining({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId: 'auto-1' }), { documentId: 'doc-A' });
+  expect(state.reviewHistory).toEqual([expect.objectContaining({ origin: 'https://merchant.test', screenedExcerpt: 'Monthly plan $10.00' })]);
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });
+  expect(state.reviewHistory).toHaveLength(1);
+  expect(JSON.stringify(sendMessage.mock.calls)).not.toContain('/checkout');
+});
+
+it.each([
+  ['other document', { ...content, documentId: 'doc-B' }],
+  ['subframe', { ...content, frameId: 1 }],
+  ['other tab', { ...content, tab: { id: 7 } }],
+  ['other origin', { ...content, url: 'https://other.test/checkout' }],
+  ['missing document', { ...content, documentId: undefined }],
+  ['untrusted extension', { ...content, id: 'other' }],
+])('rejects automatic sender %s without a receipt', async (_label, forged) => {
+  await enabledAuto();
+  if (_label === 'other document') sendMessage.mockRejectedValueOnce(new Error('No receiving document'));
+  expect(await dispatch(autoRequest(), forged as chrome.runtime.MessageSender)).toEqual({ ok: false, error: 'request-failed' });
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
+});
+
+it.each(['wrong nonce', 'wrong request', 'surplus', 'failed target'])('rejects %s challenge without history', async (failure) => {
+  await enabledAuto();
+  sendMessage.mockImplementationOnce(async (_tab: number, challenge: { nonce: string; requestId: string }) => {
+    if (failure === 'failed target') throw new Error('No receiving document');
+    return { type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1,
+      requestId: failure === 'wrong request' ? 'other' : challenge.requestId,
+      nonce: failure === 'wrong nonce' ? 'other' : challenge.nonce,
+      ...(failure === 'surplus' ? { evidence: 'private' } : {}) };
+  });
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
+});
+
+it('rejects a stale automatic generation and revoked permission', async () => {
+  await enabledAuto();
+  expect(await dispatch(autoRequest(2), content)).toEqual({ ok: false, error: 'request-failed' });
+  grantedOrigins.clear();
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
+});
+
+it('refuses a receipt replay when permission disappears during the second challenge', async () => {
+  await enabledAuto();
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });
+  const writes = set.mock.calls.filter(([value]) => 'receipts' in value).length;
+  sendMessage.mockImplementationOnce(async (_tab: number, challenge: { nonce: string; requestId: string }) => {
+    grantedOrigins.clear();
+    return { type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: challenge.requestId, nonce: challenge.nonce };
+  });
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(writes);
+});
+
+it('vetoes automatic commit when permission disappears during challenge', async () => {
+  await enabledAuto();
+  sendMessage.mockImplementationOnce(async (_tab: number, challenge: { nonce: string; requestId: string }) => {
+    grantedOrigins.clear();
+    return { type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: challenge.requestId, nonce: challenge.nonce };
+  });
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
+});
+
+it('vetoes automatic receipt replay when permission disappears during the queued storage read', async () => {
+  await enabledAuto();
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });
+  let release!: () => void;
+  get.mockImplementationOnce(async () => { await new Promise<void>((resolve) => { release = resolve; }); return { ...state }; });
+  const result = dispatch(autoRequest(), content);
+  await vi.waitFor(() => expect(release).toBeDefined());
+  grantedOrigins.clear();
+  release();
+  expect(await result).toEqual({ ok: false, error: 'request-failed' });
+});
+
+it('rejects a same-origin document replacement at the queued checkpoint', async () => {
+  await enabledAuto();
+  let release!: () => void;
+  get.mockImplementationOnce(async () => { await new Promise<void>((resolve) => { release = resolve; }); return { ...state }; });
+  const result = dispatch(autoRequest(), content);
+  await vi.waitFor(() => expect(release).toBeDefined());
+  sendMessage.mockRejectedValueOnce(new Error('No receiving document'));
+  release();
+  expect(await result).toEqual({ ok: false, error: 'request-failed' });
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
+});
+
+it('vetoes automatic commit after a document navigation during the queued storage read', async () => {
+  await enabledAuto();
+  let release!: () => void;
+  get.mockImplementationOnce(async () => { await new Promise<void>((resolve) => { release = resolve; }); return { ...state }; });
+  const result = dispatch(autoRequest(), content);
+  await vi.waitFor(() => expect(release).toBeDefined());
+  tabGet.mockResolvedValue({ id: 42, url: 'https://other.test/checkout' });
+  release();
+  expect(await result).toEqual({ ok: false, error: 'request-failed' });
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
+});
+
 it('authorizes exact active popup site before enabling; never registers on spoof or missing permission', async () => {
   await boot();
   const enable = { type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' };

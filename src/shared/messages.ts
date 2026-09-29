@@ -4,6 +4,8 @@ import { isGrantOrigin } from './storage';
 
 export const CLEARCHOICE_FINDINGS_BATCH = 'CLEARCHOICE_FINDINGS_BATCH' as const;
 export const CLEARCHOICE_FINDINGS_CHALLENGE = 'CLEARCHOICE_FINDINGS_CHALLENGE' as const;
+export const CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE = 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE' as const;
+export const CLEARCHOICE_AUTO_SUBMIT = 'CLEARCHOICE_AUTO_SUBMIT' as const;
 export const CLEARCHOICE_REVIEW_LIST = 'CLEARCHOICE_REVIEW_LIST' as const;
 export const CLEARCHOICE_SUBMIT = 'CLEARCHOICE_SUBMIT' as const;
 export const CLEARCHOICE_DISMISSED_GET = 'CLEARCHOICE_DISMISSED_GET' as const;
@@ -21,6 +23,26 @@ export interface FindingsChallenge {
   version: typeof FINDING_WIRE_VERSION;
   requestId: string;
   nonce: string;
+}
+
+export interface AutomaticObservation {
+  type: typeof CLEARCHOICE_AUTO_SUBMIT;
+  version: typeof FINDING_WIRE_VERSION;
+  generation: number;
+  batch: FindingsBatchRequest;
+}
+
+export function isAutomaticObservation(value: unknown): value is AutomaticObservation {
+  return isRecord(value) && hasExactKeys(value, ['type', 'version', 'generation', 'batch'])
+    && value.type === CLEARCHOICE_AUTO_SUBMIT && value.version === FINDING_WIRE_VERSION
+    && Number.isSafeInteger(value.generation) && (value.generation as number) > 0
+    && isFindingsBatchRequest(value.batch);
+}
+
+export function isFindingsChallengeResponse(value: unknown): value is { type: typeof CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE; version: 1; requestId: string; nonce: string } {
+  return isRecord(value) && hasExactKeys(value, ['type', 'version', 'requestId', 'nonce'])
+    && value.type === CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE && value.version === 1
+    && isValidRequestId(value.requestId) && isValidRequestId(value.nonce);
 }
 
 export interface ReviewListResponse {
@@ -79,7 +101,7 @@ export interface RestoreRequest {
   type: typeof CLEARCHOICE_RESTORE;
 }
 
-export type ContentRequest = AnalyzeRequest | RestoreRequest | { type: typeof CLEARCHOICE_DISABLE };
+export type ContentRequest = AnalyzeRequest | RestoreRequest | FindingsChallenge | { type: typeof CLEARCHOICE_DISABLE };
 export type AnalyzeResponse =
   | { ok: true; status: 'supported'; findingCount: number }
   | { ok: true; status: 'unsupported-context'; findingCount: 0 }
@@ -91,14 +113,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function isContentRequest(value: unknown): value is ContentRequest {
-  return isRecord(value)
+  return isFindingsChallenge(value) || (isRecord(value)
     && ((hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISABLE))
       || (hasExactKeys(value, ['type', 'requestId', 'nonce']) && value.type === CLEARCHOICE_ANALYZE
-        && isValidRequestId(value.requestId) && isValidRequestId(value.nonce)));
+        && isValidRequestId(value.requestId) && isValidRequestId(value.nonce))));
 }
 
 export function isWorkerRequest(value: unknown): boolean {
   if (!isRecord(value)) return false;
+  if (isAutomaticObservation(value)) return true;
   return (hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISMISSED_GET))
     || (hasExactKeys(value, ['type', 'origin']) && isGrantOrigin(value.origin)
       && (value.type === CLEARCHOICE_SITE_STATUS || value.type === CLEARCHOICE_SITE_ENABLE || value.type === CLEARCHOICE_SITE_REVOKE))
