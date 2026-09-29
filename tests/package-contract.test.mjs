@@ -241,7 +241,9 @@ test('built dist manifest and runtime assets satisfy package validation', () => 
   expect(distManifest.version).toBe(candidateChromeVersion);
   expect(distManifest.version_name).toBe(candidatePackageVersion);
   expect(distManifest.background).toEqual({ service_worker: 'worker.js' });
-  expect(readFileSync(resolve(dist, 'worker.js'), 'utf8')).toBeTruthy();
+  for (const asset of ['popup/index.html', 'content.js', 'worker.js']) {
+    expect(readFileSync(resolve(dist, asset), 'utf8'), `${asset} missing or empty in dist`).toBeTruthy();
+  }
   expect(runtimeAssetContents(dist)).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket)\b/);
 }, 15_000);
 
@@ -259,7 +261,15 @@ test('unpacked ZIP manifest and runtime assets satisfy package validation', () =
   expect(archiveManifest.version).toBe(candidateChromeVersion);
   expect(archiveManifest.version_name).toBe(candidatePackageVersion);
   expect(archiveManifest.background).toEqual({ service_worker: 'worker.js' });
-  expect(spawnSync('unzip', ['-p', archive, 'worker.js'], { encoding: 'utf8' }).stdout).toBeTruthy();
+  const archiveEntries = spawnSync('unzip', ['-Z1', archive], { encoding: 'utf8' });
+  expect(archiveEntries.status, archiveEntries.stderr).toBe(0);
+  const names = archiveEntries.stdout.split(/\r?\n/);
+  for (const asset of ['popup/index.html', 'content.js', 'worker.js']) {
+    expect(names, `${asset} missing from ZIP`).toContain(asset);
+    const extracted = spawnSync('unzip', ['-p', archive, asset], { encoding: 'utf8' });
+    expect(extracted.status, extracted.stderr).toBe(0);
+    expect(extracted.stdout, `${asset} empty in ZIP`).toBeTruthy();
+  }
 }, 15_000);
 
 test('package verifier rejects unsafe MV3 manifest capabilities', () => {
@@ -304,6 +314,27 @@ test('package verifier rejects absent packaged worker', () => {
     const result = verifyDist(directory);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('worker.js');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('package verifier rejects a ZIP missing its declared worker', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clearchoice-zip-'));
+  const archive = join(directory, 'missing-worker.zip');
+  writeFileSync(join(directory, 'manifest.json'), JSON.stringify(safeManifest));
+  mkdirSync(join(directory, 'popup'));
+  writeFileSync(join(directory, 'popup', 'index.html'), '<main>Local popup</main>');
+  writeFileSync(join(directory, 'content.js'), '(()=>{})();');
+
+  try {
+    const packed = spawnSync('zip', ['-q', '-r', archive, 'manifest.json', 'popup', 'content.js'], {
+      cwd: directory, encoding: 'utf8',
+    });
+    expect(packed.status, packed.stderr).toBe(0);
+    const result = spawnSync(process.execPath, [verifier, '--zip', archive], { encoding: 'utf8' });
+    expect(result.status, result.stdout).not.toBe(0);
+    expect(result.stderr).toContain('worker.js is missing or empty');
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
