@@ -6,6 +6,11 @@ import type { Finding } from '../core/types';
 import type { AnalyzeRequest, AnalyzeResponse, RestoreResponse } from './messages';
 import { isFindingsChallengeResponse } from './messages';
 
+it('accepts only the exact generation-bootstrap request shape', () => {
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_AUTO_STATUS' })).toBe(true);
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_AUTO_STATUS', origin: 'https://merchant.test' })).toBe(false);
+});
+
 it('accepts only exact automatic observation and challenge response shapes', () => {
   const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: 'scan-1', findings: [] };
   const observation = { type: 'CLEARCHOICE_AUTO_SUBMIT', version: 1, generation: 1, batch };

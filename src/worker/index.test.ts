@@ -51,6 +51,21 @@ async function enabledAuto() {
   }));
 }
 
+it('returns a generation only to a live top-frame document on a permitted registered site', async () => {
+  await enabledAuto();
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: true, generation: 1 });
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, { ...content, frameId: 1 }))
+    .toEqual({ ok: false, error: 'request-failed' });
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, { ...content, url: 'https://other.test/checkout' }))
+    .toEqual({ ok: false, error: 'request-failed' });
+  tabGet.mockResolvedValueOnce({ id: 42, url: 'https://other.test/checkout' });
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content))
+    .toEqual({ ok: false, error: 'request-failed' });
+  grantedOrigins.clear();
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content))
+    .toEqual({ ok: false, error: 'request-failed' });
+});
+
 it('challenges the exact automatic top document and persists only a count acknowledgement', async () => {
   await enabledAuto();
   expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });

@@ -1,4 +1,4 @@
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_SUBMIT, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_STATUS, CLEARCHOICE_AUTO_SUBMIT, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
 import { canonicalOrigin } from '../shared/models';
 import { getDismissed, setDismissed, loadGrantState } from '../shared/storage';
 import { isCurrentActiveTab } from '../shared/tab-analysis';
@@ -66,6 +66,21 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       ? { ok: false, error: 'retryable-failure' } : { ok: false, error: 'request-failed' };
     if (!isWorkerRequest(message)) return { ok: false, error: 'request-failed' };
     const request = message as Record<string, unknown>;
+    if (request.type === CLEARCHOICE_AUTO_STATUS) {
+      if (!contentSender(sender)) return { ok: false, error: 'request-failed' };
+      const origin = senderOrigin(sender.origin ?? sender.url);
+      if (!origin || senderOrigin(sender.url) !== origin) return { ok: false, error: 'request-failed' };
+      const tabId = sender.tab!.id!;
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.id !== tabId || senderOrigin(tab.url) !== origin) return { ok: false, error: 'request-failed' };
+      const state = await loadGrantState();
+      const grant = state.sites[origin];
+      if (!grant?.enabled || !await grants.isEnabled(origin, grant.generation)) return { ok: false, error: 'request-failed' };
+      const current = await chrome.tabs.get(tabId);
+      if (current.id !== tabId || senderOrigin(current.url) !== origin
+        || !await grants.isEnabled(origin, grant.generation)) return { ok: false, error: 'request-failed' };
+      return { ok: true, generation: grant.generation };
+    }
     if (request.type === CLEARCHOICE_AUTO_SUBMIT) {
       if (!isAutomaticObservation(message) || !contentSender(sender)) return { ok: false, error: 'request-failed' };
       const tabId = sender.tab!.id!;

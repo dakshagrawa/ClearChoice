@@ -5,6 +5,7 @@ import { isGrantOrigin } from './storage';
 export const CLEARCHOICE_FINDINGS_BATCH = 'CLEARCHOICE_FINDINGS_BATCH' as const;
 export const CLEARCHOICE_FINDINGS_CHALLENGE = 'CLEARCHOICE_FINDINGS_CHALLENGE' as const;
 export const CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE = 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE' as const;
+export const CLEARCHOICE_AUTO_STATUS = 'CLEARCHOICE_AUTO_STATUS' as const;
 export const CLEARCHOICE_AUTO_SUBMIT = 'CLEARCHOICE_AUTO_SUBMIT' as const;
 export const CLEARCHOICE_REVIEW_LIST = 'CLEARCHOICE_REVIEW_LIST' as const;
 export const CLEARCHOICE_SUBMIT = 'CLEARCHOICE_SUBMIT' as const;
@@ -122,7 +123,7 @@ export function isContentRequest(value: unknown): value is ContentRequest {
 export function isWorkerRequest(value: unknown): boolean {
   if (!isRecord(value)) return false;
   if (isAutomaticObservation(value)) return true;
-  return (hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISMISSED_GET))
+  return (hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_AUTO_STATUS || value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISMISSED_GET))
     || (hasExactKeys(value, ['type', 'origin']) && isGrantOrigin(value.origin)
       && (value.type === CLEARCHOICE_SITE_STATUS || value.type === CLEARCHOICE_SITE_ENABLE || value.type === CLEARCHOICE_SITE_REVOKE))
     || (hasExactKeys(value, ['type', 'dismissed']) && value.type === CLEARCHOICE_DISMISSED_SET && typeof value.dismissed === 'boolean')
