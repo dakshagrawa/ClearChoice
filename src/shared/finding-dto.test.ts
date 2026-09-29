@@ -71,6 +71,24 @@ it('rejects bare domains and non-HTTP scheme URLs throughout source and on recei
   }
 });
 
+it('rejects Unicode and IDN domains with paths or queries on both boundaries', () => {
+  for (const text of [
+    'Subscription renewal 例子.中国/checkout?token=secret',
+    'Subscription renewal 例子.中国',
+    'Subscription renewal shop例子.com/checkout?token=secret',
+    'Subscription renewal example.xn--fiqs8s/checkout?token=secret',
+    'Subscription renewal xn--fsqu00a.xn--fiqs8s/checkout?token=secret',
+  ]) {
+    expect(toFindingDto({ ...rawFinding, evidence: text }, 'req-1', 1, fingerprint)).toBeNull();
+    expect(isFindingDto({ ...valid(), screenedExcerpt: text })).toBe(false);
+  }
+});
+
+it('rejects an IDN hidden beyond the 160-character excerpt', () => {
+  const evidence = `${'A'.repeat(160)} Subscription renewal 例子.中国/checkout?token=secret`;
+  expect(toFindingDto({ ...rawFinding, evidence }, 'req-1', 1, fingerprint)).toBeNull();
+});
+
 it('rejects zero-width, bidi and other format controls on both boundaries', () => {
   for (const text of ['Subscription card ••••\u200b1234', 'Subscription card 4111\u200b1111\u200b1111\u200b1111',
     'Subscription renewal\u202e monthly', 'Subscription renewal\u0000 monthly',
@@ -82,7 +100,8 @@ it('rejects zero-width, bidi and other format controls on both boundaries', () =
 });
 
 it('keeps benign subscription text and decimal prices without domain false positives', () => {
-  for (const text of ['Subscription renews monthly', '$10.00 per month', 'Save 20% on annual plan']) {
+  for (const text of ['Subscription renews monthly', '$10.00 per month', 'Save 20% on annual plan',
+    '订阅每月续费']) {
     expect(toFindingDto({ ...rawFinding, evidence: text }, 'req-1', 1, fingerprint)?.screenedExcerpt).toBe(text);
     expect(isFindingDto({ ...valid(), screenedExcerpt: text })).toBe(true);
   }

@@ -19,7 +19,10 @@ export interface FindingDto {
 
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const FINGERPRINT = /^[a-f0-9]{64}$/;
-const URL = /(?:\b[a-z][a-z0-9+.-]*:\/\/|\b[a-z0-9.-]+\.[a-z]{2,}\b)/i;
+// Screen whole candidates rather than trying to redact paths or query strings. A letter-only
+// final label avoids treating decimal prices like $10.00 as domains; punycode TLDs need
+// their own branch because they contain hyphens and digits.
+const URL = /(?:\b[a-z][a-z0-9+.-]*:\/\/|[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?(?:[.。．｡][\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?)*[.。．｡](?:\p{L}{2,}|xn--[a-z0-9-]*[a-z0-9])(?![\p{L}\p{N}-]))/iu;
 // Reject format/bidi and control characters before normalization or sensitive matching.
 // TAB, LF and CR remain safe in raw evidence because normalization collapses them.
 const FORMAT_CHARACTER = /\p{Cf}/u;
