@@ -247,6 +247,33 @@ it('offers browser-access removal when the worker cannot answer site status', as
   expect(document.querySelector('[data-site-status]')?.textContent).not.toContain('Detection disabled and browser site access removed');
 });
 
+it('does not offer stale-site removal after a tab event while permission lookup is pending', async () => {
+  vi.resetModules();
+  document.body.innerHTML = '<div id="app"></div>';
+  const activated: Array<(info: { tabId: number; windowId: number }) => void> = [];
+  let finishContains!: (permitted: boolean) => void;
+  const contains = vi.fn(() => new Promise<boolean>((resolve) => { finishContains = resolve; }));
+  const remove = vi.fn();
+  vi.stubGlobal('chrome', {
+    tabs: {
+      query: vi.fn().mockResolvedValue([{ id: 42 }]),
+      get: vi.fn().mockResolvedValue({ id: 42, url: 'https://a.test/checkout' }),
+      onActivated: { addListener: (fn: typeof activated[number]) => activated.push(fn) },
+    },
+    permissions: { contains, remove },
+    runtime: { sendMessage: vi.fn().mockResolvedValue({ ok: false, error: 'request-failed' }) },
+  });
+  await import('./main');
+  await vi.waitFor(() => expect(contains).toHaveBeenCalledWith({ origins: ['https://a.test/*'] }));
+  activated[0]({ tabId: 7, windowId: 1 });
+  finishContains(true);
+  const disable = document.querySelector<HTMLButtonElement>('[data-action="site-disable"]')!;
+  await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).toContain('Active tab changed'));
+  expect(disable.disabled).toBe(true);
+  disable.click();
+  expect(remove).not.toHaveBeenCalled();
+});
+
 it('uses the exact local-only initial, working, and singular successful statuses', async () => {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
