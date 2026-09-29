@@ -1,6 +1,8 @@
 import { expect, it } from 'vitest';
 
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, isAnalyzeResponse, isContentRequest, isRestoreResponse } from './messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, isAnalyzeResponse, isContentRequest, isRestoreResponse, isFindingsBatchRequest, isFindingsChallenge, isReviewListResponse } from './messages';
+import { toFindingDto } from './finding-dto';
+import type { Finding } from '../core/types';
 import type { AnalyzeRequest, AnalyzeResponse, RestoreResponse } from './messages';
 
 it('defines popup-safe successful analysis messages with status and count only', () => {
@@ -41,4 +43,37 @@ it('accepts only exact restore response shapes and rejects page data', () => {
   expect(isRestoreResponse(failure)).toBe(true);
   expect(isRestoreResponse({ ok: true, pageTitle: 'private' })).toBe(false);
   expect(isRestoreResponse({ ok: false, error: 'request-failed', checkoutHtml: '<form>' })).toBe(false);
+});
+
+const raw: Finding = {
+  id: 'private-id', kind: 'recurring-charge', reason: 'price-cadence', severity: 'notice',
+  title: 'Page title', explanation: 'explanation', evidence: '$10 per month', selector: '#private',
+};
+const dto = toFindingDto(raw, 'req-1', 1, 'a'.repeat(64))!;
+
+it('validates a versioned exact-key batch without allowing page data in serialized transport', () => {
+  const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: 'req-1', findings: [dto] };
+  expect(isFindingsBatchRequest(batch)).toBe(true);
+  expect(isContentRequest(batch)).toBe(false);
+  for (const forbidden of ['selector', 'evidence', 'url', 'pageTitle', 'formValue', '#private', 'private-id']) {
+    expect(JSON.stringify(batch)).not.toContain(forbidden);
+  }
+  for (const extra of [{ selector: '#x' }, { url: 'https://example.test/path' }, { evidence: 'raw' }, { pageTitle: 'private' }, { formValue: 'private' }, { version: 2 }, { requestId: 'req-2' }]) {
+    expect(isFindingsBatchRequest({ ...batch, ...extra })).toBe(false);
+  }
+  expect(isFindingsBatchRequest({ ...batch, findings: [{ ...dto, evidence: 'raw' }] })).toBe(false);
+  expect(isFindingsBatchRequest({ ...batch, findings: [{ ...dto, requestId: 'req-2' }] })).toBe(false);
+  expect(isFindingsBatchRequest({ ...batch, findings: Array.from({ length: 101 }, () => dto) })).toBe(false);
+});
+
+it('validates challenge and list response separately from the manual count response', () => {
+  const challenge = { type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId: 'req-1', nonce: 'opaque-1' };
+  const list = { type: 'CLEARCHOICE_REVIEW_LIST', version: 1, findings: [dto] };
+  expect(isFindingsChallenge(challenge)).toBe(true);
+  expect(isReviewListResponse(list)).toBe(true);
+  expect(isAnalyzeResponse(list)).toBe(false);
+  expect(isAnalyzeResponse({ ok: true, status: 'supported', findingCount: 1, findings: [dto] })).toBe(false);
+  expect(isFindingsChallenge({ ...challenge, nonce: 'https://example.test/path' })).toBe(false);
+  expect(isFindingsChallenge({ ...challenge, selector: '#private' })).toBe(false);
+  expect(isReviewListResponse({ ...list, pageTitle: 'private' })).toBe(false);
 });
