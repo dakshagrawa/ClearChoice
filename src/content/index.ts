@@ -3,6 +3,7 @@ import { detectPreselectedAddons, detectRecurringCharges } from '../core/detecto
 import type { AnalysisResult, Finding } from '../core/types';
 import {
   CLEARCHOICE_DISMISSED_GET,
+  CLEARCHOICE_DISABLE,
   CLEARCHOICE_DISMISSED_SET,
   CLEARCHOICE_RESTORE,
   CLEARCHOICE_SUBMIT,
@@ -57,6 +58,11 @@ if (!pageWindow[contentSentinel]) {
     const request = message;
 
     void (async () => {
+      if (request.type === CLEARCHOICE_DISABLE) {
+        removePanel();
+        sendResponse({ ok: true });
+        return;
+      }
       if (request.type === CLEARCHOICE_RESTORE) {
         removePanel();
         await setDismissed(false);

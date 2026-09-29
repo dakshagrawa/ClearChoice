@@ -138,9 +138,37 @@ it('failed persistence and unregister still vetoes authorization in this worker'
   await grants.enable('https://a.test');
   f.set.mockRejectedValueOnce(new Error('disk failure'));
   f.unregisterContentScripts.mockRejectedValueOnce(new Error('unregister failed'));
-  await expect(grants.revoke('https://a.test')).rejects.toThrow('disk failure');
+  await expect(grants.revoke('https://a.test')).rejects.toThrow(/Chrome settings.*site access.*https:\/\/a\.test/i);
   expect(await grants.isEnabled('https://a.test', 1)).toBe(false);
   expect(f.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '' });
+});
+
+it('dual revoke failure reports irrecoverable site access and honestly exposes restart limitation', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
+  const grants = createGrantManager(createWorkerStore());
+  await grants.enable('https://a.test'); await grants.enable('https://b.test');
+  f.set.mockRejectedValueOnce(new Error('disk failure'));
+  f.unregisterContentScripts.mockRejectedValueOnce(new Error('unregister failed'));
+  await expect(grants.revoke('https://a.test')).rejects.toThrow(/Chrome settings.*site access.*https:\/\/a\.test/i);
+  expect(await grants.isEnabled('https://a.test', 1)).toBe(false);
+  expect(await grants.isEnabled('https://b.test', 1)).toBe(true);
+  // A fresh MV3 worker loses its in-memory veto. No successful Chrome API write can prove revocation.
+  const restarted = createGrantManager(createWorkerStore());
+  expect(await restarted.isEnabled('https://a.test', 1)).toBe(true);
+  expect(await restarted.isEnabled('https://b.test', 1)).toBe(true);
+  expect(f.allowed.has('https://b.test/*')).toBe(true);
+});
+
+it('startup with corrupt grant state unregisters every owned script but leaves foreign scripts untouched', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
+  const grants = createGrantManager(createWorkerStore());
+  await grants.enable('https://a.test'); await grants.enable('https://b.test');
+  f.scripts.push({ id: 'foreign-script', matches: ['https://other.test/*'], js: ['foreign.js'] });
+  f.data.grantState = { version: 1, sites: { 'https://a.test/path': { enabled: true, generation: 1 } } };
+  await expect(createGrantManager(createWorkerStore()).reconcile()).rejects.toThrow('Corrupt grant state');
+  expect(f.scripts.map((script) => script.id)).toEqual(['foreign-script']);
+  expect(f.allowed.has('https://a.test/*')).toBe(true);
+  expect(f.data.grantState).toEqual({ version: 1, sites: { 'https://a.test/path': { enabled: true, generation: 1 } } });
 });
 
 it('rejects malformed persisted grants rather than enabling any site', async () => {

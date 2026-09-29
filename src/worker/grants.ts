@@ -1,4 +1,5 @@
 import { isGrantOrigin, loadGrantState, saveGrantState } from '../shared/storage';
+import { CLEARCHOICE_DISABLE } from '../shared/messages';
 import type { GrantState } from '../shared/storage';
 import type { createWorkerStore } from './store';
 
@@ -41,6 +42,8 @@ export function createGrantManager(store: Queue) {
     locallyDisabled.add(origin);
     let failure: unknown;
     let failed = false;
+    let storageFailed = false;
+    let unregisterFailed = false;
     try {
       const state = await loadGrantState();
       const previous = state.sites[origin];
@@ -49,9 +52,9 @@ export function createGrantManager(store: Queue) {
         const next: GrantState = { version: 1, sites: { ...state.sites, [origin]: { enabled: false, generation: previous.generation + 1 } } };
         await saveGrantState(next);
       }
-    } catch (error) { failure = error; failed = true; }
+    } catch (error) { failure = error; failed = true; storageFailed = true; }
     try { await unregister(await scriptId(origin)); }
-    catch (error) { if (!failed) { failure = error; failed = true; } }
+    catch (error) { unregisterFailed = true; if (!failed) { failure = error; failed = true; } }
     // Even a failed storage or scripting operation must not skip best-effort UI cleanup.
     try {
       const tabs = await chrome.tabs.query({});
@@ -67,12 +70,15 @@ export function createGrantManager(store: Queue) {
             const fields = record as Record<string, unknown>;
             if (Object.keys(fields).length === 3 && fields.tabId === tabId && fields.origin === origin
               && typeof fields.documentId === 'string' && fields.documentId.length > 0) {
-              await chrome.tabs.sendMessage(tabId, { type: 'CLEARCHOICE_DISABLE' }, { documentId: fields.documentId });
+              await chrome.tabs.sendMessage(tabId, { type: CLEARCHOICE_DISABLE }, { documentId: fields.documentId });
             }
           }
         } catch { /* Missing/expired document or listener; never broadcast to a tab. */ }
       }));
     } catch { /* Badge and message cleanup are best effort; the persisted grant is disabled when storage succeeds. */ }
+    if (storageFailed && unregisterFailed) {
+      throw new Error(`Revocation could not be confirmed for ${origin}. In Chrome settings, remove site access for ${origin} before restarting the browser; a worker restart may restore the previous grant.`, { cause: failure });
+    }
     if (failed) throw failure;
   }
 
@@ -115,7 +121,16 @@ export function createGrantManager(store: Queue) {
     isEnabled(origin: string, generation: number): Promise<boolean> { return enabled(origin, generation); },
     reconcile(): Promise<void> {
       return store.enqueue(async () => {
-        const state = await loadGrantState();
+        let state: GrantState;
+        try { state = await loadGrantState(); }
+        catch (error) {
+          if (error instanceof Error && error.message === 'Corrupt grant state') {
+            // Stored ownership cannot be trusted; remove only our registered scripts.
+            const owned = (await chrome.scripting.getRegisteredContentScripts()).filter((script) => script.id.startsWith(prefix));
+            await Promise.allSettled(owned.map((script) => unregister(script.id)));
+          }
+          throw error;
+        }
         const scripts = await chrome.scripting.getRegisteredContentScripts();
         for (const [origin, grant] of Object.entries(state.sites)) {
           if (grant.enabled && (!await chrome.permissions.contains({ origins: [match(origin)] })

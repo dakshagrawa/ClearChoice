@@ -53,6 +53,7 @@ export function isReviewListResponse(value: unknown): value is ReviewListRespons
 
 export const CLEARCHOICE_ANALYZE = 'CLEARCHOICE_ANALYZE' as const;
 export const CLEARCHOICE_RESTORE = 'CLEARCHOICE_RESTORE' as const;
+export const CLEARCHOICE_DISABLE = 'CLEARCHOICE_DISABLE' as const;
 
 export interface AnalyzeRequest {
   type: typeof CLEARCHOICE_ANALYZE;
@@ -64,7 +65,7 @@ export interface RestoreRequest {
   type: typeof CLEARCHOICE_RESTORE;
 }
 
-export type ContentRequest = AnalyzeRequest | RestoreRequest;
+export type ContentRequest = AnalyzeRequest | RestoreRequest | { type: typeof CLEARCHOICE_DISABLE };
 export type AnalyzeResponse =
   | { ok: true; status: 'supported'; findingCount: number }
   | { ok: true; status: 'unsupported-context'; findingCount: 0 }
@@ -77,7 +78,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isContentRequest(value: unknown): value is ContentRequest {
   return isRecord(value)
-    && ((hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE))
+    && ((hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISABLE))
       || (hasExactKeys(value, ['type', 'requestId', 'nonce']) && value.type === CLEARCHOICE_ANALYZE
         && isValidRequestId(value.requestId) && isValidRequestId(value.nonce)));
 }

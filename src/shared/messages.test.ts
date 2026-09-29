@@ -17,6 +17,12 @@ it('requires exact worker control, dismissal, and challenged batch shapes', () =
   expect(isWorkerRequest({ type: 'CLEARCHOICE_SUBMIT', nonce: 'nonce1', batch: { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: 'req1', findings: [] }, selector: '#private' })).toBe(false);
 });
 
+it('accepts only the exact disable control shape in content, not worker requests', () => {
+  expect(isContentRequest({ type: 'CLEARCHOICE_DISABLE' })).toBe(true);
+  expect(isContentRequest({ type: 'CLEARCHOICE_DISABLE', origin: 'https://a.test' })).toBe(false);
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_DISABLE' })).toBe(false);
+});
+
 it('defines popup-safe successful analysis messages with status and count only', () => {
   const request: AnalyzeRequest = { type: CLEARCHOICE_ANALYZE };
   const response: AnalyzeResponse = { ok: true, status: 'supported', findingCount: 1 };

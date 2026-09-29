@@ -27,6 +27,24 @@ function setSupportedCheckoutContext(): void {
   document.body.innerHTML = '<main><aside>Order summary — Subtotal: $24</aside><button>Place order</button></main>';
 }
 
+it('disable removes the current owned panel without scanning or changing dismissal and rejects extra fields', async () => {
+  const { addListener, sendMessage } = installChrome();
+  setSupportedCheckoutContext();
+  await import('./index');
+  const listener = addListener.mock.calls[0]?.[0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean | undefined;
+  const reply = vi.fn();
+  listener({ type: 'CLEARCHOICE_ANALYZE' }, {}, reply);
+  await vi.waitFor(() => expect(document.querySelector('[data-clearchoice-panel]')).not.toBeNull());
+  sendMessage.mockClear();
+  expect(listener({ type: 'CLEARCHOICE_DISABLE', extra: 'private' }, {}, reply)).toBeUndefined();
+  expect(document.querySelector('[data-clearchoice-panel]')).not.toBeNull();
+  const disabled = vi.fn();
+  expect(listener({ type: 'CLEARCHOICE_DISABLE' }, {}, disabled)).toBe(true);
+  await vi.waitFor(() => expect(disabled).toHaveBeenCalledWith({ ok: true }));
+  expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
+  expect(sendMessage).not.toHaveBeenCalled();
+});
+
 it('routes dismissed state through worker and never calls content storage', async () => {
   const { addListener, sendMessage } = installChrome();
   setSupportedCheckoutContext();
