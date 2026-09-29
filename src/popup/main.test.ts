@@ -185,6 +185,47 @@ it('confirms successful exact-site browser access removal without touching anoth
   expect(remove).toHaveBeenCalledTimes(1);
 });
 
+it('lets a user remove residual site permission when detection is off after registration fails', async () => {
+  vi.resetModules();
+  document.body.innerHTML = '<div id="app"></div>';
+  const permissions = new Set(['https://a.test/*']);
+  const remove = vi.fn(async ({ origins }: { origins: string[] }) => permissions.delete(origins[0]));
+  const contains = vi.fn(async ({ origins }: { origins: string[] }) => origins.every((origin) => permissions.has(origin)));
+  const sendMessage = vi.fn(async (message: { type: string }) => ({ ok: true, enabled: false, permitted: message.type !== 'CLEARCHOICE_SITE_REVOKE' }));
+  vi.stubGlobal('chrome', {
+    tabs: { query: vi.fn().mockResolvedValue([{ id: 42 }]), get: vi.fn().mockResolvedValue({ id: 42, url: 'https://a.test/checkout' }) },
+    permissions: { remove, contains, request: vi.fn() }, runtime: { sendMessage },
+  });
+  await import('./main');
+  const disable = document.querySelector<HTMLButtonElement>('[data-action="site-disable"]')!;
+  await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).toContain('Detection off'));
+  expect(disable.disabled).toBe(false);
+  disable.click();
+  await vi.waitFor(() => expect(remove).toHaveBeenCalledWith({ origins: ['https://a.test/*'] }));
+  expect(permissions.size).toBe(0);
+});
+
+it('keeps Disable available immediately when permission succeeds but worker registration fails', async () => {
+  vi.resetModules();
+  document.body.innerHTML = '<div id="app"></div>';
+  const sendMessage = vi.fn(async (message: { type: string }) =>
+    message.type === 'CLEARCHOICE_SITE_STATUS' ? { ok: true, enabled: false, permitted: false }
+      : { ok: false, error: 'request-failed' });
+  const request = vi.fn().mockResolvedValue(true);
+  vi.stubGlobal('chrome', {
+    tabs: { query: vi.fn().mockResolvedValue([{ id: 42 }]), get: vi.fn().mockResolvedValue({ id: 42, url: 'https://a.test/checkout' }) },
+    permissions: { request }, runtime: { sendMessage },
+  });
+  await import('./main');
+  const enable = document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')!;
+  const disable = document.querySelector<HTMLButtonElement>('[data-action="site-disable"]')!;
+  await vi.waitFor(() => expect(enable.disabled).toBe(false));
+  enable.click();
+  await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).toContain('Could not enable detection'));
+  expect(request).toHaveBeenCalledWith({ origins: ['https://a.test/*'] });
+  expect(disable.disabled).toBe(false);
+});
+
 it('uses the exact local-only initial, working, and singular successful statuses', async () => {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
