@@ -26,8 +26,10 @@ async function unregister(id: string): Promise<void> {
 }
 
 export function createGrantManager(store: Queue) {
+  // A failed browser/storage cleanup must not authorize an old scan in this worker.
+  const locallyDisabled = new Set<string>();
   async function enabled(origin: string, generation: number): Promise<boolean> {
-    if (!isGrantOrigin(origin) || !Number.isSafeInteger(generation) || generation < 1) return false;
+    if (!isGrantOrigin(origin) || locallyDisabled.has(origin) || !Number.isSafeInteger(generation) || generation < 1) return false;
     const state = await loadGrantState();
     return state.sites[origin]?.enabled === true && state.sites[origin].generation === generation
       && await chrome.permissions.contains({ origins: [match(origin)] })
@@ -36,22 +38,21 @@ export function createGrantManager(store: Queue) {
 
   async function disable(origin: string): Promise<void> {
     if (!isGrantOrigin(origin)) throw new Error('Invalid HTTPS origin');
-    const state = await loadGrantState();
-    const previous = state.sites[origin];
-    if (previous) {
-      if (previous.generation === Number.MAX_SAFE_INTEGER) throw new Error('Grant generation exhausted');
-      const next: GrantState = { version: 1, sites: { ...state.sites, [origin]: { enabled: false, generation: previous.generation + 1 } } };
-      try {
+    locallyDisabled.add(origin);
+    let failure: unknown;
+    let failed = false;
+    try {
+      const state = await loadGrantState();
+      const previous = state.sites[origin];
+      if (previous) {
+        if (previous.generation === Number.MAX_SAFE_INTEGER) throw new Error('Grant generation exhausted');
+        const next: GrantState = { version: 1, sites: { ...state.sites, [origin]: { enabled: false, generation: previous.generation + 1 } } };
         await saveGrantState(next);
-      } catch (error) {
-        // A failed local write cannot authorize a still-registered script.
-        try { await unregister(await scriptId(origin)); } catch { /* Report original failure. */ }
-        throw error;
       }
-    }
-    await unregister(await scriptId(origin));
-    // The manual bridge records document IDs in trusted session storage. Other documents
-    // cannot be targeted safely until Task 10 tracks their IDs and handles this message.
+    } catch (error) { failure = error; failed = true; }
+    try { await unregister(await scriptId(origin)); }
+    catch (error) { if (!failed) { failure = error; failed = true; } }
+    // Even a failed storage or scripting operation must not skip best-effort UI cleanup.
     try {
       const tabs = await chrome.tabs.query({});
       await Promise.all(tabs.filter((tab) => tab.id !== undefined && typeof tab.url === 'string' && (() => {
@@ -71,7 +72,8 @@ export function createGrantManager(store: Queue) {
           }
         } catch { /* Missing/expired document or listener; never broadcast to a tab. */ }
       }));
-    } catch { /* Badge and message cleanup are best effort; the persisted grant is disabled. */ }
+    } catch { /* Badge and message cleanup are best effort; the persisted grant is disabled when storage succeeds. */ }
+    if (failed) throw failure;
   }
 
   return {
@@ -86,7 +88,7 @@ export function createGrantManager(store: Queue) {
           else await unregister(id);
           throw new Error('Origin permission not granted');
         }
-        if (state.sites[origin]?.enabled && await registered(origin, id)) return state.sites[origin].generation;
+        if (state.sites[origin]?.enabled && !locallyDisabled.has(origin) && await registered(origin, id)) return state.sites[origin].generation;
         // Never leave a mismatched/old registration active while enabling.
         await unregister(id);
         const previous = state.sites[origin]?.generation ?? 0;
@@ -94,8 +96,10 @@ export function createGrantManager(store: Queue) {
         try {
           await chrome.scripting.registerContentScripts([{ id, matches: [match(origin)], js: ['content.js'], allFrames: false, persistAcrossSessions: true, world: 'ISOLATED' }]);
           await saveGrantState({ version: 1, sites: { ...state.sites, [origin]: { enabled: true, generation: previous + 1 } } });
+          locallyDisabled.delete(origin);
           return previous + 1;
         } catch (error) {
+          locallyDisabled.add(origin);
           // If a former grant was enabled, invalidate it before reporting failure.
           if (state.sites[origin]?.enabled) {
             try { await saveGrantState({ version: 1, sites: { ...state.sites, [origin]: { enabled: false, generation: previous + 1 } } }); } catch { /* A missing script still fails isEnabled. */ }
@@ -125,11 +129,13 @@ export function createGrantManager(store: Queue) {
       });
     },
     /** Invoke only for Chrome's permission-removal event; never remove another site's access. */
-    onRemoved(origins: string[]): Promise<void> {
+    onRemoved(_origins: string[]): Promise<void> {
+      // Event patterns can be broader than a saved site; inspect current permissions instead.
+      void _origins;
       return store.enqueue(async () => {
         const state = await loadGrantState();
         for (const origin of Object.keys(state.sites)) {
-          if (state.sites[origin].enabled && origins.includes(match(origin))
+          if (state.sites[origin].enabled
             && !await chrome.permissions.contains({ origins: [match(origin)] })) await disable(origin);
         }
       });

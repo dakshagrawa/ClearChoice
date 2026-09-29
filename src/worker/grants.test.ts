@@ -83,6 +83,18 @@ it('external permission removal disables A while B remains active', async () => 
   expect(f.scripts.map((script) => script.matches)).toEqual([['https://b.test/*']]);
 });
 
+it('external broad-pattern permission removal checks each site rather than comparing event text', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
+  const grants = createGrantManager(createWorkerStore());
+  await grants.enable('https://a.test'); await grants.enable('https://b.test');
+  f.allowed.delete('https://a.test/*');
+  await grants.onRemoved(['https://*/*']);
+  expect((f.data.grantState as { sites: Record<string, { enabled: boolean; generation: number }> }).sites).toEqual({
+    'https://a.test': { enabled: false, generation: 2 }, 'https://b.test': { enabled: true, generation: 1 },
+  });
+  expect(f.scripts.map((script) => script.matches)).toEqual([['https://b.test/*']]);
+});
+
 it('startup reconciliation disables stale grants and removes owned orphans', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
   const grants = createGrantManager(createWorkerStore());
@@ -105,6 +117,30 @@ it('a failed revoke write still unregisters the script and rejects the old gener
   await expect(grants.revoke('https://a.test')).rejects.toThrow('disk failure');
   expect(f.scripts).toHaveLength(0);
   expect(await grants.isEnabled('https://a.test', 1)).toBe(false);
+  expect(f.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '' });
+});
+
+it('a failed unregister still attempts badge and document cleanup after disabling the grant', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*');
+  f.session['clearchoice.document.12'] = { tabId: 12, documentId: 'doc-A', origin: 'https://a.test' };
+  const grants = createGrantManager(createWorkerStore());
+  await grants.enable('https://a.test');
+  f.unregisterContentScripts.mockRejectedValueOnce(new Error('unregister failed'));
+  await expect(grants.revoke('https://a.test')).rejects.toThrow('unregister failed');
+  expect(f.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '' });
+  expect(f.sendMessage).toHaveBeenCalledWith(12, { type: 'CLEARCHOICE_DISABLE' }, { documentId: 'doc-A' });
+  expect((f.data.grantState as { sites: Record<string, { enabled: boolean; generation: number }> }).sites['https://a.test']).toEqual({ enabled: false, generation: 2 });
+});
+
+it('failed persistence and unregister still vetoes authorization in this worker', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*');
+  const grants = createGrantManager(createWorkerStore());
+  await grants.enable('https://a.test');
+  f.set.mockRejectedValueOnce(new Error('disk failure'));
+  f.unregisterContentScripts.mockRejectedValueOnce(new Error('unregister failed'));
+  await expect(grants.revoke('https://a.test')).rejects.toThrow('disk failure');
+  expect(await grants.isEnabled('https://a.test', 1)).toBe(false);
+  expect(f.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '' });
 });
 
 it('rejects malformed persisted grants rather than enabling any site', async () => {
