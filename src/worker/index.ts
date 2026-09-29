@@ -6,10 +6,21 @@ import { createWorkerStore } from './store';
 
 const store = createWorkerStore();
 // Fail closed: no content injection until trusted-only access and queued retention read succeed.
-const ready = chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })
-  .then(() => store.readHistory()).then(() => true, () => false);
+const ready = Promise.all([
+  chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }),
+  chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }),
+]).then(() => store.readHistory()).then(() => true, () => false);
 const pending = new Map<string, { tabId: number; documentId: string; nonce: string; requestId: string; origin: string; count?: number }>();
-const authorized = new Map<number, { documentId: string; origin: string }>();
+const authorizationKey = (tabId: number): string => `clearchoice.document.${tabId}`;
+async function authorizedDocument(tabId: number, documentId: string, origin: string): Promise<boolean> {
+  const key = authorizationKey(tabId);
+  const stored = (await chrome.storage.session.get(key))[key];
+  return typeof stored === 'object' && stored !== null && !Array.isArray(stored)
+    && Object.keys(stored).length === 3 && Object.keys(stored).every((field) => ['tabId', 'documentId', 'origin'].includes(field))
+    && (stored as Record<string, unknown>).tabId === tabId
+    && (stored as Record<string, unknown>).documentId === documentId
+    && (stored as Record<string, unknown>).origin === origin;
+}
 function token(): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
@@ -54,12 +65,14 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
     }
     if (request.type === CLEARCHOICE_DISMISSED_GET || request.type === CLEARCHOICE_DISMISSED_SET) {
       if (!contentSender(sender)) return { ok: false, error: 'request-failed' };
+      const origin = senderOrigin(sender.url);
+      if (!origin) return { ok: false, error: 'request-failed' };
       const scan = pending.get(sender.documentId!);
-      const grant = authorized.get(sender.tab!.id!);
-      if (!(scan && scan.tabId === sender.tab!.id && scan.origin === senderOrigin(sender.url))
-        && !(grant && grant.documentId === sender.documentId && grant.origin === senderOrigin(sender.url)))
+      if (!(scan && scan.tabId === sender.tab!.id && scan.origin === origin)
+        && !(await authorizedDocument(sender.tab!.id!, sender.documentId!, origin)))
         return { ok: false, error: 'request-failed' };
-      if (!(await isCurrentActiveTab(sender.tab!.id!))) return { ok: false, error: 'request-failed' };
+      if (!(await isCurrentActiveTab(sender.tab!.id!))
+        || senderOrigin((await chrome.tabs.get(sender.tab!.id!)).url) !== origin) return { ok: false, error: 'request-failed' };
       if (request.type === CLEARCHOICE_DISMISSED_GET) return { ok: true, dismissed: await getDismissed() };
       await setDismissed(request.dismissed as boolean);
       return { ok: true };
@@ -82,12 +95,13 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       const tabDetails = await chrome.tabs.get(tabId);
       const origin = senderOrigin(tabDetails.url);
       if (!origin || !(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
-      pending.set(documentId, { tabId, documentId, nonce: token(), requestId: token(), origin });
+      const scan = { tabId, documentId, nonce: token(), requestId: token(), origin };
+      pending.set(documentId, scan);
       try {
         const response: unknown = await chrome.tabs.sendMessage(tabId, { type: CLEARCHOICE_RESTORE }, { documentId });
-        if (!(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
+        if (pending.get(documentId) !== scan || !(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
         return isRestoreResponse(response) ? response : { ok: false, error: 'request-failed' };
-      } finally { pending.delete(documentId); }
+      } finally { if (pending.get(documentId) === scan) pending.delete(documentId); }
     }
     const requestId = token();
     const nonce = token();
@@ -96,17 +110,19 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
     if (!origin || !(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
     // Focus and document checks are checkpoints, not atomic with the subsequent send:
     // a switch in the check-to-send interval remains a browser-level race.
-    pending.set(documentId, { tabId, documentId, nonce, requestId, origin });
+    const scan = { tabId, documentId, nonce, requestId, origin, count: undefined as number | undefined };
+    pending.set(documentId, scan);
     try {
       const response: unknown = await chrome.tabs.sendMessage(tabId, { type: CLEARCHOICE_ANALYZE, requestId, nonce }, { documentId });
-      if (!(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
+      if (pending.get(documentId) !== scan || !(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
       if (!isAnalyzeResponse(response)) return { ok: false, error: 'request-failed' };
       if (response.ok && response.status === 'supported') {
-        if (pending.get(documentId)?.count === undefined) return { ok: false, error: 'request-failed' };
-        authorized.set(tabId, { documentId, origin });
+        if (scan.count === undefined) return { ok: false, error: 'request-failed' };
+        await chrome.storage.session.set({ [authorizationKey(tabId)]: { tabId, documentId, origin } });
+        if (pending.get(documentId) !== scan) return { ok: false, error: 'request-failed' };
       }
       return response;
-    } finally { pending.delete(documentId); }
+    } finally { if (pending.get(documentId) === scan) pending.delete(documentId); }
   } catch { return { ok: false, error: 'request-failed' }; }
 }
 chrome.runtime.onMessage.addListener((message: unknown, sender, reply) => {

@@ -3,7 +3,11 @@ import { afterEach, expect, it, vi } from 'vitest';
 
 const listeners: Array<(message: unknown, sender: chrome.runtime.MessageSender, reply: (value: unknown) => void) => boolean | undefined> = [];
 const state: Record<string, unknown> = {};
+const sessionState: Record<string, unknown> = {};
 const setAccessLevel = vi.fn().mockResolvedValue(undefined);
+const sessionAccessLevel = vi.fn().mockResolvedValue(undefined);
+const sessionGet = vi.fn().mockImplementation(async (key: string) => ({ [key]: sessionState[key] }));
+const sessionSet = vi.fn().mockImplementation(async (value: Record<string, unknown>) => { Object.assign(sessionState, value); });
 const query = vi.fn().mockResolvedValue([{ id: 42 }]);
 const tabGet = vi.fn().mockResolvedValue({ id: 42, url: 'https://merchant.test/checkout' });
 const executeScript = vi.fn().mockResolvedValue([{ frameId: 0, documentId: 'doc-A', result: undefined }]);
@@ -14,14 +18,14 @@ const popup = { id: 'extension', url: 'chrome-extension://extension/popup/index.
 const content = { id: 'extension', tab: { id: 42 }, frameId: 0, documentId: 'doc-A', url: 'https://merchant.test/checkout' } as chrome.runtime.MessageSender;
 
 async function boot() {
-  vi.stubGlobal('chrome', { runtime: { id: 'extension', onMessage: { addListener: (fn: typeof listeners[number]) => listeners.push(fn) } }, tabs: { query, get: tabGet, sendMessage }, scripting: { executeScript }, storage: { local: { setAccessLevel, get, set } } });
+  vi.stubGlobal('chrome', { runtime: { id: 'extension', onMessage: { addListener: (fn: typeof listeners[number]) => listeners.push(fn) } }, tabs: { query, get: tabGet, sendMessage }, scripting: { executeScript }, storage: { local: { setAccessLevel, get, set }, session: { setAccessLevel: sessionAccessLevel, get: sessionGet, set: sessionSet } } });
   await import('./index');
   await vi.waitFor(() => expect(listeners).toHaveLength(1));
 }
 async function dispatch(message: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
   return new Promise((resolve) => { const accepted = listeners[0](message, sender, resolve); if (!accepted) resolve(undefined); });
 }
-afterEach(() => { listeners.length = 0; for (const key of Object.keys(state)) delete state[key]; vi.clearAllMocks(); query.mockResolvedValue([{ id: 42 }]); vi.resetModules(); vi.unstubAllGlobals(); });
+afterEach(() => { listeners.length = 0; for (const key of Object.keys(state)) delete state[key]; for (const key of Object.keys(sessionState)) delete sessionState[key]; vi.clearAllMocks(); query.mockResolvedValue([{ id: 42 }]); vi.resetModules(); vi.unstubAllGlobals(); });
 
 it('coordinates a popup Analyze only after trusted-only storage initialization and targets the injected top document', async () => {
   await boot();
@@ -100,6 +104,70 @@ it('allows a later dismissal only from the authenticated active document', async
   expect(await dispatch({ type: 'CLEARCHOICE_DISMISSED_SET', dismissed: true }, content)).toEqual({ ok: true });
   expect(state.dismissed).toBe(true);
   expect(await dispatch({ type: 'CLEARCHOICE_DISMISSED_SET', dismissed: false }, { ...content, documentId: 'doc-B' })).toEqual({ ok: false, error: 'request-failed' });
+});
+
+it('keeps an authenticated document dismissal after an MV3 worker restart', async () => {
+  await boot();
+  sendMessage.mockImplementationOnce(async (_tab: number, challenge: { requestId: string; nonce: string }) => {
+    const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: challenge.requestId, findings: [] };
+    expect(await dispatch({ type: 'CLEARCHOICE_SUBMIT', nonce: challenge.nonce, batch }, content)).toEqual({ ok: true, findingCount: 0 });
+    return { ok: true, status: 'supported', findingCount: 0 };
+  });
+  expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: true, status: 'supported', findingCount: 0 });
+  listeners.length = 0;
+  vi.resetModules();
+  await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_DISMISSED_SET', dismissed: true }, content)).toEqual({ ok: true });
+  expect(state.dismissed).toBe(true);
+  for (const forged of [{ ...content, documentId: 'doc-B' }, { ...content, frameId: 1 }, { ...content, url: 'https://other.test/checkout' }]) {
+    expect(await dispatch({ type: 'CLEARCHOICE_DISMISSED_SET', dismissed: false }, forged as chrome.runtime.MessageSender)).toEqual({ ok: false, error: 'request-failed' });
+  }
+  expect(state.dismissed).toBe(true);
+  tabGet.mockResolvedValueOnce({ id: 42, url: 'https://other.test/checkout' });
+  expect(await dispatch({ type: 'CLEARCHOICE_DISMISSED_SET', dismissed: false }, content)).toEqual({ ok: false, error: 'request-failed' });
+  query.mockResolvedValueOnce([{ id: 7 }]);
+  expect(await dispatch({ type: 'CLEARCHOICE_DISMISSED_SET', dismissed: false }, content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(state.dismissed).toBe(true);
+});
+
+it('fails closed if session access cannot be restricted before injection', async () => {
+  sessionAccessLevel.mockRejectedValueOnce(new Error('denied'));
+  await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: false, error: 'request-failed' });
+  expect(executeScript).not.toHaveBeenCalled();
+  expect(sessionSet).not.toHaveBeenCalled();
+});
+
+it('rejects a corrupted session grant after worker restart', async () => {
+  sessionState['clearchoice.document.42'] = { tabId: 42, documentId: 'doc-A', origin: 'https://merchant.test', extra: 'unsafe' };
+  await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_DISMISSED_SET', dismissed: true }, content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(state.dismissed).toBeUndefined();
+});
+
+it('does not let a superseded Analyze response delete or borrow the newer challenge', async () => {
+  await boot();
+  let releaseA!: (value: unknown) => void;
+  let releaseB!: () => void;
+  const submit = (challenge: { requestId: string; nonce: string }) => dispatch({
+    type: 'CLEARCHOICE_SUBMIT', nonce: challenge.nonce,
+    batch: { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: challenge.requestId, findings: [] },
+  }, content);
+  sendMessage.mockImplementationOnce(() => new Promise((resolve) => { releaseA = resolve; }));
+  sendMessage.mockImplementationOnce(async (_tab: number, challenge: { requestId: string; nonce: string }) => {
+    await new Promise<void>((resolve) => { releaseB = resolve; });
+    expect(await submit(challenge)).toEqual({ ok: true, findingCount: 0 });
+    return { ok: true, status: 'supported', findingCount: 0 };
+  });
+  const a = dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup);
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(1));
+  const b = dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup);
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledTimes(2));
+  releaseA({ ok: true, status: 'supported', findingCount: 0 });
+  expect(await a).toEqual({ ok: false, error: 'request-failed' });
+  releaseB();
+  expect(await b).toEqual({ ok: true, status: 'supported', findingCount: 0 });
+  expect(state.reviewHistory).toEqual([]);
 });
 
 it('rejects a navigation-origin change while the challenged document submits', async () => {
