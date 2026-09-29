@@ -66,7 +66,7 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
         return history.map((entry) => ({ ...entry }));
       });
     },
-    upsertFindings(request: unknown, origin: unknown): Promise<{ ids: string[] }> {
+    upsertFindings(request: unknown, origin: unknown, beforeCommit?: () => Promise<boolean>): Promise<{ ids: string[] }> {
       return enqueue(async () => {
         if (!isFindingsBatchRequest(request)) throw new Error('Invalid findings batch');
         if (!canonicalOrigin(origin)) throw new Error('Invalid canonical origin');
@@ -122,6 +122,8 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
         const receipt: BatchReceipt = { requestId: request.requestId, digest, outcome: { ids } };
         const nextReceipts = [...receipts, receipt].slice(-MAX_REVIEW_HISTORY);
         // A single payload commits history and receipt; do not cache or acknowledge on failure.
+        // The queued write boundary is the last focus/authorization checkpoint, not an atomic browser transaction.
+        if (beforeCommit && !(await beforeCommit())) throw new Error('Scan no longer authorized');
         await chrome.storage.local.set({ reviewHistory, receipts: nextReceipts });
         return { ids: [...ids] };
       });

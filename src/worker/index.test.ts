@@ -21,7 +21,7 @@ async function boot() {
 async function dispatch(message: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
   return new Promise((resolve) => { const accepted = listeners[0](message, sender, resolve); if (!accepted) resolve(undefined); });
 }
-afterEach(() => { listeners.length = 0; for (const key of Object.keys(state)) delete state[key]; vi.clearAllMocks(); vi.resetModules(); vi.unstubAllGlobals(); });
+afterEach(() => { listeners.length = 0; for (const key of Object.keys(state)) delete state[key]; vi.clearAllMocks(); query.mockResolvedValue([{ id: 42 }]); vi.resetModules(); vi.unstubAllGlobals(); });
 
 it('coordinates a popup Analyze only after trusted-only storage initialization and targets the injected top document', async () => {
   await boot();
@@ -115,10 +115,45 @@ it('rejects a navigation-origin change while the challenged document submits', a
   expect(set.mock.calls.filter(([payload]) => 'receipts' in payload)).toHaveLength(0);
 });
 
+it('does not commit a challenged finding when focus switches during the queued storage read', async () => {
+  await boot();
+  const snapshot = structuredClone(state);
+  const writes = set.mock.calls.length;
+  let releaseRead!: (value: Record<string, unknown>) => void;
+  get.mockImplementationOnce(() => new Promise((resolve) => { releaseRead = resolve; }));
+  sendMessage.mockImplementationOnce(async (_tab: number, challenge: { requestId: string; nonce: string }) => {
+    const screenedExcerpt = 'Monthly plan $10.00';
+    const opaqueFingerprint = createHash('sha256').update(`recurring-charge\0price-cadence\0${screenedExcerpt}`).digest('hex');
+    const finding = { version: 1, requestId: challenge.requestId, kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt, opaqueFingerprint, ordinal: 1 };
+    const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: challenge.requestId, findings: [finding] };
+    const submission = dispatch({ type: 'CLEARCHOICE_SUBMIT', nonce: challenge.nonce, batch }, content);
+    await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    query.mockResolvedValue([{ id: 7 }]);
+    releaseRead({ ...state });
+    expect(await submission).toEqual({ ok: false, error: 'request-failed' });
+    return { ok: true, status: 'supported', findingCount: 1 };
+  });
+  expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: false, error: 'request-failed' });
+  expect(set).toHaveBeenCalledTimes(writes);
+  expect(state).toEqual(snapshot);
+});
+
 it.each(['Cannot access a PDF document.', 'The extensions gallery cannot be scripted.', 'script failed'])('reports restricted and generic injection failures without messaging: %s', async (reason) => {
   await boot();
   executeScript.mockRejectedValueOnce(new Error(reason));
   expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: false, error: reason === 'script failed' ? 'injection-failed' : 'restricted-page' });
+  expect(sendMessage).not.toHaveBeenCalled();
+});
+
+it('does not message an injected document when focus switches while injection is unresolved', async () => {
+  await boot();
+  let releaseInjection!: (value: chrome.scripting.InjectionResult[]) => void;
+  executeScript.mockImplementationOnce(() => new Promise((resolve) => { releaseInjection = resolve; }));
+  const analysis = dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup);
+  await vi.waitFor(() => expect(executeScript).toHaveBeenCalledTimes(1));
+  query.mockResolvedValue([{ id: 7 }]);
+  releaseInjection([{ frameId: 0, documentId: 'doc-A', result: undefined }]);
+  expect(await analysis).toEqual({ ok: false, error: 'request-failed' });
   expect(sendMessage).not.toHaveBeenCalled();
 });
 

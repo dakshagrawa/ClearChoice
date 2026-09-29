@@ -40,7 +40,14 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       if (!scan || scan.tabId !== sender.tab!.id || scan.nonce !== request.nonce
         || scan.requestId !== batch.requestId || senderOrigin(sender.url) !== scan.origin
         || !(await isCurrentActiveTab(scan.tabId))) return { ok: false, error: 'request-failed' };
-      const result = await store.upsertFindings(request.batch, scan.origin);
+      const result = await store.upsertFindings(request.batch, scan.origin, async () => {
+        if (pending.get(scan.documentId) !== scan || scan.tabId !== sender.tab?.id
+          || scan.documentId !== sender.documentId || scan.nonce !== request.nonce
+          || scan.requestId !== batch.requestId || senderOrigin(sender.url) !== scan.origin) return false;
+        const tabDetails = await chrome.tabs.get(scan.tabId);
+        return senderOrigin(tabDetails.url) === scan.origin && pending.get(scan.documentId) === scan
+          && await isCurrentActiveTab(scan.tabId);
+      });
       if (!(await isCurrentActiveTab(scan.tabId))) return { ok: false, error: 'request-failed' };
       scan.count = result.ids.length;
       return { ok: true, findingCount: result.ids.length };

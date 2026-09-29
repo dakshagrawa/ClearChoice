@@ -74,6 +74,24 @@ it('accepts distinct evidence with its own fingerprint and replays the identical
   expect(clock).toHaveBeenCalledTimes(2);
 });
 
+it('a commit veto leaves history and receipts unchanged while an identical receipt replay skips the checkpoint', async () => {
+  const storage = fakeStorage();
+  Object.assign(storage.data, { version: 1, subscriptions: [], reviewHistory: [], receipts: [], retentionPolicy: 30 });
+  const store = createWorkerStore();
+  const beforeCommit = vi.fn(async () => false);
+  const snapshot = structuredClone(storage.data);
+  await expect(store.upsertFindings(batch('req-1'), 'https://example.com', beforeCommit))
+    .rejects.toThrow('no longer authorized');
+  expect(beforeCommit).toHaveBeenCalledTimes(1);
+  expect(storage.data).toEqual(snapshot);
+  expect(storage.set).not.toHaveBeenCalled();
+  const first = await store.upsertFindings(batch('req-1'), 'https://example.com');
+  const writes = storage.set.mock.calls.length;
+  await expect(store.upsertFindings(batch('req-1'), 'https://example.com', beforeCommit)).resolves.toEqual(first);
+  expect(beforeCommit).toHaveBeenCalledTimes(1);
+  expect(storage.set).toHaveBeenCalledTimes(writes);
+});
+
 it('writes history and receipt in exactly one payload on a versioned store', async () => {
   const storage = fakeStorage();
   Object.assign(storage.data, { version: 1, subscriptions: [], reviewHistory: [] });
