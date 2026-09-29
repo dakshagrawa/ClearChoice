@@ -88,6 +88,53 @@ it.each(['wrong nonce', 'wrong request', 'surplus', 'failed target'])('rejects %
   expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
 });
 
+it('recovers initialization in the same worker after transient trusted-storage setup errors', async () => {
+  setAccessLevel.mockRejectedValueOnce(new Error('temporary setup error'));
+  await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_STATUS', origin: 'https://merchant.test' }, popup))
+    .toEqual({ ok: true, enabled: false, permitted: false });
+  expect(setAccessLevel).toHaveBeenCalledTimes(2);
+});
+
+it('classifies a false semantic fingerprint as nonretryable without persisting it', async () => {
+  await enabledAuto();
+  const altered = autoRequest();
+  altered.batch.findings[0].opaqueFingerprint = 'a'.repeat(64);
+  expect(await dispatch(altered, content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
+});
+
+it('classifies a request ID collision as nonretryable without rewriting history', async () => {
+  await enabledAuto();
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });
+  const prior = structuredClone(state);
+  const collision = autoRequest();
+  collision.batch.findings[0].ordinal = 2;
+  expect(await dispatch(collision, content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(state).toEqual(prior);
+});
+
+it('reports exhausted review capacity as nonretryable without a partial 501st record', async () => {
+  await enabledAuto();
+  const requestFor = (group: number) => {
+    const requestId = `auto-cap-${group}`;
+    const findings = Array.from({ length: 100 }, (_, index) => {
+      const screenedExcerpt = `Monthly plan $10.00 item ${group}-${index}`;
+      return { version: 1, requestId, kind: 'recurring-charge', reason: 'price-cadence',
+        screenedExcerpt, opaqueFingerprint: createHash('sha256').update(`recurring-charge\0price-cadence\0${screenedExcerpt}`).digest('hex'), ordinal: 1 };
+    });
+    return { type: 'CLEARCHOICE_AUTO_SUBMIT', version: 1, generation: 1,
+      batch: { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId, findings } };
+  };
+  for (let group = 0; group < 5; group++) {
+    expect(await dispatch(requestFor(group), content)).toEqual({ ok: true, findingCount: 100 });
+  }
+  const prior = structuredClone(state);
+  expect(await dispatch(requestFor(5), content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(state).toEqual(prior);
+  expect(state.reviewHistory).toHaveLength(500);
+});
+
 it('reports a transient initial grant checkpoint read failure as retryable without writing', async () => {
   await enabledAuto();
   get.mockRejectedValueOnce(new Error('temporary grant storage failure'));
@@ -99,7 +146,9 @@ it('reports a transient initial grant checkpoint read failure as retryable witho
 
 it('identifies an unavailable worker initialization as retryable only for a valid automatic sender', async () => {
   grantedOrigins.add('https://merchant.test/*');
-  setAccessLevel.mockRejectedValueOnce(new Error('temporary storage setup error'));
+  setAccessLevel.mockRejectedValueOnce(new Error('temporary storage setup error'))
+    .mockRejectedValueOnce(new Error('temporary storage setup error'))
+    .mockRejectedValueOnce(new Error('temporary storage setup error'));
   await boot();
   expect(await dispatch(autoRequest(), content)).toEqual({ ok: false, error: 'retryable-failure' });
   expect(await dispatch(autoRequest(), { ...content, id: 'other' })).toEqual({ ok: false, error: 'request-failed' });
@@ -295,7 +344,8 @@ it('coordinates a popup Analyze only after trusted-only storage initialization a
 });
 
 it('fails closed on storage access-level rejection without injecting or writing', async () => {
-  setAccessLevel.mockRejectedValueOnce(new Error('denied'));
+  setAccessLevel.mockRejectedValueOnce(new Error('denied')).mockRejectedValueOnce(new Error('denied'))
+    .mockRejectedValueOnce(new Error('denied'));
   await boot();
   expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: false, error: 'request-failed' });
   expect(executeScript).not.toHaveBeenCalled();
@@ -401,7 +451,8 @@ it('keeps an authenticated document dismissal after an MV3 worker restart', asyn
 });
 
 it('fails closed if session access cannot be restricted before injection', async () => {
-  sessionAccessLevel.mockRejectedValueOnce(new Error('denied'));
+  sessionAccessLevel.mockRejectedValueOnce(new Error('denied')).mockRejectedValueOnce(new Error('denied'))
+    .mockRejectedValueOnce(new Error('denied'));
   await boot();
   expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: false, error: 'request-failed' });
   expect(executeScript).not.toHaveBeenCalled();

@@ -16,6 +16,8 @@ async function sha256(value: unknown): Promise<string> {
 }
 
 /** In-worker only: storage.local is not a transaction against other writers/processes. */
+export class NonRetryableFindingError extends Error {}
+
 export class ScanAuthorizationError extends Error {
   constructor() { super('Scan no longer authorized'); }
 }
@@ -74,15 +76,15 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
     },
     upsertFindings(request: unknown, origin: unknown, beforeCommit?: () => Promise<boolean>): Promise<{ ids: string[] }> {
       return enqueue(async () => {
-        if (!isFindingsBatchRequest(request)) throw new Error('Invalid findings batch');
-        if (!canonicalOrigin(origin)) throw new Error('Invalid canonical origin');
+        if (!isFindingsBatchRequest(request)) throw new NonRetryableFindingError('Invalid findings batch');
+        if (!canonicalOrigin(origin)) throw new NonRetryableFindingError('Invalid canonical origin');
         // Authenticate every DTO before any read/write, including receipt replays.
         for (const finding of request.findings) {
           if (finding.opaqueFingerprint !== await semanticFingerprint(finding))
-            throw new Error('Invalid semantic fingerprint');
+            throw new NonRetryableFindingError('Invalid semantic fingerprint');
         }
         const identities = request.findings.map((finding) => `${finding.opaqueFingerprint}:${finding.ordinal}`);
-        if (new Set(identities).size !== identities.length) throw new Error('Duplicate finding identity');
+        if (new Set(identities).size !== identities.length) throw new NonRetryableFindingError('Duplicate finding identity');
         // Digest all validated DTO fields in wire order, not a sorted or lossy subset.
         const digest = await sha256([origin, request.findings.map((finding) => [
           finding.version, finding.requestId, finding.kind, finding.reason,
@@ -93,9 +95,9 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
         const { state, receipts } = await loadReviewStoreState();
         const prior = receipts.find((entry) => entry.requestId === request.requestId);
         if (prior) {
-          if (prior.digest !== digest) throw new Error('Request ID collision');
+          if (prior.digest !== digest) throw new NonRetryableFindingError('Request ID collision');
           if (prior.outcome.ids.length !== ids.length || prior.outcome.ids.some((id, index) => id !== ids[index]))
-            throw new Error('Corrupt receipt outcome');
+            throw new NonRetryableFindingError('Corrupt receipt outcome');
           if (beforeCommit && !(await beforeCommit())) throw new ScanAuthorizationError();
           return { ids: [...prior.outcome.ids] };
         }
@@ -109,7 +111,7 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
           const current: FindingRecord | undefined = reviewHistory.find((entry) => entry.id === id);
           if (current) {
             if (current.origin !== origin || current.opaqueFingerprint !== finding.opaqueFingerprint
-              || current.ordinal !== finding.ordinal) throw new Error('Finding ID collision');
+              || current.ordinal !== finding.ordinal) throw new NonRetryableFindingError('Finding ID collision');
             if (timestamp < current.latestSeen) throw new Error('Clock precedes latest observation');
             current.kind = finding.kind;
             current.reason = finding.reason;
@@ -124,8 +126,8 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
             });
           }
         }
-        if (reviewHistory.length > MAX_REVIEW_HISTORY) throw new Error('Review history capacity exceeded');
-        if (!isFindingHistory(reviewHistory)) throw new Error('Invalid review history');
+        if (reviewHistory.length > MAX_REVIEW_HISTORY) throw new NonRetryableFindingError('Review history capacity exceeded');
+        if (!isFindingHistory(reviewHistory)) throw new NonRetryableFindingError('Invalid review history');
         const receipt: BatchReceipt = { requestId: request.requestId, digest, outcome: { ids } };
         const nextReceipts = [...receipts, receipt].slice(-MAX_REVIEW_HISTORY);
         // A single payload commits history and receipt; do not cache or acknowledge on failure.

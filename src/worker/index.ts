@@ -2,7 +2,7 @@ import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_S
 import { canonicalOrigin } from '../shared/models';
 import { getDismissed, setDismissed, loadGrantState } from '../shared/storage';
 import { isCurrentActiveTab } from '../shared/tab-analysis';
-import { createWorkerStore, ScanAuthorizationError } from './store';
+import { createWorkerStore, NonRetryableFindingError, ScanAuthorizationError } from './store';
 import { createGrantManager } from './grants';
 
 const store = createWorkerStore();
@@ -12,11 +12,25 @@ chrome.permissions.onRemoved.addListener((removed) => {
     // No authorization is granted from this event; the next startup retries reconciliation.
   });
 });
-// Fail closed: no content injection until trusted-only access, retention read and grant reconciliation succeed.
-const ready = Promise.all([
-  chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }),
-  chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }),
-]).then(() => store.readHistory()).then(() => grants.reconcile()).then(() => true, () => false);
+// Fail closed: retry failed setup on the next request, but share each in-flight attempt.
+async function initialize(): Promise<boolean> {
+  try {
+    const access = await Promise.allSettled([
+      chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }),
+      chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }),
+    ]);
+    if (access.some((entry) => entry.status === 'rejected')) return false;
+    await store.readHistory();
+    await grants.reconcile();
+    return true;
+  } catch { return false; }
+}
+let ready: Promise<boolean> | undefined;
+function ensureReady(): Promise<boolean> {
+  if (!ready) ready = initialize().then((ok) => { if (!ok) ready = undefined; return ok; });
+  return ready;
+}
+void ensureReady();
 const pending = new Map<string, { tabId: number; documentId: string; nonce: string; requestId: string; origin: string; count?: number }>();
 const authorizationKey = (tabId: number): string => `clearchoice.document.${tabId}`;
 async function authorizedDocument(tabId: number, documentId: string, origin: string): Promise<boolean> {
@@ -48,7 +62,7 @@ function popupSender(sender: chrome.runtime.MessageSender): boolean {
 }
 async function handle(message: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
   try {
-    if (!(await ready)) return isAutomaticObservation(message) && contentSender(sender)
+    if (!(await ensureReady())) return isAutomaticObservation(message) && contentSender(sender)
       ? { ok: false, error: 'retryable-failure' } : { ok: false, error: 'request-failed' };
     if (!isWorkerRequest(message)) return { ok: false, error: 'request-failed' };
     const request = message as Record<string, unknown>;
@@ -89,7 +103,8 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
         result = await store.upsertFindings(message.batch, origin, async () =>
           await checkpoint() && await challenge() && await checkpoint());
       } catch (error) {
-        return { ok: false, error: error instanceof ScanAuthorizationError ? 'request-failed' : 'retryable-failure' };
+        return { ok: false, error: error instanceof ScanAuthorizationError || error instanceof NonRetryableFindingError
+          ? 'request-failed' : 'retryable-failure' };
       }
       return { ok: true, findingCount: result.ids.length };
     }
