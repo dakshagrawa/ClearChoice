@@ -53,7 +53,7 @@ export function isFindingDto(value: unknown): value is FindingDto {
 }
 
 /** Fingerprinting belongs to the content-side batch producer (Task 3), not this DTO. */
-export function toFindingDto(raw: Finding, requestId: string, ordinal: number, opaqueFingerprint = ''): FindingDto | null {
+export function toFindingDto(raw: Finding, requestId: string, ordinal: number, opaqueFingerprint: string): FindingDto | null {
   if (typeof raw.evidence !== 'string' || hasUnsafeControl(raw.evidence)
     || URL.test(raw.evidence) || hasSensitiveDisplayData(raw.evidence)) return null;
   const normalized = normalizeVisibleText(raw.evidence);

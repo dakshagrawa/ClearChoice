@@ -1,7 +1,8 @@
 import { expect, it } from 'vitest';
 
+import { hasSensitiveDisplayData } from '../core/sensitive';
 import type { Finding } from '../core/types';
-import { isFindingDto, isFindingDtoBatch, toFindingDto } from './finding-dto';
+import { isFindingDto, isFindingDtoBatch, MAX_EXCERPT_LENGTH, toFindingDto } from './finding-dto';
 
 const rawFinding: Finding = {
   id: 'local-only', kind: 'recurring-charge', reason: 'price-cadence', severity: 'notice',
@@ -9,11 +10,15 @@ const rawFinding: Finding = {
   evidence: '$10 per month', selector: '#private',
 };
 
-it('rejects the whole candidate when its evidence includes a masked card', () => {
-  expect(toFindingDto({ ...rawFinding, evidence: '$10 per month card •••• 1234' }, 'req-1', 1)).toBeNull();
+const fingerprint = 'a'.repeat(64);
+
+it('accepts safe evidence but rejects a masked card with the same valid fingerprint', () => {
+  expect(toFindingDto(rawFinding, 'req-1', 1, fingerprint)).not.toBeNull();
+  expect(toFindingDto({ ...rawFinding, evidence: '$10 per month card •••• 1234' }, 'req-1', 1, fingerprint)).toBeNull();
 });
 
-const fingerprint = 'a'.repeat(64);
+// @ts-expect-error A fingerprint must be supplied at the producer boundary.
+void (() => toFindingDto(rawFinding, 'req-1', 1));
 const valid = () => toFindingDto(rawFinding, 'req-1', 1, fingerprint)!;
 
 it('serializes only seven safe keys and normalized visible static text', () => {
@@ -36,6 +41,17 @@ it('screens the entire source before truncation, not merely the excerpt', () => 
   for (const evidence of [`${'A'.repeat(160)} email jane@example.com`, `${'A'.repeat(160)} card •••• 1234`]) {
     expect(toFindingDto({ ...rawFinding, evidence }, 'req-1', 1, fingerprint)).toBeNull();
   }
+});
+
+it('rejects a PAN exposed only by truncating a longer contiguous number', () => {
+  // The full 20-digit run has no 12–19-digit word-bounded PAN match; the cut leaves 16 digits.
+  const evidence = `${'A'.repeat(MAX_EXCERPT_LENGTH - 17)} ${'1'.repeat(20)}`;
+  const excerpt = evidence.slice(0, MAX_EXCERPT_LENGTH);
+  expect(hasSensitiveDisplayData(evidence)).toBe(false);
+  expect(excerpt).toHaveLength(MAX_EXCERPT_LENGTH);
+  expect(hasSensitiveDisplayData(excerpt)).toBe(true);
+  expect(isFindingDto({ ...valid(), screenedExcerpt: excerpt })).toBe(false);
+  expect(toFindingDto({ ...rawFinding, evidence }, 'req-1', 1, fingerprint)).toBeNull();
 });
 
 it('rejects sensitive excerpt supplied directly to the wire validator', () => {
