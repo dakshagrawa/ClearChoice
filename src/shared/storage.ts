@@ -1,6 +1,6 @@
-import { isFindingHistory, isSubscriptionCollection, MAX_REVIEW_HISTORY } from './models';
+import { DEFAULT_RETENTION_POLICY, isFindingHistory, isRetentionPolicy, isSubscriptionCollection, MAX_REVIEW_HISTORY } from './models';
 import { isValidRequestId, MAX_FINDING_BATCH } from './finding-dto';
-import type { FindingRecord, Subscription } from './models';
+import type { FindingRecord, RetentionPolicy, Subscription } from './models';
 
 export const LOCAL_STATE_VERSION = 1 as const;
 
@@ -9,6 +9,7 @@ export interface LocalState {
   dismissed: boolean;
   subscriptions: Subscription[];
   reviewHistory: FindingRecord[];
+  retentionPolicy: RetentionPolicy;
 }
 
 export interface BatchReceipt {
@@ -44,6 +45,8 @@ async function readLocalState(): Promise<{ state: LocalState; receipts: BatchRec
   if (has('version') && stored.version !== LOCAL_STATE_VERSION) throw new Error('Unsupported local state version');
   if (has('subscriptions') && !isSubscriptionCollection(stored.subscriptions)) throw new Error('Corrupt local subscriptions');
   if (has('reviewHistory') && !isFindingHistory(stored.reviewHistory)) throw new Error('Corrupt local review history');
+  if (has('retentionPolicy') && !isRetentionPolicy(stored.retentionPolicy)) throw new Error('Corrupt local retention policy');
+  if (has('retentionPolicy') && !has('version')) throw new Error('Unversioned local retention policy');
   if (has('receipts') && !isReceipts(stored.receipts)) throw new Error('Corrupt local receipts');
   if (has('receipts') && !has('version')) throw new Error('Unversioned local receipts');
   if (!has('version') && (has('subscriptions') || has('reviewHistory'))) throw new Error('Unversioned local records');
@@ -53,9 +56,10 @@ async function readLocalState(): Promise<{ state: LocalState; receipts: BatchRec
     dismissed: stored.dismissed === true,
     subscriptions: has('subscriptions') ? stored.subscriptions as Subscription[] : [],
     reviewHistory: has('reviewHistory') ? stored.reviewHistory as FindingRecord[] : [],
+    retentionPolicy: has('retentionPolicy') ? stored.retentionPolicy as RetentionPolicy : DEFAULT_RETENTION_POLICY,
   };
   if (!has('version')) {
-    await chrome.storage.local.set({ version: state.version, subscriptions: [], reviewHistory: [] });
+    await chrome.storage.local.set({ version: state.version, subscriptions: [], reviewHistory: [], retentionPolicy: state.retentionPolicy });
   }
   return { state, receipts: has('receipts') ? stored.receipts as BatchReceipt[] : [] };
 }

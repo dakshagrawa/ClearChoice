@@ -1,6 +1,6 @@
 import { isFindingsBatchRequest } from '../shared/messages';
-import { canonicalOrigin, isFindingHistory, MAX_REVIEW_HISTORY } from '../shared/models';
-import type { FindingRecord } from '../shared/models';
+import { canonicalOrigin, isFindingHistory, isRetentionPolicy, MAX_REVIEW_HISTORY } from '../shared/models';
+import type { FindingRecord, RetentionPolicy } from '../shared/models';
 import { loadReviewStoreState } from '../shared/storage';
 import type { BatchReceipt } from '../shared/storage';
 import { semanticFingerprint } from '../shared/semantic-fingerprint';
@@ -24,7 +24,48 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
     return result;
   }
 
+  function currentTime(): number {
+    const now = (options.now ?? (() => new Date()))();
+    if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new Error('Invalid clock');
+    return now.getTime();
+  }
+
+  // Exact 24-hour UTC intervals; latestSeen at or before the instant expires.
+  function retained(history: FindingRecord[], policy: RetentionPolicy, time: number): FindingRecord[] {
+    return policy === 'never' ? history : history.filter((entry) =>
+      Date.parse(entry.latestSeen) > time - policy * 86_400_000);
+  }
+
   return {
+    setRetentionPolicy(policy: unknown): Promise<void> {
+      return enqueue(async () => {
+        if (!isRetentionPolicy(policy)) throw new Error('Invalid retention policy');
+        const { state } = await loadReviewStoreState();
+        const reviewHistory = retained(state.reviewHistory, policy, currentTime());
+        await chrome.storage.local.set({ retentionPolicy: policy, reviewHistory });
+      });
+    },
+    markReviewed(id: unknown): Promise<void> {
+      return enqueue(async () => {
+        if (typeof id !== 'string' || !/^f_[a-f0-9]{64}$/.test(id)) throw new Error('Invalid finding ID');
+        const { state } = await loadReviewStoreState();
+        const reviewHistory = retained(state.reviewHistory, state.retentionPolicy, currentTime())
+          .map((entry) => ({ ...entry }));
+        const entry = reviewHistory.find((item) => item.id === id);
+        if (!entry) throw new Error('Finding not found');
+        if (entry.status === 'reviewed' && reviewHistory.length === state.reviewHistory.length) return;
+        entry.status = 'reviewed';
+        await chrome.storage.local.set({ reviewHistory });
+      });
+    },
+    readHistory(): Promise<FindingRecord[]> {
+      return enqueue(async () => {
+        const { state } = await loadReviewStoreState();
+        const history = retained(state.reviewHistory, state.retentionPolicy, currentTime());
+        if (history.length !== state.reviewHistory.length) await chrome.storage.local.set({ reviewHistory: history });
+        return history.map((entry) => ({ ...entry }));
+      });
+    },
     upsertFindings(request: unknown, origin: unknown): Promise<{ ids: string[] }> {
       return enqueue(async () => {
         if (!isFindingsBatchRequest(request)) throw new Error('Invalid findings batch');
@@ -54,7 +95,8 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
         const now = (options.now ?? (() => new Date()))();
         if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new Error('Invalid clock');
         const timestamp = now.toISOString();
-        const reviewHistory: FindingRecord[] = state.reviewHistory.map((entry) => ({ ...entry }));
+        const reviewHistory: FindingRecord[] = retained(state.reviewHistory, state.retentionPolicy, now.getTime())
+          .map((entry) => ({ ...entry }));
         for (const [index, finding] of request.findings.entries()) {
           const id = ids[index];
           const current: FindingRecord | undefined = reviewHistory.find((entry) => entry.id === id);

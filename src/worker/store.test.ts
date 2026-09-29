@@ -262,3 +262,151 @@ it('rejects invalid and backwards clocks before committing', async () => {
     .upsertFindings(batch('req-2'), 'https://example.com')).rejects.toThrow('Clock precedes');
   expect(storage.data).toEqual(snapshot);
 });
+
+it('retention settings 7, 30, 90 and never use the inclusive latestSeen cutoff', async () => {
+  for (const [policy, expected] of [[7, 0], [30, 0], [90, 1], ['never', 1]] as const) {
+    const storage = fakeStorage();
+    await createWorkerStore({ now: () => new Date('2026-08-30T12:00:00.000Z') })
+      .upsertFindings(batch('req-old'), 'https://example.com');
+    storage.data.subscriptions = [{ id: 'sub-1', merchant: 'Market', amount: '12.50', currency: 'USD',
+      cadence: 'monthly', createdAt: '2026-08-30T12:00:00.000Z', updatedAt: '2026-08-30T12:00:00.000Z' }];
+    const store = createWorkerStore({ now: () => new Date('2026-09-29T12:00:00.000Z') });
+    await store.setRetentionPolicy(policy);
+    expect(storage.data.subscriptions).toHaveLength(1);
+    expect(storage.data.retentionPolicy).toBe(policy);
+    expect(await store.readHistory()).toHaveLength(expected);
+  }
+});
+
+it('mark reviewed persists and a later scan retains status and firstSeen', async () => {
+  const storage = fakeStorage();
+  const clock = vi.fn().mockReturnValueOnce(new Date('2026-09-28T12:00:00.000Z'))
+    .mockReturnValueOnce(new Date('2026-09-28T12:00:00.000Z'))
+    .mockReturnValueOnce(new Date('2026-09-29T12:00:00.000Z'));
+  const store = createWorkerStore({ now: clock });
+  const { ids } = await store.upsertFindings(batch('req-1'), 'https://example.com');
+  await store.markReviewed(ids[0]);
+  await store.upsertFindings(batch('req-2'), 'https://example.com');
+  expect(storage.data.reviewHistory).toEqual([expect.objectContaining({
+    id: ids[0], status: 'reviewed', firstSeen: '2026-09-28T12:00:00.000Z',
+    latestSeen: '2026-09-29T12:00:00.000Z',
+  })]);
+});
+
+it('retention on upsert expires old records atomically with new history and receipt, but receipt replay is unchanged', async () => {
+  const storage = fakeStorage();
+  const old = await createWorkerStore({ now: () => new Date('2026-08-30T12:00:00.000Z') })
+    .upsertFindings(batch('req-old'), 'https://example.com');
+  const store = createWorkerStore({ now: () => new Date('2026-09-29T12:00:00.000Z') });
+  const next = { ...batch('req-new'), findings: [evidence('req-new', 'Annual plan $10.00')] };
+  const result = await store.upsertFindings(next, 'https://example.com');
+  expect(storage.data.reviewHistory).toEqual([expect.objectContaining({ id: result.ids[0] })]);
+  expect(result.ids[0]).not.toBe(old.ids[0]);
+  expect(storage.data.receipts).toHaveLength(2);
+  const snapshot = structuredClone(storage.data);
+  const writes = storage.set.mock.calls.length;
+  await expect(store.upsertFindings(next, 'https://example.com')).resolves.toEqual(result);
+  expect(storage.data).toEqual(snapshot);
+  expect(storage.set).toHaveBeenCalledTimes(writes);
+});
+
+it('retention read expires latestSeen at the inclusive 30-day UTC instant without touching subscriptions', async () => {
+  const storage = fakeStorage();
+  const first = await createWorkerStore({ now: () => new Date('2026-08-30T12:00:00.000Z') })
+    .upsertFindings(batch('req-old'), 'https://example.com');
+  storage.data.subscriptions = [{ id: 'sub-1', merchant: 'Market', amount: '12.50', currency: 'USD',
+    cadence: 'monthly', createdAt: '2026-08-30T12:00:00.000Z', updatedAt: '2026-08-30T12:00:00.000Z',
+    sourceFindingId: first.ids[0] }];
+  const store = createWorkerStore({ now: () => new Date('2026-09-29T12:00:00.000Z') });
+  await expect(store.readHistory()).resolves.toEqual([]);
+  expect(storage.data.reviewHistory).toEqual([]);
+  expect(storage.data.subscriptions).toHaveLength(1);
+  expect(storage.data.receipts).toHaveLength(1);
+});
+
+it('retention keeps the last millisecond before cutoff and expires exactly at cutoff', async () => {
+  const storage = fakeStorage();
+  const store = createWorkerStore({ now: () => new Date('2026-09-29T12:00:00.000Z') });
+  await createWorkerStore({ now: () => new Date('2026-08-30T12:00:00.001Z') })
+    .upsertFindings(batch('req-1'), 'https://example.com');
+  expect(await store.readHistory()).toHaveLength(1);
+  (storage.data.reviewHistory as Array<{ latestSeen: string; firstSeen: string }>)[0].latestSeen = '2026-08-30T12:00:00.000Z';
+  (storage.data.reviewHistory as Array<{ latestSeen: string; firstSeen: string }>)[0].firstSeen = '2026-08-30T12:00:00.000Z';
+  expect(await store.readHistory()).toHaveLength(0);
+});
+
+it('retention rejects unsupported settings and corrupt persisted policy without writes', async () => {
+  const storage = fakeStorage();
+  Object.assign(storage.data, { version: 1, subscriptions: [], reviewHistory: [], receipts: [] });
+  const store = createWorkerStore();
+  for (const invalid of [31, -7, 0, '30', 'forever', null]) {
+    await expect(store.setRetentionPolicy(invalid)).rejects.toThrow('Invalid retention');
+  }
+  expect(storage.set).not.toHaveBeenCalled();
+  storage.data.retentionPolicy = 31;
+  const snapshot = structuredClone(storage.data);
+  await expect(store.readHistory()).rejects.toThrow('Corrupt local retention');
+  await expect(store.setRetentionPolicy(30)).rejects.toThrow('Corrupt local retention');
+  await expect(store.upsertFindings(batch('req-1'), 'https://example.com')).rejects.toThrow('Corrupt local retention');
+  expect(storage.data).toEqual(snapshot);
+  expect(storage.set).not.toHaveBeenCalled();
+});
+
+it('retention write failures leave settings, history, and receipts unchanged and allow retry', async () => {
+  const storage = fakeStorage();
+  await createWorkerStore({ now: () => new Date('2026-08-30T12:00:00.000Z') })
+    .upsertFindings(batch('req-1'), 'https://example.com');
+  const snapshot = structuredClone(storage.data);
+  const store = createWorkerStore({ now: () => new Date('2026-09-29T12:00:00.000Z') });
+  storage.set.mockRejectedValueOnce(new Error('quota exceeded'));
+  await expect(store.setRetentionPolicy(7)).rejects.toThrow('quota exceeded');
+  expect(storage.data).toEqual(snapshot);
+  storage.set.mockRejectedValueOnce(new Error('quota exceeded'));
+  await expect(store.readHistory()).rejects.toThrow('quota exceeded');
+  expect(storage.data).toEqual(snapshot);
+  await store.setRetentionPolicy('never');
+  expect(await store.readHistory()).toHaveLength(1);
+});
+
+it('never retention still refuses the 501st distinct record without evicting or recording a receipt', async () => {
+  const storage = fakeStorage();
+  const store = createWorkerStore({ now: () => new Date('2026-09-29T12:00:00.000Z') });
+  await store.setRetentionPolicy('never');
+  for (let scan = 0; scan < 5; scan++) {
+    const requestId = `req-${scan}`;
+    await store.upsertFindings({ ...batch(requestId), findings: Array.from({ length: 100 }, (_, index) =>
+      evidence(requestId, `Monthly plan $10.00 item ${scan * 100 + index}`)) }, 'https://example.com');
+  }
+  const snapshot = structuredClone(storage.data);
+  await expect(store.upsertFindings(batch('req-overflow'), 'https://other.example'))
+    .rejects.toThrow('capacity');
+  expect(storage.data).toEqual(snapshot);
+  expect(storage.data.reviewHistory).toHaveLength(500);
+});
+
+it('retention setting and scan serialize so a concurrent scan uses the new cutoff', async () => {
+  const storage = fakeStorage();
+  await createWorkerStore({ now: () => new Date('2026-09-19T12:00:00.000Z') })
+    .upsertFindings(batch('req-old'), 'https://example.com');
+  const store = createWorkerStore({ now: () => new Date('2026-09-29T12:00:00.000Z') });
+  const [, next] = await Promise.all([
+    store.setRetentionPolicy(7),
+    store.upsertFindings({ ...batch('req-new'), findings: [evidence('req-new', 'Annual plan $10.00')] }, 'https://example.com'),
+  ]);
+  expect(storage.data.retentionPolicy).toBe(7);
+  expect(storage.data.reviewHistory).toEqual([expect.objectContaining({ id: next.ids[0] })]);
+  expect(storage.data.receipts).toHaveLength(2);
+});
+
+it('retention review status failure does not mark record or mutate receipt', async () => {
+  const storage = fakeStorage();
+  const store = createWorkerStore({ now: () => new Date('2026-09-29T12:00:00.000Z') });
+  const { ids } = await store.upsertFindings(batch('req-1'), 'https://example.com');
+  const snapshot = structuredClone(storage.data);
+  storage.set.mockRejectedValueOnce(new Error('quota exceeded'));
+  await expect(store.markReviewed(ids[0])).rejects.toThrow('quota exceeded');
+  expect(storage.data).toEqual(snapshot);
+  await expect(store.markReviewed('bad-id')).rejects.toThrow('Invalid finding ID');
+  await store.markReviewed(ids[0]);
+  expect((storage.data.reviewHistory as Array<{ status: string }>)[0].status).toBe('reviewed');
+});

@@ -5,6 +5,12 @@ import type { FindingKind, FindingReason } from '../core/types';
 
 export const MAX_REVIEW_HISTORY = 500;
 export const MAX_SUBSCRIPTIONS = 500;
+export type RetentionPolicy = 7 | 30 | 90 | 'never';
+export const DEFAULT_RETENTION_POLICY: RetentionPolicy = 30;
+
+export function isRetentionPolicy(value: unknown): value is RetentionPolicy {
+  return value === 7 || value === 30 || value === 90 || value === 'never';
+}
 
 export interface Subscription {
   id: string;

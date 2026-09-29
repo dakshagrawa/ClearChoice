@@ -47,7 +47,7 @@ it('round-trips an explicitly saved manual subscription without inventing source
 
   await saveConfirmedSubscriptions([manual]);
   expect(await loadLocalState()).toEqual({
-    version: 1, dismissed: false, subscriptions: [manual], reviewHistory: [],
+    version: 1, dismissed: false, subscriptions: [manual], reviewHistory: [], retentionPolicy: 30,
   });
   expect(data.subscriptions).toEqual([manual]);
   expect(data.reviewHistory).toEqual([]);
@@ -58,8 +58,8 @@ it('migrates the legacy dismissed flag without creating a subscription or findin
   const data: Record<string, unknown> = { dismissed: true };
   get.mockImplementation(async () => ({ ...data }));
   set.mockImplementation(async (items) => { Object.assign(data, items); });
-  expect(await loadLocalState()).toEqual({ version: 1, dismissed: true, subscriptions: [], reviewHistory: [] });
-  expect(data).toEqual({ dismissed: true, version: 1, subscriptions: [], reviewHistory: [] });
+  expect(await loadLocalState()).toEqual({ version: 1, dismissed: true, subscriptions: [], reviewHistory: [], retentionPolicy: 30 });
+  expect(data).toEqual({ dismissed: true, version: 1, subscriptions: [], reviewHistory: [], retentionPolicy: 30 });
   expect(set).toHaveBeenCalledTimes(1);
   await loadLocalState();
   expect(set).toHaveBeenCalledTimes(1);
