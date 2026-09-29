@@ -16,11 +16,239 @@ function installChrome(): { addListener: ReturnType<typeof vi.fn>; sendMessage: 
 }
 
 afterEach(() => {
+  window.dispatchEvent(new Event('pagehide'));
   vi.resetModules();
   vi.unstubAllGlobals();
   document.body.replaceChildren();
   document.querySelector('[data-clearchoice-panel]')?.remove();
   delete (window as Window & { __clearchoiceContentListenerInstalled__?: true }).__clearchoiceContentListenerInstalled__;
+});
+
+function autoChrome() {
+  const installed = installChrome();
+  installed.sendMessage.mockImplementation(async (message: { type: string; batch?: { findings: unknown[] } }) => {
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS') return { ok: true, generation: 3 };
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return { ok: true, findingCount: message.batch?.findings.length };
+    if (message.type === 'CLEARCHOICE_DISMISSED_GET') return { ok: true, dismissed: false };
+    if (message.type === 'CLEARCHOICE_DISMISSED_SET') return { ok: true };
+    return { ok: false, error: 'request-failed' };
+  });
+  return installed;
+}
+
+const betaCheckout = '<main><aside>Order summary — Subtotal: $24</aside><section>Membership renews automatically for $12 per month until cancelled.</section><button>Place order</button></main>';
+const automaticSubmits = (sendMessage: ReturnType<typeof vi.fn>) => sendMessage.mock.calls.filter(([message]) => message.type === 'CLEARCHOICE_AUTO_SUBMIT');
+const ownedPanel = () => Array.from(document.querySelectorAll<HTMLElement>('[data-clearchoice-panel]')).find((panel) => panel.shadowRoot?.querySelector('.clearchoice-panel'));
+
+it('denied or ambiguous status never installs an automatic scan or panel', async () => {
+  const { sendMessage } = autoChrome();
+  sendMessage.mockResolvedValueOnce({ ok: false, error: 'request-failed' });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_AUTO_STATUS' }));
+  document.body.append(document.createElement('p'));
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  expect(automaticSubmits(sendMessage)).toHaveLength(0);
+  expect(ownedPanel()).toBeUndefined();
+});
+
+it('a delayed denied status does not erase a manually requested Analyze panel', async () => {
+  const { addListener, sendMessage } = installChrome();
+  let deny!: (response: unknown) => void;
+  sendMessage.mockImplementation((message: { type: string }) => message.type === 'CLEARCHOICE_AUTO_STATUS'
+    ? new Promise((resolve) => { deny = resolve; })
+    : Promise.resolve(message.type === 'CLEARCHOICE_DISMISSED_GET' ? { ok: true, dismissed: false } : { ok: true }));
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  const listener = addListener.mock.calls[0][0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
+  const reply = vi.fn();
+  listener({ type: 'CLEARCHOICE_ANALYZE' }, {}, reply);
+  await vi.waitFor(() => expect(reply).toHaveBeenCalledWith(expect.objectContaining({ ok: true })));
+  deny({ ok: false, error: 'request-failed' });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  expect(ownedPanel()).toBeDefined();
+});
+
+it('a transient submit refusal gets at most one fresh scan and then displays persisted findings', async () => {
+  const { sendMessage } = autoChrome();
+  let attempts = 0;
+  sendMessage.mockImplementation(async (message: { type: string; batch?: { findings: unknown[] } }) => {
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS') return { ok: true, generation: 3 };
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return ++attempts === 1
+      ? { ok: false, error: 'retryable-failure' } : { ok: true, findingCount: message.batch?.findings.length };
+    return { ok: true, dismissed: false };
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()?.shadowRoot?.querySelectorAll('article')).toHaveLength(1));
+  expect(automaticSubmits(sendMessage)).toHaveLength(2);
+  expect(automaticSubmits(sendMessage)[0][0].batch.requestId).not.toBe(automaticSubmits(sendMessage)[1][0].batch.requestId);
+});
+
+it('a deterministic submit refusal never retries or displays findings', async () => {
+  const { sendMessage } = autoChrome();
+  sendMessage.mockImplementation(async (message: { type: string }) => message.type === 'CLEARCHOICE_AUTO_STATUS'
+    ? { ok: true, generation: 3 } : { ok: false, error: 'request-failed' });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(1));
+  document.body.append(document.createElement('span'));
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(automaticSubmits(sendMessage)).toHaveLength(1);
+  expect(ownedPanel()).toBeUndefined();
+});
+
+it('status with a positive generation plus extra fields fails closed', async () => {
+  const { sendMessage } = autoChrome();
+  sendMessage.mockResolvedValueOnce({ ok: true, generation: 3, origin: 'https://unexpected.example' });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  expect(sendMessage.mock.calls.map(([message]) => message.type)).toEqual(['CLEARCHOICE_AUTO_STATUS']);
+  expect(ownedPanel()).toBeUndefined();
+});
+
+it('valid opt-in initially scans, but unsupported and supported zero-finding pages show no panel', async () => {
+  const { sendMessage } = autoChrome();
+  document.body.innerHTML = '<main>Account settings</main>';
+  await import('./index');
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  expect(automaticSubmits(sendMessage)).toHaveLength(0);
+  document.body.innerHTML = '<main><aside>Order summary — Subtotal: $24</aside><button>Place order</button></main>';
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  expect(automaticSubmits(sendMessage)).toHaveLength(0);
+  expect(ownedPanel()).toBeUndefined();
+});
+
+it('automatically persists inserted screened findings once and renders only the persisted excerpt despite DOM churn', async () => {
+  const { sendMessage } = autoChrome();
+  document.body.innerHTML = '<main><aside>Order summary — Subtotal: $24</aside><button>Place order</button></main>';
+  await import('./index');
+  document.querySelector('main')?.insertAdjacentHTML('beforeend', '<section>Membership renews automatically for $12 per month until cancelled.</section>');
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(1));
+  await vi.waitFor(() => expect(ownedPanel()?.shadowRoot?.querySelectorAll('article')).toHaveLength(1));
+  const excerpt = automaticSubmits(sendMessage)[0][0].batch.findings[0].screenedExcerpt;
+  expect(ownedPanel()?.shadowRoot?.querySelector('.evidence')?.textContent).toBe(excerpt);
+  for (let i = 0; i < 12; i++) document.querySelector('main')?.append(document.createElement('span'));
+  await new Promise((resolve) => setTimeout(resolve, 240));
+  expect(automaticSubmits(sendMessage)).toHaveLength(1);
+  expect(document.querySelectorAll('[data-clearchoice-panel]')).toHaveLength(1);
+});
+
+it('rejects sensitive candidates, then removes the panel on SPA exit and does not resubmit after exit', async () => {
+  const { sendMessage } = autoChrome();
+  document.body.innerHTML = betaCheckout.replace('</main>', '<section>Membership renews automatically for $12 per month. example.com/private?token=secret</section></main>');
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  expect(ownedPanel()?.shadowRoot?.textContent).not.toContain('example.com/private');
+  document.body.innerHTML = '<main>Account settings</main>';
+  await vi.waitFor(() => expect(ownedPanel()).toBeUndefined());
+  const count = automaticSubmits(sendMessage).length;
+  document.body.append(document.createElement('span'));
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  expect(automaticSubmits(sendMessage)).toHaveLength(count);
+});
+
+it('revocation while submit is pending cannot paint a stale panel', async () => {
+  const { addListener, sendMessage } = autoChrome();
+  let finish!: (reply: unknown) => void;
+  sendMessage.mockImplementation(async (message: { type: string }) => {
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS') return { ok: true, generation: 3 };
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return new Promise((resolve) => { finish = resolve; });
+    return { ok: true, dismissed: false };
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(1));
+  const listener = addListener.mock.calls[0][0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
+  const reply = vi.fn();
+  listener({ type: 'CLEARCHOICE_DISABLE' }, {}, reply);
+  await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ ok: true }));
+  finish({ ok: true, findingCount: 1 });
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  expect(ownedPanel()).toBeUndefined();
+});
+
+it('a worker status revoked after a successful submit prevents stale rendering', async () => {
+  const { sendMessage } = autoChrome();
+  let checks = 0;
+  sendMessage.mockImplementation(async (message: { type: string; batch?: { findings: unknown[] } }) => {
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS') return ++checks < 3 ? { ok: true, generation: 3 } : { ok: false, error: 'request-failed' };
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return { ok: true, findingCount: message.batch?.findings.length };
+    return { ok: true, dismissed: false };
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(1));
+  await new Promise((resolve) => setTimeout(resolve, 140));
+  expect(ownedPanel()).toBeUndefined();
+  expect(sendMessage.mock.calls.filter(([message]) => message.type === 'CLEARCHOICE_DISMISSED_GET')).toHaveLength(0);
+});
+
+it('revocation during dismissal lookup still prevents a stale panel', async () => {
+  const { sendMessage } = autoChrome();
+  let approved = true;
+  sendMessage.mockImplementation(async (message: { type: string; batch?: { findings: unknown[] } }) => {
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS') return approved ? { ok: true, generation: 3 } : { ok: false, error: 'request-failed' };
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return { ok: true, findingCount: message.batch?.findings.length };
+    if (message.type === 'CLEARCHOICE_DISMISSED_GET') { approved = false; return { ok: true, dismissed: false }; }
+    return { ok: false, error: 'request-failed' };
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(sendMessage.mock.calls.some(([message]) => message.type === 'CLEARCHOICE_DISMISSED_GET')).toBe(true));
+  await new Promise((resolve) => setTimeout(resolve, 130));
+  expect(ownedPanel()).toBeUndefined();
+});
+
+it('automatic scanning uses worker messages only, never page network or direct storage', async () => {
+  const { sendMessage } = autoChrome();
+  const fetchSpy = vi.spyOn(globalThis, 'fetch');
+  const xhrSpy = vi.spyOn(XMLHttpRequest.prototype, 'send');
+  try {
+    document.body.innerHTML = betaCheckout;
+    await import('./index');
+    await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+    expect(automaticSubmits(sendMessage)).toHaveLength(1);
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(xhrSpy).not.toHaveBeenCalled();
+    expect(chrome.storage.local.get).not.toHaveBeenCalled();
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
+    const message = automaticSubmits(sendMessage)[0][0];
+    expect(Object.keys(message).sort()).toEqual(['batch', 'generation', 'type', 'version']);
+    expect(JSON.stringify(message)).not.toContain(location.href);
+  } finally {
+    fetchSpy.mockRestore();
+    xhrSpy.mockRestore();
+  }
+});
+
+it('dismissed overflow diagnostic stays hidden during subsequent DOM churn', async () => {
+  const { sendMessage } = autoChrome();
+  document.body.innerHTML = '<main><aside>Order summary — Subtotal: $24</aside><button>Place order</button></main>';
+  for (let i = 0; i < 101; i++) document.querySelector('main')?.insertAdjacentHTML('beforeend', '<label><input type="checkbox" checked> Add protection for $5 per month</label>');
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()?.shadowRoot?.textContent).toContain('could not be saved'));
+  ownedPanel()?.shadowRoot?.querySelector<HTMLButtonElement>('[data-clearchoice-dismiss]')?.click();
+  await vi.waitFor(() => expect(sendMessage.mock.calls.some(([message]) => message.type === 'CLEARCHOICE_DISMISSED_SET')).toBe(true));
+  sendMessage.mockImplementation(async (message: { type: string }) => message.type === 'CLEARCHOICE_AUTO_STATUS'
+    ? { ok: true, generation: 3 } : message.type === 'CLEARCHOICE_DISMISSED_GET'
+      ? { ok: true, dismissed: true } : { ok: false, error: 'request-failed' });
+  document.querySelector('main')?.append(document.createElement('span'));
+  await new Promise((resolve) => setTimeout(resolve, 170));
+  expect(ownedPanel()).toBeUndefined();
+  expect(automaticSubmits(sendMessage)).toHaveLength(0);
+});
+
+it('overflow reports a non-success diagnostic without submitting or showing a partial panel', async () => {
+  const { sendMessage } = autoChrome();
+  document.body.innerHTML = '<main><aside>Order summary — Subtotal: $24</aside><button>Place order</button></main>';
+  for (let i = 0; i < 101; i++) document.querySelector('main')?.insertAdjacentHTML('beforeend', `<label><input type="checkbox" checked> Add protection for $${i + 1} per month</label>`);
+  await import('./index');
+  await new Promise((resolve) => setTimeout(resolve, 260));
+  expect(automaticSubmits(sendMessage)).toHaveLength(0);
+  expect(ownedPanel()?.shadowRoot?.textContent).toContain('could not be saved');
+  expect(ownedPanel()?.shadowRoot?.querySelectorAll('article')).toHaveLength(0);
 });
 
 function setSupportedCheckoutContext(): void {
@@ -35,7 +263,7 @@ it('does not scan or answer an unsolicited automatic document challenge', async 
   const reply = vi.fn();
   expect(listener({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId: 'auto-1', nonce: 'nonce-1' }, {}, reply)).toBe(true);
   await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ ok: false, error: 'request-failed' }));
-  expect(sendMessage).not.toHaveBeenCalled();
+  expect(sendMessage.mock.calls.map(([message]) => message.type)).toEqual(['CLEARCHOICE_AUTO_STATUS']);
   expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
 });
 
@@ -59,7 +287,7 @@ it('attests only the matching in-flight automatic observation without scanning',
   const attested = vi.fn();
   listener(request, { id: 'extension' }, attested);
   await vi.waitFor(() => expect(attested).toHaveBeenCalledWith({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: 'auto-1', nonce: 'nonce-1' }));
-  expect(sendMessage).toHaveBeenCalledTimes(1);
+  expect(sendMessage.mock.calls.filter(([message]) => message.type === 'CLEARCHOICE_AUTO_SUBMIT')).toHaveLength(1);
   expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
   complete({ ok: true, findingCount: 0 });
   await expect(submission).resolves.toEqual({ ok: true, findingCount: 0 });
@@ -120,7 +348,10 @@ it('routes dismissed state through worker and never calls content storage', asyn
 
 it('rejects a malformed batch receipt and does not render or report success', async () => {
   const { addListener, sendMessage } = installChrome();
-  sendMessage.mockResolvedValueOnce({ ok: true, findingCount: 1 });
+  sendMessage.mockImplementation(async (message: { type: string }) => message.type === 'CLEARCHOICE_SUBMIT'
+    ? { ok: true, findingCount: 1 }
+    : message.type === 'CLEARCHOICE_DISMISSED_GET' ? { ok: true, dismissed: false }
+      : { ok: false, error: 'request-failed' });
   setSupportedCheckoutContext();
   await import('./index');
   const listener = addListener.mock.calls[0]?.[0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;

@@ -24,6 +24,26 @@ export function removePanel(): void {
   panel.remove();
 }
 
+/** Ignore extension-owned changes but not host nodes with a colliding attribute. */
+export function isOwnedPanelMutation(record: MutationRecord): boolean {
+  const owned = (node: Node): boolean => {
+    for (let element = node instanceof Element ? node : node.parentElement; element; element = element.parentElement) {
+      if (extensionPanels.has(element as HTMLElement)) return true;
+    }
+    return extensionPanels.has(node as HTMLElement);
+  };
+  if (owned(record.target)) return true;
+  return record.type === 'childList' && [...record.addedNodes, ...record.removedNodes].every(owned);
+}
+
+export function renderAutomaticDiagnostic(onDismiss: () => void): HTMLElement {
+  const panel = renderPanel({ findings: [] }, onDismiss);
+  const message = document.createElement('p');
+  message.textContent = 'ClearChoice findings could not be saved. No partial results are shown.';
+  (panel.shadowRoot ?? panel).querySelector('section')?.append(message);
+  return panel;
+}
+
 export function renderPanel(result: AnalysisResult, onDismiss: () => void): HTMLElement {
   removePanel();
 
@@ -60,7 +80,7 @@ export function renderPanel(result: AnalysisResult, onDismiss: () => void): HTML
     removalObserver = undefined;
     document.removeEventListener('keydown', onKeydown);
     panelCleanup.delete(panel);
-    extensionPanels.delete(panel);
+    // Keep weak ownership through the removal mutation delivery; no strong reference survives.
     if (activePanel === panel) activePanel = undefined;
   };
 

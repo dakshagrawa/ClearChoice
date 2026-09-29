@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
-import { removePanel, renderPanel } from './panel';
+import { isOwnedPanelMutation, removePanel, renderAutomaticDiagnostic, renderPanel } from './panel';
 import type { AnalysisResult } from '../core/types';
 
 const result: AnalysisResult = {
@@ -21,6 +21,29 @@ const result: AnalysisResult = {
 afterEach(() => {
   removePanel();
   document.body.replaceChildren();
+});
+
+it('diagnostic states no partial finding was saved and does not render articles', () => {
+  const panel = renderAutomaticDiagnostic(vi.fn());
+  expect(panel.shadowRoot?.textContent).toContain('could not be saved');
+  expect(panel.shadowRoot?.querySelectorAll('article')).toHaveLength(0);
+});
+
+it('distinguishes owned mutations from host panels with a colliding attribute', async () => {
+  const host = document.createElement('aside');
+  host.dataset.clearchoicePanel = '';
+  document.body.append(host);
+  const owned = renderPanel(result, vi.fn());
+  const records: MutationRecord[] = [];
+  const observer = new MutationObserver((changes) => records.push(...changes));
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  owned.append(document.createElement('span'));
+  host.append(document.createElement('span'));
+  await Promise.resolve();
+  observer.disconnect();
+  expect(records).toHaveLength(2);
+  expect(isOwnedPanelMutation(records[0])).toBe(true);
+  expect(isOwnedPanelMutation(records[1])).toBe(false);
 });
 
 it('payload-level accessibility: renders a semantic non-modal polite panel with auditable finding evidence and reason', () => {
