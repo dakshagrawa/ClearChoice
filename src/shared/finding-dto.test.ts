@@ -104,6 +104,20 @@ it('screens relative paths and queries in source before truncating', () => {
   }
 });
 
+it('rejects numeric and encoded relative paths and bare query keys on DTO boundaries', () => {
+  for (const text of ['/12345', 'Monthly plan /12345?token', '?debug', '/%31', '/续费']) {
+    expect(isFindingDto({ ...valid(), screenedExcerpt: text })).toBe(false);
+    expect(toFindingDto({ ...rawFinding, evidence: text }, 'req-1', 1, fingerprint)).toBeNull();
+  }
+});
+
+it('screens numeric paths and bare queries in the source tail before truncation', () => {
+  for (const tail of ['/12345', '?debug', 'Monthly plan /12345?token']) {
+    expect(toFindingDto({ ...rawFinding, evidence: `${'A'.repeat(160)} ${tail}` },
+      'req-1', 1, fingerprint)).toBeNull();
+  }
+});
+
 it('rejects zero-width, bidi and other format controls on both boundaries', () => {
   for (const text of ['Subscription card ••••\u200b1234', 'Subscription card 4111\u200b1111\u200b1111\u200b1111',
     'Subscription renewal\u202e monthly', 'Subscription renewal\u0000 monthly',
@@ -116,7 +130,8 @@ it('rejects zero-width, bidi and other format controls on both boundaries', () =
 
 it('keeps benign subscription text and decimal prices without domain false positives', () => {
   for (const text of ['Subscription renews monthly', '$10.00 per month', 'Save 20% on annual plan',
-    '订阅每月续费', 'Plan costs $12 per month', 'Save 20%', 'Renewal date 2026-09-28']) {
+    '订阅每月续费', 'Plan costs $12 per month', 'Save 20%', 'Renewal date 2026-09-28',
+    'Question? Next month', 'Monthly plan / 12345']) {
     expect(toFindingDto({ ...rawFinding, evidence: text }, 'req-1', 1, fingerprint)?.screenedExcerpt).toBe(text);
     expect(isFindingDto({ ...valid(), screenedExcerpt: text })).toBe(true);
   }

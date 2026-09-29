@@ -23,9 +23,9 @@ const FINGERPRINT = /^[a-f0-9]{64}$/;
 // final label avoids treating decimal prices like $10.00 as domains; punycode TLDs need
 // their own branch because they contain hyphens and digits.
 const URL = /(?:\b[a-z][a-z0-9+.-]*:\/\/|[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?(?:[.。．｡][\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?)*[.。．｡](?:\p{L}{2,}|xn--[a-z0-9-]*[a-z0-9])(?![\p{L}\p{N}-]))/iu;
-// Relative URL components can leak checkout routes or query parameters without a domain.
-// Require a letter after / so numeric dates and decimal prices remain static text.
-const RELATIVE_URL = /(?:\/[\p{L}][\p{L}\p{N}_-]*(?:\/[\p{L}][\p{L}\p{N}_-]*)*|\?[\p{L}_][\p{L}\p{N}_.~-]*(?:=|&))/u;
+// Reject path or query components even without a domain, including numeric/encoded paths
+// and bare query keys. Whitespace after / or ? keeps prose punctuation intact.
+const RELATIVE_URL = /(?:\/[^\s/?]|\?[^\s/?])/u;
 export function hasUnsafeUrlText(text: string): boolean {
   return URL.test(text) || RELATIVE_URL.test(text);
 }

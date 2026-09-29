@@ -27,6 +27,18 @@ it('rejects relative checkout paths and query strings in each user-owned text fi
   }
 });
 
+it('rejects numeric paths and bare query keys in subscription text fields', () => {
+  for (const text of ['/12345', '?debug', 'Monthly plan /12345?token', '/%31', '/续费']) {
+    expect(isSubscription({ ...subscription, merchant: text })).toBe(false);
+    expect(isSubscription({ ...subscription, notes: text })).toBe(false);
+    expect(isSubscription({ ...subscription, cadence: 'custom', customDescription: text })).toBe(false);
+  }
+  for (const text of ['Question? Next month', 'Save 20%', 'Paid $10.00 monthly', '2026-09-28']) {
+    expect(isSubscription({ ...subscription, merchant: text })).toBe(true);
+    expect(isSubscription({ ...subscription, notes: text })).toBe(true);
+  }
+});
+
 it('normalizes merchant whitespace and currency case explicitly', () => {
   expect(normalizeMerchant('  Example   Market  ')).toBe('Example Market');
   expect(normalizeCurrency('usd')).toBe('USD');
@@ -67,6 +79,16 @@ it('rejects a fully formed persisted finding with a relative path or query excer
     '?token=private', 'checkout?token=private', '/checkout', '/checkout/step']) {
     expect(isFindingRecord({ ...finding, screenedExcerpt })).toBe(false);
     expect(isFindingHistory([{ ...finding, screenedExcerpt }])).toBe(false);
+  }
+});
+
+it('rejects numeric paths and bare query keys in persisted finding excerpts', () => {
+  for (const screenedExcerpt of ['/12345', '?debug', 'Monthly plan /12345?token', '/%31', '/续费']) {
+    expect(isFindingRecord({ ...finding, screenedExcerpt })).toBe(false);
+    expect(isFindingHistory([{ ...finding, screenedExcerpt }])).toBe(false);
+  }
+  for (const screenedExcerpt of ['Question? Next month', 'Save 20%', '$10.00 monthly', '2026-09-28']) {
+    expect(isFindingRecord({ ...finding, screenedExcerpt })).toBe(true);
   }
 });
 
