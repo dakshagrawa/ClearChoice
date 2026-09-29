@@ -6,6 +6,11 @@ const manual = {
   id: 'sub-1', merchant: 'Example Market', amount: '12.50', currency: 'USD', cadence: 'monthly' as const,
   createdAt: '2026-09-28T12:00:00.000Z', updatedAt: '2026-09-28T12:00:00.000Z',
 };
+const finding = {
+  id: 'finding-1', origin: 'https://example.com', kind: 'recurring-charge', reason: 'price-cadence',
+  screenedExcerpt: 'Monthly plan /checkout?token=private', opaqueFingerprint: 'a'.repeat(64), ordinal: 1,
+  firstSeen: '2026-09-28T12:00:00.000Z', latestSeen: '2026-09-28T12:01:00.000Z', status: 'needs-review',
+};
 
 const get = vi.fn();
 const set = vi.fn();
@@ -77,6 +82,12 @@ it('does not overwrite corrupt review history or unsupported versions', async ()
     get.mockResolvedValue(data);
     await expect(loadLocalState()).rejects.toThrow();
   }
+  expect(set).not.toHaveBeenCalled();
+});
+
+it('rejects a corrupt path-bearing review history without rewriting local state', async () => {
+  get.mockResolvedValue({ version: 1, dismissed: false, subscriptions: [], reviewHistory: [finding] });
+  await expect(loadLocalState()).rejects.toThrow('Corrupt local review history');
   expect(set).not.toHaveBeenCalled();
 });
 

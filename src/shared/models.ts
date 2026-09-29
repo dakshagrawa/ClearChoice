@@ -1,6 +1,6 @@
 import { normalizeVisibleText } from '../core/normalize';
 import { hasSensitiveDisplayData } from '../core/sensitive';
-import { isFindingDto, isValidFindingPair, MAX_ORDINAL } from './finding-dto';
+import { hasUnsafeUrlText, isFindingDto, isValidFindingPair, MAX_ORDINAL } from './finding-dto';
 import type { FindingKind, FindingReason } from '../core/types';
 
 export const MAX_REVIEW_HISTORY = 500;
@@ -74,7 +74,7 @@ function safeText(value: unknown, max: number): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= max
     && normalizeVisibleText(value) === value && !hasSensitiveDisplayData(value)
     && !/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(value)
-    && !/(?:\b[a-z][a-z0-9+.-]*:\/\/|[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?(?:[.。．｡][\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?)*[.。．｡](?:\p{L}{2,}|xn--[a-z0-9-]*[a-z0-9])(?![\p{L}\p{N}-]))/iu.test(value);
+    && !hasUnsafeUrlText(value);
 }
 
 export function normalizeMerchant(value: string): string {

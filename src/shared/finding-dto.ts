@@ -23,6 +23,12 @@ const FINGERPRINT = /^[a-f0-9]{64}$/;
 // final label avoids treating decimal prices like $10.00 as domains; punycode TLDs need
 // their own branch because they contain hyphens and digits.
 const URL = /(?:\b[a-z][a-z0-9+.-]*:\/\/|[\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?(?:[.。．｡][\p{L}\p{N}](?:[\p{L}\p{N}-]*[\p{L}\p{N}])?)*[.。．｡](?:\p{L}{2,}|xn--[a-z0-9-]*[a-z0-9])(?![\p{L}\p{N}-]))/iu;
+// Relative URL components can leak checkout routes or query parameters without a domain.
+// Require a letter after / so numeric dates and decimal prices remain static text.
+const RELATIVE_URL = /(?:\/[\p{L}][\p{L}\p{N}_-]*(?:\/[\p{L}][\p{L}\p{N}_-]*)*|\?[\p{L}_][\p{L}\p{N}_.~-]*(?:=|&))/u;
+export function hasUnsafeUrlText(text: string): boolean {
+  return URL.test(text) || RELATIVE_URL.test(text);
+}
 // Reject format/bidi and control characters before normalization or sensitive matching.
 // TAB, LF and CR remain safe in raw evidence because normalization collapses them.
 const FORMAT_CHARACTER = /\p{Cf}/u;
@@ -57,15 +63,15 @@ export function isFindingDto(value: unknown): value is FindingDto {
   const excerpt = dto.screenedExcerpt;
   return excerpt.length > 0 && excerpt.length <= MAX_EXCERPT_LENGTH
     && normalizeVisibleText(excerpt) === excerpt && !hasUnsafeControl(excerpt)
-    && !URL.test(excerpt) && !hasSensitiveDisplayData(excerpt);
+    && !hasUnsafeUrlText(excerpt) && !hasSensitiveDisplayData(excerpt);
 }
 
 /** Fingerprinting belongs to the content-side batch producer (Task 3), not this DTO. */
 export function toFindingDto(raw: Finding, requestId: string, ordinal: number, opaqueFingerprint: string): FindingDto | null {
   if (typeof raw.evidence !== 'string' || hasUnsafeControl(raw.evidence)
-    || URL.test(raw.evidence) || hasSensitiveDisplayData(raw.evidence)) return null;
+    || hasUnsafeUrlText(raw.evidence) || hasSensitiveDisplayData(raw.evidence)) return null;
   const normalized = normalizeVisibleText(raw.evidence);
-  if (normalized.length === 0 || URL.test(normalized) || hasSensitiveDisplayData(normalized)) return null;
+  if (normalized.length === 0 || hasUnsafeUrlText(normalized) || hasSensitiveDisplayData(normalized)) return null;
   const candidate = {
     version: FINDING_WIRE_VERSION,
     requestId, kind: raw.kind, reason: raw.reason,

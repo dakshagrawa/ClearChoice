@@ -89,6 +89,21 @@ it('rejects an IDN hidden beyond the 160-character excerpt', () => {
   expect(toFindingDto({ ...rawFinding, evidence }, 'req-1', 1, fingerprint)).toBeNull();
 });
 
+it('rejects standalone relative paths and query strings on both DTO boundaries', () => {
+  for (const text of ['Monthly plan /checkout?token=private', '?token=private',
+    'checkout?token=private', '/checkout', '/checkout/step']) {
+    expect(isFindingDto({ ...valid(), screenedExcerpt: text })).toBe(false);
+    expect(toFindingDto({ ...rawFinding, evidence: text }, 'req-1', 1, fingerprint)).toBeNull();
+  }
+});
+
+it('screens relative paths and queries in source before truncating', () => {
+  for (const tail of ['/checkout/step', '?token=private', 'checkout?token=private']) {
+    expect(toFindingDto({ ...rawFinding, evidence: `${'A'.repeat(160)} ${tail}` },
+      'req-1', 1, fingerprint)).toBeNull();
+  }
+});
+
 it('rejects zero-width, bidi and other format controls on both boundaries', () => {
   for (const text of ['Subscription card ••••\u200b1234', 'Subscription card 4111\u200b1111\u200b1111\u200b1111',
     'Subscription renewal\u202e monthly', 'Subscription renewal\u0000 monthly',
@@ -101,7 +116,7 @@ it('rejects zero-width, bidi and other format controls on both boundaries', () =
 
 it('keeps benign subscription text and decimal prices without domain false positives', () => {
   for (const text of ['Subscription renews monthly', '$10.00 per month', 'Save 20% on annual plan',
-    '订阅每月续费']) {
+    '订阅每月续费', 'Plan costs $12 per month', 'Save 20%', 'Renewal date 2026-09-28']) {
     expect(toFindingDto({ ...rawFinding, evidence: text }, 'req-1', 1, fingerprint)?.screenedExcerpt).toBe(text);
     expect(isFindingDto({ ...valid(), screenedExcerpt: text })).toBe(true);
   }

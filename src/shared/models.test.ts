@@ -14,6 +14,19 @@ it('preserves a benign decimal price in notes', () => {
   expect(isSubscription({ ...subscription, notes: 'Paid $10.00 monthly' })).toBe(true);
 });
 
+it('rejects relative checkout paths and query strings in each user-owned text field', () => {
+  for (const text of ['/checkout', '/checkout/step', '?token=private',
+    'checkout?token=private', 'Monthly plan /checkout?token=private']) {
+    expect(isSubscription({ ...subscription, merchant: text })).toBe(false);
+    expect(isSubscription({ ...subscription, notes: text })).toBe(false);
+    expect(isSubscription({ ...subscription, cadence: 'custom', customDescription: text })).toBe(false);
+  }
+  for (const text of ['Plan costs $12 per month', 'Save 20%', 'Paid $10.00 per month', '2026-09-28']) {
+    expect(isSubscription({ ...subscription, notes: text })).toBe(true);
+    expect(isSubscription({ ...subscription, cadence: 'custom', customDescription: text })).toBe(true);
+  }
+});
+
 it('normalizes merchant whitespace and currency case explicitly', () => {
   expect(normalizeMerchant('  Example   Market  ')).toBe('Example Market');
   expect(normalizeCurrency('usd')).toBe('USD');
@@ -47,6 +60,14 @@ it('accepts screened review history independent of subscriptions', () => {
   expect(isFindingRecord(finding)).toBe(true);
   expect(isFindingHistory([finding])).toBe(true);
   expect(isSubscriptionCollection([subscription])).toBe(true);
+});
+
+it('rejects a fully formed persisted finding with a relative path or query excerpt', () => {
+  for (const screenedExcerpt of ['Monthly plan /checkout?token=private',
+    '?token=private', 'checkout?token=private', '/checkout', '/checkout/step']) {
+    expect(isFindingRecord({ ...finding, screenedExcerpt })).toBe(false);
+    expect(isFindingHistory([{ ...finding, screenedExcerpt }])).toBe(false);
+  }
 });
 
 it.each([
