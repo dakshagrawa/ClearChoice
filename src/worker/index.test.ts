@@ -88,6 +88,41 @@ it.each(['wrong nonce', 'wrong request', 'surplus', 'failed target'])('rejects %
   expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
 });
 
+it('identifies an unavailable worker initialization as retryable only for a valid automatic sender', async () => {
+  grantedOrigins.add('https://merchant.test/*');
+  setAccessLevel.mockRejectedValueOnce(new Error('temporary storage setup error'));
+  await boot();
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: false, error: 'retryable-failure' });
+  expect(await dispatch(autoRequest(), { ...content, id: 'other' })).toEqual({ ok: false, error: 'request-failed' });
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
+});
+
+it('rejects an in-flight automatic submission after an explicit popup revoke', async () => {
+  await enabledAuto();
+  let finishChallenge!: (reply: unknown) => void;
+  sendMessage.mockImplementationOnce(() => new Promise((resolve) => { finishChallenge = resolve; }));
+  const pending = dispatch(autoRequest(), content);
+  await vi.waitFor(() => expect(finishChallenge).toBeDefined());
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup))
+    .toMatchObject({ ok: true, enabled: false });
+  const first = sendMessage.mock.calls.find(([, message]) => message.type === 'CLEARCHOICE_FINDINGS_CHALLENGE')![1];
+  finishChallenge({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: first.requestId, nonce: first.nonce });
+  expect(await pending).toEqual({ ok: false, error: 'request-failed' });
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
+  expect(state.reviewHistory).toEqual([]);
+});
+
+it('reports an interrupted history write as retryable without partial receipt or acknowledgement', async () => {
+  await enabledAuto();
+  const prior = structuredClone(state);
+  set.mockRejectedValueOnce(new Error('temporary storage failure'));
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: false, error: 'retryable-failure' });
+  expect(state).toEqual(prior);
+  expect(state.reviewHistory).toEqual([]);
+  expect(state.receipts).toBeUndefined();
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });
+});
+
 it('rejects a stale automatic generation and revoked permission', async () => {
   await enabledAuto();
   expect(await dispatch(autoRequest(2), content)).toEqual({ ok: false, error: 'request-failed' });

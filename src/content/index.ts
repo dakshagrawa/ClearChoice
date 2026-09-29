@@ -24,13 +24,24 @@ import { removePanel, renderPanel } from './panel';
 const contentSentinel = '__clearchoiceContentListenerInstalled__';
 let automaticRequestId: string | undefined;
 
+export class AutomaticObservationFailure extends Error {
+  constructor(readonly retryable: boolean) { super('Automatic observation refused'); }
+}
+
 /** Task 10 will call this only after its opt-in checkout observer screens a batch. */
 export async function submitAutomaticObservation(generation: number, batch: FindingsBatchRequest): Promise<{ ok: true; findingCount: number }> {
   const request = { type: CLEARCHOICE_AUTO_SUBMIT, version: 1, generation, batch };
   if (automaticRequestId || !isAutomaticObservation(request)) throw new Error('Automatic observation unavailable');
   automaticRequestId = batch.requestId;
   try {
-    const reply: unknown = await chrome.runtime.sendMessage(request);
+    let reply: unknown;
+    try { reply = await chrome.runtime.sendMessage(request); }
+    catch { throw new AutomaticObservationFailure(true); }
+    if (typeof reply === 'object' && reply !== null && Object.keys(reply).length === 2
+      && 'ok' in reply && reply.ok === false && 'error' in reply
+      && (reply.error === 'retryable-failure' || reply.error === 'request-failed')) {
+      throw new AutomaticObservationFailure(reply.error === 'retryable-failure');
+    }
     if (typeof reply !== 'object' || reply === null || Object.keys(reply).length !== 2
       || !('ok' in reply) || reply.ok !== true || !('findingCount' in reply)
       || reply.findingCount !== batch.findings.length) throw new Error('Automatic observation refused');

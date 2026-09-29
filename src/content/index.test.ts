@@ -68,6 +68,24 @@ it('attests only the matching in-flight automatic observation without scanning',
   await vi.waitFor(() => expect(late).toHaveBeenCalledWith({ ok: false, error: 'request-failed' }));
 });
 
+it('exposes a structured retryable signal to the future automatic observer', async () => {
+  const { sendMessage } = installChrome();
+  const { submitAutomaticObservation } = await import('./index');
+  const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH' as const, version: 1 as const, requestId: 'auto-retry', findings: [] };
+  sendMessage.mockResolvedValueOnce({ ok: false, error: 'retryable-failure' });
+  await expect(submitAutomaticObservation(1, batch)).rejects.toMatchObject({ retryable: true });
+  sendMessage.mockResolvedValueOnce({ ok: false, error: 'request-failed' });
+  await expect(submitAutomaticObservation(1, batch)).rejects.toMatchObject({ retryable: false });
+});
+
+it('marks a worker messaging interruption as retryable', async () => {
+  const { sendMessage } = installChrome();
+  const { submitAutomaticObservation } = await import('./index');
+  sendMessage.mockRejectedValueOnce(new Error('worker restarted'));
+  const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH' as const, version: 1 as const, requestId: 'auto-restart', findings: [] };
+  await expect(submitAutomaticObservation(1, batch)).rejects.toMatchObject({ retryable: true });
+});
+
 it('disable removes the current owned panel without scanning or changing dismissal and rejects extra fields', async () => {
   const { addListener, sendMessage } = installChrome();
   setSupportedCheckoutContext();

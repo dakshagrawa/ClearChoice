@@ -16,6 +16,10 @@ async function sha256(value: unknown): Promise<string> {
 }
 
 /** In-worker only: storage.local is not a transaction against other writers/processes. */
+export class ScanAuthorizationError extends Error {
+  constructor() { super('Scan no longer authorized'); }
+}
+
 export function createWorkerStore(options: WorkerStoreOptions = {}) {
   let tail: Promise<void> = Promise.resolve();
   function enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -92,7 +96,7 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
           if (prior.digest !== digest) throw new Error('Request ID collision');
           if (prior.outcome.ids.length !== ids.length || prior.outcome.ids.some((id, index) => id !== ids[index]))
             throw new Error('Corrupt receipt outcome');
-          if (beforeCommit && !(await beforeCommit())) throw new Error('Scan no longer authorized');
+          if (beforeCommit && !(await beforeCommit())) throw new ScanAuthorizationError();
           return { ids: [...prior.outcome.ids] };
         }
         const now = (options.now ?? (() => new Date()))();
@@ -126,7 +130,7 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
         const nextReceipts = [...receipts, receipt].slice(-MAX_REVIEW_HISTORY);
         // A single payload commits history and receipt; do not cache or acknowledge on failure.
         // The queued write boundary is the last focus/authorization checkpoint, not an atomic browser transaction.
-        if (beforeCommit && !(await beforeCommit())) throw new Error('Scan no longer authorized');
+        if (beforeCommit && !(await beforeCommit())) throw new ScanAuthorizationError();
         await chrome.storage.local.set({ reviewHistory, receipts: nextReceipts });
         return { ids: [...ids] };
       });
