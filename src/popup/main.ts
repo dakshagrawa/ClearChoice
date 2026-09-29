@@ -1,5 +1,6 @@
-import type { AnalyzeResponse } from '../shared/messages';
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, isAnalyzeResponse, isRestoreResponse } from '../shared/messages';
+import type { AnalyzeResponse, SiteResponse } from '../shared/messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, isAnalyzeResponse, isRestoreResponse, isSiteResponse } from '../shared/messages';
+import { isGrantOrigin } from '../shared/storage';
 
 const app = document.querySelector<HTMLElement>('#app');
 
@@ -14,6 +15,12 @@ app.innerHTML = `
       <button type="button" data-action="restore">Restore</button>
     </div>
     <p aria-live="polite" role="status">Analyze this tab locally.</p>
+    <section aria-label="Site detection">
+      <p>Optional site detection (automatic scanning is not available yet).</p>
+      <button type="button" data-action="site-enable" disabled>Enable detection for this site</button>
+      <button type="button" data-action="site-disable" disabled>Disable detection for this site</button>
+      <p data-site-status role="status" aria-live="polite">Checking this site…</p>
+    </section>
   </main>
 `;
 
@@ -22,6 +29,116 @@ const restoreButton = app.querySelector<HTMLButtonElement>('[data-action="restor
 const status = app.querySelector<HTMLParagraphElement>('[role="status"]');
 
 if (!analyzeButton || !restoreButton || !status) throw new Error('ClearChoice popup controls are missing.');
+
+const enableButton = app.querySelector<HTMLButtonElement>('[data-action="site-enable"]')!;
+const disableButton = app.querySelector<HTMLButtonElement>('[data-action="site-disable"]')!;
+const siteStatus = app.querySelector<HTMLParagraphElement>('[data-site-status]')!;
+let site: { id: number; origin: string } | undefined;
+let busy = false;
+let revision = 0;
+
+function originOf(url: unknown): string | undefined {
+  if (typeof url !== 'string') return undefined;
+  try { const origin = new URL(url).origin; return isGrantOrigin(origin) ? origin : undefined; }
+  catch { return undefined; }
+}
+async function activeSite(): Promise<{ id: number; origin: string } | undefined> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id === undefined) return undefined;
+  const origin = originOf((await chrome.tabs.get(tab.id)).url);
+  return origin ? { id: tab.id, origin } : undefined;
+}
+async function sameSite(target: { id: number; origin: string }): Promise<boolean> {
+  const current = await activeSite();
+  return current?.id === target.id && current.origin === target.origin;
+}
+async function siteMessage(type: string, origin: string): Promise<SiteResponse> {
+  try {
+    const response: unknown = await chrome.runtime.sendMessage({ type, origin });
+    return isSiteResponse(response) ? response : { ok: false, error: 'request-failed' };
+  } catch { return { ok: false, error: 'request-failed' }; }
+}
+function controls(enabled: boolean): void {
+  enableButton.disabled = busy || !site || enabled;
+  disableButton.disabled = busy || !site || !enabled;
+}
+void (async () => {
+  try {
+    const target = await activeSite();
+    if (busy) return;
+    site = target;
+    if (!target) { siteStatus.textContent = 'Site detection is available only on an HTTPS site.'; return; }
+    const response = await siteMessage(CLEARCHOICE_SITE_STATUS, target.origin);
+    if (busy || revision !== 0) return;
+    if (!await sameSite(target)) { site = undefined; siteStatus.textContent = 'Active tab changed. Reopen the popup for the new site.'; return; }
+    if (busy || revision !== 0) return;
+    if (!response.ok) { siteStatus.textContent = 'Could not check site detection. Reopen the popup.'; controls(false); return; }
+    controls(response.enabled);
+    siteStatus.textContent = response.enabled
+      ? `Detection enabled for ${target.origin}; automatic scanning is not available yet.`
+      : `Detection off for ${target.origin}.`;
+  } catch { siteStatus.textContent = 'Could not check this site. Reopen the popup.'; }
+})();
+
+enableButton.addEventListener('click', () => {
+  if (busy || !site || enableButton.disabled) return;
+  const target = site;
+  busy = true; revision++;
+  controls(false);
+  siteStatus.textContent = `Requesting access to ${target.origin}…`;
+  // This call must occur on the click stack: an awaited tab lookup loses Chrome's user gesture.
+  let permission: Promise<boolean>;
+  try { permission = chrome.permissions.request({ origins: [`${target.origin}/*`] }); }
+  catch { permission = Promise.reject(new Error('Permission request failed')); }
+  void (async () => {
+    try {
+      const allowed = await permission;
+      if (!allowed) { siteStatus.textContent = `Access denied for ${target.origin}; detection remains off.`; return; }
+      if (!await sameSite(target)) { site = undefined; siteStatus.textContent = `Active tab changed. Detection was not enabled for ${target.origin}; browser site access may remain. Remove it in Chrome settings if unwanted.`; return; }
+      const response = await siteMessage(CLEARCHOICE_SITE_ENABLE, target.origin);
+      if (!await sameSite(target)) {
+        site = undefined;
+        siteStatus.textContent = `Active tab changed after the enable request for ${target.origin}. Check this site's detection and access in Chrome settings.`;
+        return;
+      }
+      if (!response.ok || !response.enabled) { siteStatus.textContent = `Could not enable detection for ${target.origin}. Check site access in Chrome settings.`; return; }
+      siteStatus.textContent = `Detection enabled for ${target.origin}; automatic scanning is not available yet.`;
+      controls(true);
+    } catch { siteStatus.textContent = `Access request failed for ${target.origin}; detection remains off.`; }
+    finally { busy = false; controls(siteStatus.textContent?.startsWith('Detection enabled') === true); }
+  })();
+});
+
+disableButton.addEventListener('click', () => {
+  if (busy || !site || disableButton.disabled) return;
+  const target = site;
+  busy = true; revision++;
+  controls(true);
+  siteStatus.textContent = `Disabling detection for ${target.origin}…`;
+  void (async () => {
+    try {
+      if (!await sameSite(target)) { site = undefined; siteStatus.textContent = 'Active tab changed. Reopen the popup; no site was changed.'; return; }
+      const response = await siteMessage(CLEARCHOICE_SITE_REVOKE, target.origin);
+      if (!await sameSite(target)) {
+        site = undefined;
+        siteStatus.textContent = `Active tab changed after revoking ${target.origin}. Browser access may remain; remove it in Chrome settings.`;
+        return;
+      }
+      // Removal is exact-site only; a broader Chrome site grant may survive this request.
+      let removed = false;
+      try { removed = await chrome.permissions.remove({ origins: [`${target.origin}/*`] }); }
+      catch { /* Explicit status below, never claim browser access was removed. */ }
+      const stillPermitted = await chrome.permissions.contains({ origins: [`${target.origin}/*`] });
+      if (!response.ok || response.enabled || !removed || stillPermitted) {
+        siteStatus.textContent = `Revocation incomplete for ${target.origin}. Remove site access in Chrome settings before restarting the browser; detection state and browser access may differ.`;
+        return;
+      }
+      siteStatus.textContent = `Detection disabled and browser site access removed for ${target.origin}.`;
+    } catch {
+      siteStatus.textContent = `Revocation could not be confirmed for ${target.origin}. Remove site access in Chrome settings before restarting the browser.`;
+    } finally { busy = false; controls(siteStatus.textContent?.startsWith('Detection disabled') !== true); }
+  })();
+});
 
 function findingStatus(count: number): string {
   if (count === 0) return 'No matching signals found on this page.';

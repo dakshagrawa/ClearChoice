@@ -1,5 +1,6 @@
 import { FINDING_WIRE_VERSION, isFindingDtoBatch, isValidRequestId } from './finding-dto';
 import type { FindingDto } from './finding-dto';
+import { isGrantOrigin } from './storage';
 
 export const CLEARCHOICE_FINDINGS_BATCH = 'CLEARCHOICE_FINDINGS_BATCH' as const;
 export const CLEARCHOICE_FINDINGS_CHALLENGE = 'CLEARCHOICE_FINDINGS_CHALLENGE' as const;
@@ -54,6 +55,19 @@ export function isReviewListResponse(value: unknown): value is ReviewListRespons
 export const CLEARCHOICE_ANALYZE = 'CLEARCHOICE_ANALYZE' as const;
 export const CLEARCHOICE_RESTORE = 'CLEARCHOICE_RESTORE' as const;
 export const CLEARCHOICE_DISABLE = 'CLEARCHOICE_DISABLE' as const;
+export const CLEARCHOICE_SITE_STATUS = 'CLEARCHOICE_SITE_STATUS' as const;
+export const CLEARCHOICE_SITE_ENABLE = 'CLEARCHOICE_SITE_ENABLE' as const;
+export const CLEARCHOICE_SITE_REVOKE = 'CLEARCHOICE_SITE_REVOKE' as const;
+export type SiteResponse = { ok: true; enabled: boolean; permitted: boolean }
+  | { ok: false; error: 'request-failed' | 'revocation-unsafe' };
+
+export function isSiteResponse(value: unknown): value is SiteResponse {
+  if (!isRecord(value)) return false;
+  return (hasExactKeys(value, ['ok', 'enabled', 'permitted']) && value.ok === true
+    && typeof value.enabled === 'boolean' && typeof value.permitted === 'boolean')
+    || (hasExactKeys(value, ['ok', 'error']) && value.ok === false
+      && (value.error === 'request-failed' || value.error === 'revocation-unsafe'));
+}
 
 export interface AnalyzeRequest {
   type: typeof CLEARCHOICE_ANALYZE;
@@ -86,6 +100,8 @@ export function isContentRequest(value: unknown): value is ContentRequest {
 export function isWorkerRequest(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISMISSED_GET))
+    || (hasExactKeys(value, ['type', 'origin']) && isGrantOrigin(value.origin)
+      && (value.type === CLEARCHOICE_SITE_STATUS || value.type === CLEARCHOICE_SITE_ENABLE || value.type === CLEARCHOICE_SITE_REVOKE))
     || (hasExactKeys(value, ['type', 'dismissed']) && value.type === CLEARCHOICE_DISMISSED_SET && typeof value.dismissed === 'boolean')
     || (hasExactKeys(value, ['type', 'nonce', 'batch']) && value.type === CLEARCHOICE_SUBMIT
       && isValidRequestId(value.nonce) && isFindingsBatchRequest(value.batch));

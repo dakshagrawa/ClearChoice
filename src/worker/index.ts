@@ -1,6 +1,6 @@
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, isAnalyzeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, isAnalyzeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
 import { canonicalOrigin } from '../shared/models';
-import { getDismissed, setDismissed } from '../shared/storage';
+import { getDismissed, setDismissed, loadGrantState } from '../shared/storage';
 import { isCurrentActiveTab } from '../shared/tab-analysis';
 import { createWorkerStore } from './store';
 import { createGrantManager } from './grants';
@@ -85,6 +85,28 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       return { ok: true };
     }
     if (!popupSender(sender)) return { ok: false, error: 'request-failed' };
+    if (request.type === CLEARCHOICE_SITE_STATUS || request.type === CLEARCHOICE_SITE_ENABLE || request.type === CLEARCHOICE_SITE_REVOKE) {
+      const origin = request.origin as string;
+      const [active] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (active?.id === undefined || senderOrigin(active.url ?? (await chrome.tabs.get(active.id)).url) !== origin
+        || !(await isCurrentActiveTab(active.id))) return { ok: false, error: 'request-failed' };
+      // A second tab read guards against a same-tab navigation while the focus check awaits.
+      if (senderOrigin((await chrome.tabs.get(active.id)).url) !== origin) return { ok: false, error: 'request-failed' };
+      if (request.type === CLEARCHOICE_SITE_ENABLE) await grants.enable(origin);
+      if (request.type === CLEARCHOICE_SITE_REVOKE) {
+        try { await grants.revoke(origin); }
+        catch (error) {
+          return { ok: false, error: error instanceof Error && error.message.startsWith('Revocation could not be confirmed')
+            ? 'revocation-unsafe' : 'request-failed' };
+        }
+      }
+      if (!(await isCurrentActiveTab(active.id)) || senderOrigin((await chrome.tabs.get(active.id)).url) !== origin)
+        return { ok: false, error: 'request-failed' };
+      const state = await loadGrantState();
+      const permitted = await chrome.permissions.contains({ origins: [`${origin}/*`] });
+      return { ok: true, enabled: state.sites[origin]?.enabled === true && permitted
+        && await grants.isEnabled(origin, state.sites[origin].generation), permitted };
+    }
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabId = tab?.id;
     if (tabId === undefined || !(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };

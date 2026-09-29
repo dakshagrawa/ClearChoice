@@ -133,7 +133,7 @@ test('packaged direct-popup automation does not claim an activeTab grant', async
     await popup.getByRole('button', { name: 'Analyze' }).click();
 
     await expect(fixture.locator('aside[data-clearchoice-panel]')).toHaveCount(0);
-    await expect(popup.getByRole('status')).toHaveText('ClearChoice could not analyze this page. Reload and try again.');
+    await expect(popup.locator('main > p[role="status"]')).toHaveText('ClearChoice could not analyze this page. Reload and try again.');
   } finally {
     await closeExtension(context, userDataDir);
     await closeServer(server);

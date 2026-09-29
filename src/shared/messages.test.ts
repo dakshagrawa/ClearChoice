@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, isAnalyzeResponse, isContentRequest, isRestoreResponse, isFindingsBatchRequest, isFindingsChallenge, isReviewListResponse, isWorkerRequest } from './messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, isAnalyzeResponse, isContentRequest, isRestoreResponse, isFindingsBatchRequest, isFindingsChallenge, isReviewListResponse, isWorkerRequest, isSiteResponse } from './messages';
 import { toFindingDto } from './finding-dto';
 import type { Finding } from '../core/types';
 import type { AnalyzeRequest, AnalyzeResponse, RestoreResponse } from './messages';
@@ -15,6 +15,19 @@ it('requires exact worker control, dismissal, and challenged batch shapes', () =
   expect(isContentRequest({ type: 'CLEARCHOICE_ANALYZE', requestId: 'req1', nonce: 'nonce1', url: 'private' })).toBe(false);
   expect(isWorkerRequest({ type: 'CLEARCHOICE_SUBMIT', nonce: 'nonce1', batch: { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: 'req1', findings: [] } })).toBe(true);
   expect(isWorkerRequest({ type: 'CLEARCHOICE_SUBMIT', nonce: 'nonce1', batch: { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: 'req1', findings: [] }, selector: '#private' })).toBe(false);
+});
+
+it('accepts only canonical HTTPS origin site controls and exact site responses', () => {
+  for (const type of ['CLEARCHOICE_SITE_STATUS', 'CLEARCHOICE_SITE_ENABLE', 'CLEARCHOICE_SITE_REVOKE']) {
+    expect(isWorkerRequest({ type, origin: 'https://a.test' })).toBe(true);
+    for (const origin of ['http://a.test', 'https://a.test/path', 'https://a.test/', 'https://a.test?x=1'])
+      expect(isWorkerRequest({ type, origin })).toBe(false);
+    expect(isWorkerRequest({ type, origin: 'https://a.test', pageTitle: 'private' })).toBe(false);
+  }
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_SITE_ENABLE' })).toBe(false);
+  expect(isSiteResponse({ ok: true, enabled: true, permitted: true })).toBe(true);
+  expect(isSiteResponse({ ok: true, enabled: false, permitted: false, url: '/checkout' })).toBe(false);
+  expect(isSiteResponse({ ok: false, error: 'revocation-unsafe' })).toBe(true);
 });
 
 it('accepts only the exact disable control shape in content, not worker requests', () => {

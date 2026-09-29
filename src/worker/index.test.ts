@@ -6,6 +6,7 @@ const permissionRemoved: Array<(permissions: chrome.permissions.Permissions) => 
 const registeredScripts: chrome.scripting.RegisteredContentScript[] = [];
 const grantedOrigins = new Set<string>();
 const getRegisteredContentScripts = vi.fn(async (filter?: { ids?: string[] }) => registeredScripts.filter((script) => !filter?.ids || filter.ids.includes(script.id)));
+const registerContentScripts = vi.fn(async (scripts: chrome.scripting.RegisteredContentScript[]) => { registeredScripts.push(...scripts); });
 const unregisterContentScripts = vi.fn(async ({ ids }: { ids: string[] }) => { for (const id of ids) { const index = registeredScripts.findIndex((script) => script.id === id); if (index >= 0) registeredScripts.splice(index, 1); } });
 const contains = vi.fn(async ({ origins }: { origins: string[] }) => origins.every((origin) => grantedOrigins.has(origin)));
 const state: Record<string, unknown> = {};
@@ -24,7 +25,7 @@ const popup = { id: 'extension', url: 'chrome-extension://extension/popup/index.
 const content = { id: 'extension', tab: { id: 42 }, frameId: 0, documentId: 'doc-A', url: 'https://merchant.test/checkout' } as chrome.runtime.MessageSender;
 
 async function boot() {
-  vi.stubGlobal('chrome', { runtime: { id: 'extension', onMessage: { addListener: (fn: typeof listeners[number]) => listeners.push(fn) } }, tabs: { query, get: tabGet, sendMessage }, action: { setBadgeText: vi.fn(async () => undefined) }, permissions: { contains, onRemoved: { addListener: (fn: typeof permissionRemoved[number]) => permissionRemoved.push(fn) } }, scripting: { executeScript, getRegisteredContentScripts, unregisterContentScripts }, storage: { local: { setAccessLevel, get, set }, session: { setAccessLevel: sessionAccessLevel, get: sessionGet, set: sessionSet } } });
+  vi.stubGlobal('chrome', { runtime: { id: 'extension', onMessage: { addListener: (fn: typeof listeners[number]) => listeners.push(fn) } }, tabs: { query, get: tabGet, sendMessage }, action: { setBadgeText: vi.fn(async () => undefined) }, permissions: { contains, onRemoved: { addListener: (fn: typeof permissionRemoved[number]) => permissionRemoved.push(fn) } }, scripting: { executeScript, getRegisteredContentScripts, registerContentScripts, unregisterContentScripts }, storage: { local: { setAccessLevel, get, set }, session: { setAccessLevel: sessionAccessLevel, get: sessionGet, set: sessionSet } } });
   await import('./index');
   await vi.waitFor(() => expect(listeners).toHaveLength(1));
   await new Promise<void>((resolve) => { listeners[0]({ type: 'INVALID' }, popup, () => resolve()); });
@@ -33,6 +34,52 @@ async function dispatch(message: unknown, sender: chrome.runtime.MessageSender):
   return new Promise((resolve) => { const accepted = listeners[0](message, sender, resolve); if (!accepted) resolve(undefined); });
 }
 afterEach(() => { listeners.length = 0; permissionRemoved.length = 0; registeredScripts.length = 0; grantedOrigins.clear(); for (const key of Object.keys(state)) delete state[key]; for (const key of Object.keys(sessionState)) delete sessionState[key]; vi.clearAllMocks(); get.mockReset().mockImplementation(async () => ({ ...state })); sendMessage.mockReset().mockResolvedValue({ ok: true, status: 'unsupported-context', findingCount: 0 }); query.mockReset().mockResolvedValue([{ id: 42 }]); tabGet.mockReset().mockResolvedValue({ id: 42, url: 'https://merchant.test/checkout' }); vi.resetModules(); vi.unstubAllGlobals(); });
+
+it('authorizes exact active popup site before enabling; never registers on spoof or missing permission', async () => {
+  await boot();
+  const enable = { type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' };
+  expect(await dispatch(enable, { ...popup, url: 'chrome-extension://extension/other.html' })).toEqual({ ok: false, error: 'request-failed' });
+  expect(await dispatch(enable, popup)).toEqual({ ok: false, error: 'request-failed' });
+  expect(registeredScripts).toHaveLength(0);
+  grantedOrigins.add('https://merchant.test/*');
+  expect(await dispatch(enable, popup)).toEqual({ ok: true, enabled: true, permitted: true });
+  expect(registeredScripts).toEqual([expect.objectContaining({ matches: ['https://merchant.test/*'], allFrames: false })]);
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_STATUS', origin: 'https://merchant.test' }, popup)).toEqual({ ok: true, enabled: true, permitted: true });
+  expect(executeScript).not.toHaveBeenCalled();
+  tabGet.mockResolvedValue({ id: 42, url: 'https://b.test/path' });
+  expect(await dispatch(enable, popup)).toEqual({ ok: false, error: 'request-failed' });
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup)).toEqual({ ok: false, error: 'request-failed' });
+});
+
+it('revokes only the active site even when another site remains registered', async () => {
+  grantedOrigins.add('https://merchant.test/*');
+  grantedOrigins.add('https://b.test/*');
+  state.grantState = { version: 1, sites: { 'https://b.test': { enabled: true, generation: 1 } } };
+  registeredScripts.push({ id: `clearchoice-site-${createHash('sha256').update('https://b.test').digest('hex')}`, matches: ['https://b.test/*'], js: ['content.js'], allFrames: false, persistAcrossSessions: true, world: 'ISOLATED' });
+  await boot();
+  await dispatch({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' }, popup);
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup)).toEqual({ ok: true, enabled: false, permitted: true });
+  expect(registeredScripts).toEqual([expect.objectContaining({ matches: ['https://b.test/*'] })]);
+  expect((state.grantState as { sites: Record<string, { enabled: boolean }> }).sites['https://b.test'].enabled).toBe(true);
+});
+
+it('reports disabled status when registration is absent despite a stored enabled grant', async () => {
+  grantedOrigins.add('https://merchant.test/*');
+  await boot();
+  await dispatch({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' }, popup);
+  registeredScripts.length = 0;
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_STATUS', origin: 'https://merchant.test' }, popup)).toEqual({ ok: true, enabled: false, permitted: true });
+});
+
+it('surfaces dual storage and unregister failures as unsafe revocation, without hiding B', async () => {
+  grantedOrigins.add('https://merchant.test/*');
+  await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' }, popup)).toEqual({ ok: true, enabled: true, permitted: true });
+  set.mockRejectedValueOnce(new Error('quota'));
+  unregisterContentScripts.mockRejectedValueOnce(new Error('script failure'));
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup)).toEqual({ ok: false, error: 'revocation-unsafe' });
+  expect(registeredScripts).toHaveLength(1);
+});
 
 it('reconciles stale enabled grants on startup and listens for permission removal without changing manual Analyze', async () => {
   state.grantState = { version: 1, sites: { 'https://a.test': { enabled: true, generation: 1 } } };
