@@ -1,5 +1,5 @@
 import type { AnalyzeResponse } from '../shared/messages';
-import { analyzeActiveTab, restoreActiveTab } from '../shared/tab-analysis';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, isAnalyzeResponse, isRestoreResponse } from '../shared/messages';
 
 const app = document.querySelector<HTMLElement>('#app');
 
@@ -37,6 +37,19 @@ function analysisStatus(response: AnalyzeResponse): string {
   }
   if (response.status === 'unsupported-context') return 'This page does not look like a supported English checkout page.';
   return findingStatus(response.findingCount);
+}
+
+async function analyzeActiveTab(): Promise<AnalyzeResponse> {
+  try {
+    const response: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_ANALYZE });
+    return isAnalyzeResponse(response) ? response : { ok: false, error: 'request-failed' };
+  } catch { return { ok: false, error: 'request-failed' }; }
+}
+async function restoreActiveTab() {
+  try {
+    const response: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_RESTORE });
+    return isRestoreResponse(response) ? response : { ok: false as const, error: 'request-failed' as const };
+  } catch { return { ok: false as const, error: 'request-failed' as const }; }
 }
 
 analyzeButton.addEventListener('click', async () => {

@@ -4,6 +4,9 @@ import type { FindingDto } from './finding-dto';
 export const CLEARCHOICE_FINDINGS_BATCH = 'CLEARCHOICE_FINDINGS_BATCH' as const;
 export const CLEARCHOICE_FINDINGS_CHALLENGE = 'CLEARCHOICE_FINDINGS_CHALLENGE' as const;
 export const CLEARCHOICE_REVIEW_LIST = 'CLEARCHOICE_REVIEW_LIST' as const;
+export const CLEARCHOICE_SUBMIT = 'CLEARCHOICE_SUBMIT' as const;
+export const CLEARCHOICE_DISMISSED_GET = 'CLEARCHOICE_DISMISSED_GET' as const;
+export const CLEARCHOICE_DISMISSED_SET = 'CLEARCHOICE_DISMISSED_SET' as const;
 
 export interface FindingsBatchRequest {
   type: typeof CLEARCHOICE_FINDINGS_BATCH;
@@ -53,6 +56,8 @@ export const CLEARCHOICE_RESTORE = 'CLEARCHOICE_RESTORE' as const;
 
 export interface AnalyzeRequest {
   type: typeof CLEARCHOICE_ANALYZE;
+  requestId?: string;
+  nonce?: string;
 }
 
 export interface RestoreRequest {
@@ -72,8 +77,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isContentRequest(value: unknown): value is ContentRequest {
   return isRecord(value)
-    && Object.keys(value).length === 1
-    && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE);
+    && ((hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE))
+      || (hasExactKeys(value, ['type', 'requestId', 'nonce']) && value.type === CLEARCHOICE_ANALYZE
+        && isValidRequestId(value.requestId) && isValidRequestId(value.nonce)));
+}
+
+export function isWorkerRequest(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISMISSED_GET))
+    || (hasExactKeys(value, ['type', 'dismissed']) && value.type === CLEARCHOICE_DISMISSED_SET && typeof value.dismissed === 'boolean')
+    || (hasExactKeys(value, ['type', 'nonce', 'batch']) && value.type === CLEARCHOICE_SUBMIT
+      && isValidRequestId(value.nonce) && isFindingsBatchRequest(value.batch));
 }
 
 export function isAnalyzeResponse(value: unknown): value is AnalyzeResponse {

@@ -4,7 +4,7 @@ function installChrome(response: unknown): { query: ReturnType<typeof vi.fn>; ex
   const query = vi.fn().mockResolvedValue([{ id: 42, active: true }]);
   const executeScript = vi.fn().mockResolvedValue([]);
   const sendMessage = vi.fn().mockResolvedValue(response);
-  vi.stubGlobal('chrome', { tabs: { query, sendMessage }, scripting: { executeScript } });
+  vi.stubGlobal('chrome', { tabs: { query, sendMessage: vi.fn() }, scripting: { executeScript }, runtime: { sendMessage } });
   return { query, executeScript, sendMessage };
 }
 
@@ -79,7 +79,7 @@ it('uses active current-tab injection for Restore without analyzing again', asyn
   document.querySelector<HTMLButtonElement>('button:last-of-type')?.click();
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('button:last-of-type')?.disabled).toBe(false));
 
-  expect(query).toHaveBeenCalledWith({ active: true, currentWindow: true });
-  expect(executeScript).toHaveBeenCalledWith({ target: { tabId: 42 }, files: ['content.js'] });
-  expect(sendMessage).toHaveBeenCalledWith(42, { type: 'CLEARCHOICE_RESTORE' });
+  expect(query).not.toHaveBeenCalled();
+  expect(executeScript).not.toHaveBeenCalled();
+  expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_RESTORE' });
 });

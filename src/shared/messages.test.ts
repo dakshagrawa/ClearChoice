@@ -1,9 +1,21 @@
 import { expect, it } from 'vitest';
 
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, isAnalyzeResponse, isContentRequest, isRestoreResponse, isFindingsBatchRequest, isFindingsChallenge, isReviewListResponse } from './messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, isAnalyzeResponse, isContentRequest, isRestoreResponse, isFindingsBatchRequest, isFindingsChallenge, isReviewListResponse, isWorkerRequest } from './messages';
 import { toFindingDto } from './finding-dto';
 import type { Finding } from '../core/types';
 import type { AnalyzeRequest, AnalyzeResponse, RestoreResponse } from './messages';
+
+it('requires exact worker control, dismissal, and challenged batch shapes', () => {
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_ANALYZE' })).toBe(true);
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_DISMISSED_GET' })).toBe(true);
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_DISMISSED_SET', dismissed: true })).toBe(true);
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_DISMISSED_SET', dismissed: 'true' })).toBe(false);
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_DISMISSED_SET', dismissed: true, evidence: 'private' })).toBe(false);
+  expect(isContentRequest({ type: 'CLEARCHOICE_ANALYZE', requestId: 'req1', nonce: 'nonce1' })).toBe(true);
+  expect(isContentRequest({ type: 'CLEARCHOICE_ANALYZE', requestId: 'req1', nonce: 'nonce1', url: 'private' })).toBe(false);
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_SUBMIT', nonce: 'nonce1', batch: { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: 'req1', findings: [] } })).toBe(true);
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_SUBMIT', nonce: 'nonce1', batch: { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: 'req1', findings: [] }, selector: '#private' })).toBe(false);
+});
 
 it('defines popup-safe successful analysis messages with status and count only', () => {
   const request: AnalyzeRequest = { type: CLEARCHOICE_ANALYZE };

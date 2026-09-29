@@ -2,17 +2,33 @@ import { classifyCheckoutContext } from '../core/context';
 import { detectPreselectedAddons, detectRecurringCharges } from '../core/detector';
 import type { AnalysisResult, Finding } from '../core/types';
 import {
+  CLEARCHOICE_DISMISSED_GET,
+  CLEARCHOICE_DISMISSED_SET,
   CLEARCHOICE_RESTORE,
+  CLEARCHOICE_SUBMIT,
   isContentRequest,
 } from '../shared/messages';
 import type {
   AnalyzeResponse,
   RestoreResponse,
 } from '../shared/messages';
-import { getDismissed, setDismissed } from '../shared/storage';
+import { buildFindingBatch } from './candidates';
 import { removePanel, renderPanel } from './panel';
 
 const contentSentinel = '__clearchoiceContentListenerInstalled__';
+
+async function getDismissed(): Promise<boolean> {
+  const response: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_DISMISSED_GET });
+  if (typeof response !== 'object' || response === null || Object.keys(response).length !== 2
+    || !('ok' in response) || response.ok !== true || !('dismissed' in response)
+    || typeof response.dismissed !== 'boolean') throw new Error('Dismissed read refused');
+  return response.dismissed;
+}
+async function setDismissed(dismissed: boolean): Promise<void> {
+  const response: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_DISMISSED_SET, dismissed });
+  if (typeof response !== 'object' || response === null || Object.keys(response).length !== 1
+    || !('ok' in response) || response.ok !== true) throw new Error('Dismissed write refused');
+}
 
 type ClearChoiceWindow = Window & { [contentSentinel]?: true };
 
@@ -55,6 +71,13 @@ if (!pageWindow[contentSentinel]) {
       }
 
       const result = analyzePage();
+      if (request.requestId && request.nonce) {
+        const batch = await buildFindingBatch(result.findings, request.requestId);
+        const receipt: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_SUBMIT, nonce: request.nonce, batch });
+        if (typeof receipt !== 'object' || receipt === null || Object.keys(receipt).length !== 2
+          || !('ok' in receipt) || receipt.ok !== true || !('findingCount' in receipt)
+          || receipt.findingCount !== batch.findings.length) throw new Error('Batch receipt refused');
+      }
       if (!(await getDismissed())) {
         renderPanel(result, () => {
           void setDismissed(true).catch(() => undefined);

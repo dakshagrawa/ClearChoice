@@ -84,10 +84,10 @@ export interface Preferences {
   dismissed: boolean;
 }
 
-const preferencesKey = 'dismissed';
-
 export async function getDismissed(): Promise<boolean> {
-  const stored = await chrome.storage.local.get(preferencesKey);
+  const stored = await chrome.storage.local.get('dismissed');
+  if (Object.hasOwn(stored, 'dismissed') && typeof stored.dismissed !== 'boolean')
+    throw new Error('Corrupt local dismissed preference');
   return stored.dismissed === true;
 }
 

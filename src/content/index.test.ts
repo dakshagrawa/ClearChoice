@@ -1,9 +1,10 @@
 import { afterEach, expect, it, vi } from 'vitest';
 
-function installChrome(): { addListener: ReturnType<typeof vi.fn> } {
+function installChrome(): { addListener: ReturnType<typeof vi.fn>; sendMessage: ReturnType<typeof vi.fn> } {
   const addListener = vi.fn();
+  const sendMessage = vi.fn().mockImplementation(async (message: { type: string }) => message.type === 'CLEARCHOICE_DISMISSED_GET' ? { ok: true, dismissed: false } : message.type === 'CLEARCHOICE_DISMISSED_SET' ? { ok: true } : { ok: true, findingCount: 0 });
   vi.stubGlobal('chrome', {
-    runtime: { onMessage: { addListener } },
+    runtime: { onMessage: { addListener }, sendMessage },
     storage: {
       local: {
         get: vi.fn().mockResolvedValue({ dismissed: false }),
@@ -11,7 +12,7 @@ function installChrome(): { addListener: ReturnType<typeof vi.fn> } {
       },
     },
   });
-  return { addListener };
+  return { addListener, sendMessage };
 }
 
 afterEach(() => {
@@ -25,6 +26,32 @@ afterEach(() => {
 function setSupportedCheckoutContext(): void {
   document.body.innerHTML = '<main><aside>Order summary — Subtotal: $24</aside><button>Place order</button></main>';
 }
+
+it('routes dismissed state through worker and never calls content storage', async () => {
+  const { addListener, sendMessage } = installChrome();
+  setSupportedCheckoutContext();
+  await import('./index');
+  const listener = addListener.mock.calls[0]?.[0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
+  const reply = vi.fn();
+  listener({ type: 'CLEARCHOICE_ANALYZE', requestId: 'req1', nonce: 'nonce1' }, {}, reply);
+  await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+  expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_DISMISSED_GET' });
+  expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_SUBMIT', nonce: 'nonce1' }));
+  expect(chrome.storage.local.get).not.toHaveBeenCalled();
+  expect(chrome.storage.local.set).not.toHaveBeenCalled();
+});
+
+it('rejects a malformed batch receipt and does not render or report success', async () => {
+  const { addListener, sendMessage } = installChrome();
+  sendMessage.mockResolvedValueOnce({ ok: true, findingCount: 1 });
+  setSupportedCheckoutContext();
+  await import('./index');
+  const listener = addListener.mock.calls[0]?.[0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
+  const reply = vi.fn();
+  listener({ type: 'CLEARCHOICE_ANALYZE', requestId: 'req1', nonce: 'nonce1' }, {}, reply);
+  await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ ok: false, error: 'request-failed' }));
+  expect(document.querySelector('[data-clearchoice-panel]')).toBeNull();
+});
 
 it('registers one listener and renders one panel when the payload is injected repeatedly', async () => {
   const { addListener } = installChrome();
