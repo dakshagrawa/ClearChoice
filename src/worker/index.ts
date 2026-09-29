@@ -146,12 +146,19 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       if (!contentSender(sender)) return { ok: false, error: 'request-failed' };
       const origin = senderOrigin(sender.url);
       if (!origin) return { ok: false, error: 'request-failed' };
+      const tabId = sender.tab!.id!;
       const scan = pending.get(sender.documentId!);
-      if (!(scan && scan.tabId === sender.tab!.id && scan.origin === origin)
-        && !(await authorizedDocument(sender.tab!.id!, sender.documentId!, origin)))
-        return { ok: false, error: 'request-failed' };
-      if (!(await isCurrentActiveTab(sender.tab!.id!))
-        || senderOrigin((await chrome.tabs.get(sender.tab!.id!)).url) !== origin) return { ok: false, error: 'request-failed' };
+      const manuallyAuthorized = (scan && scan.tabId === tabId && scan.origin === origin)
+        || await authorizedDocument(tabId, sender.documentId!, origin);
+      let automaticallyAuthorized = false;
+      if (!manuallyAuthorized) {
+        const state = await loadGrantState();
+        const grant = state.sites[origin];
+        automaticallyAuthorized = grant?.enabled === true && await grants.isEnabled(origin, grant.generation);
+      }
+      if (!manuallyAuthorized && !automaticallyAuthorized) return { ok: false, error: 'request-failed' };
+      if ((!automaticallyAuthorized && !(await isCurrentActiveTab(tabId)))
+        || senderOrigin((await chrome.tabs.get(tabId)).url) !== origin) return { ok: false, error: 'request-failed' };
       if (request.type === CLEARCHOICE_DISMISSED_GET) return { ok: true, dismissed: await getDismissed() };
       await setDismissed(request.dismissed as boolean);
       return { ok: true };

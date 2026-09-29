@@ -105,9 +105,9 @@ function startAutomaticObserver(): () => void {
     autoPanel = undefined;
   };
   let retries = 0;
-  const initialUrl = location.href;
+  const initialOrigin = location.origin;
   let generation: number | undefined;
-  const valid = () => active && location.origin === new URL(initialUrl).origin;
+  const valid = () => active && location.origin === initialOrigin;
   const stop = () => {
     if (!active) return;
     active = false;

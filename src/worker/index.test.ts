@@ -51,6 +51,20 @@ async function enabledAuto() {
   }));
 }
 
+it('allows dismissal state for an opted-in automatic document even when its tab is backgrounded, but not after revoke', async () => {
+  await enabledAuto();
+  query.mockResolvedValue([{ id: 7 }]);
+  expect(await dispatch({ type: 'CLEARCHOICE_DISMISSED_GET' }, content))
+    .toEqual({ ok: true, dismissed: false });
+  expect(await dispatch({ type: 'CLEARCHOICE_DISMISSED_SET', dismissed: true }, content))
+    .toEqual({ ok: true });
+  expect(await dispatch({ type: 'CLEARCHOICE_DISMISSED_GET' }, content))
+    .toEqual({ ok: true, dismissed: true });
+  grantedOrigins.clear();
+  expect(await dispatch({ type: 'CLEARCHOICE_DISMISSED_GET' }, content))
+    .toEqual({ ok: false, error: 'request-failed' });
+});
+
 it('returns a generation only to a live top-frame document on a permitted registered site', async () => {
   await enabledAuto();
   expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: true, generation: 1 });
