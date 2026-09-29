@@ -206,10 +206,39 @@ it('does not commit a challenged finding when focus switches during the queued s
   expect(state).toEqual(snapshot);
 });
 
+it('does not commit a challenged finding when navigation changes during the queued storage read', async () => {
+  await boot();
+  const writes = set.mock.calls.length;
+  let releaseRead!: (value: Record<string, unknown>) => void;
+  get.mockImplementationOnce(() => new Promise((resolve) => { releaseRead = resolve; }));
+  sendMessage.mockImplementationOnce(async (_tab: number, challenge: { requestId: string; nonce: string }) => {
+    const screenedExcerpt = 'Monthly plan $10.00';
+    const opaqueFingerprint = createHash('sha256').update(`recurring-charge\0price-cadence\0${screenedExcerpt}`).digest('hex');
+    const finding = { version: 1, requestId: challenge.requestId, kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt, opaqueFingerprint, ordinal: 1 };
+    const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: challenge.requestId, findings: [finding] };
+    const submission = dispatch({ type: 'CLEARCHOICE_SUBMIT', nonce: challenge.nonce, batch }, content);
+    await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    tabGet.mockResolvedValue({ id: 42, url: 'https://other.test/checkout' });
+    releaseRead({ ...state });
+    expect(await submission).toEqual({ ok: false, error: 'request-failed' });
+    return { ok: true, status: 'supported', findingCount: 1 };
+  });
+  expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: false, error: 'request-failed' });
+  expect(set).toHaveBeenCalledTimes(writes);
+});
+
 it.each(['Cannot access a PDF document.', 'The extensions gallery cannot be scripted.', 'script failed'])('reports restricted and generic injection failures without messaging: %s', async (reason) => {
   await boot();
   executeScript.mockRejectedValueOnce(new Error(reason));
   expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: false, error: reason === 'script failed' ? 'injection-failed' : 'restricted-page' });
+  expect(sendMessage).not.toHaveBeenCalled();
+});
+
+it('does not inject when focus switches after the initial active-tab lookup', async () => {
+  await boot();
+  query.mockResolvedValueOnce([{ id: 42 }]).mockResolvedValueOnce([{ id: 7 }]);
+  expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: false, error: 'request-failed' });
+  expect(executeScript).not.toHaveBeenCalled();
   expect(sendMessage).not.toHaveBeenCalled();
 });
 
