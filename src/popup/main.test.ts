@@ -64,6 +64,34 @@ it('requests exact site permission synchronously on click, never on load or Anal
   expect(remove).not.toHaveBeenCalled();
 });
 
+it.each(['activated', 'updated', 'loading', 'removed'])('invalidates cached site on tab %s before click without requesting permission', async (event) => {
+  vi.resetModules();
+  document.body.innerHTML = '<div id="app"></div>';
+  const activated: Array<(info: { tabId: number; windowId: number }) => void> = [];
+  const updated: Array<(id: number, change: { url?: string; status?: string }) => void> = [];
+  const removed: Array<(id: number) => void> = [];
+  const request = vi.fn().mockResolvedValue(true);
+  const sendMessage = vi.fn().mockResolvedValue({ ok: true, enabled: false, permitted: false });
+  vi.stubGlobal('chrome', { tabs: {
+    query: vi.fn().mockResolvedValue([{ id: 42 }]),
+    get: vi.fn().mockResolvedValue({ id: 42, url: 'https://a.test/path' }),
+    onActivated: { addListener: (fn: typeof activated[number]) => activated.push(fn) },
+    onUpdated: { addListener: (fn: typeof updated[number]) => updated.push(fn) },
+    onRemoved: { addListener: (fn: typeof removed[number]) => removed.push(fn) },
+  }, permissions: { request }, runtime: { sendMessage } });
+  await import('./main');
+  const button = document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')!;
+  await vi.waitFor(() => expect(button.disabled).toBe(false));
+  if (event === 'activated') activated[0]({ tabId: 7, windowId: 1 });
+  else if (event === 'updated') updated[0](42, { url: 'https://b.test/path' });
+  else if (event === 'loading') updated[0](42, { status: 'loading' });
+  else removed[0](42);
+  expect(button.disabled).toBe(true);
+  button.click();
+  expect(request).not.toHaveBeenCalled();
+  expect(sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_SITE_ENABLE' }));
+});
+
 it('denial and tab navigation during the prompt never enable the worker', async () => {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';

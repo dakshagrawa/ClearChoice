@@ -201,6 +201,22 @@ it('a generation check inside the queued history commit does not deadlock', asyn
   await expect(Promise.race([checked, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100))])).resolves.toBe(true);
 });
 
+it('checks the active site inside the shared queue before registering', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*');
+  const store = createWorkerStore(); const grants = createGrantManager(store);
+  let release!: () => void;
+  const first = store.enqueue(() => new Promise<void>((resolve) => { release = resolve; }));
+  let active = true;
+  const pending = grants.enable('https://a.test', async () => active);
+  await vi.waitFor(() => expect(release).toBeDefined());
+  active = false;
+  release(); await first;
+  await expect(pending).rejects.toThrow('Active site changed');
+  expect(f.registerContentScripts).not.toHaveBeenCalled();
+  expect(f.scripts).toHaveLength(0);
+  expect(f.data.grantState).toBeUndefined();
+});
+
 it('grant work shares the serialized finding mutation queue', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*');
   const store = createWorkerStore(); const grants = createGrantManager(store);

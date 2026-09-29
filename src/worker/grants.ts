@@ -84,7 +84,7 @@ export function createGrantManager(store: Queue) {
 
   return {
     /** Caller must already hold the exact-origin browser permission from a popup click. */
-    enable(origin: string): Promise<number> {
+    enable(origin: string, stillActive?: () => Promise<boolean>): Promise<number> {
       return store.enqueue(async () => {
         if (!isGrantOrigin(origin)) throw new Error('Invalid HTTPS origin');
         const id = await scriptId(origin);
@@ -100,7 +100,9 @@ export function createGrantManager(store: Queue) {
         const previous = state.sites[origin]?.generation ?? 0;
         if (previous === Number.MAX_SAFE_INTEGER) throw new Error('Grant generation exhausted');
         try {
+          if (stillActive && !await stillActive()) throw new Error('Active site changed');
           await chrome.scripting.registerContentScripts([{ id, matches: [match(origin)], js: ['content.js'], allFrames: false, persistAcrossSessions: true, world: 'ISOLATED' }]);
+          if (stillActive && !await stillActive()) throw new Error('Active site changed');
           await saveGrantState({ version: 1, sites: { ...state.sites, [origin]: { enabled: true, generation: previous + 1 } } });
           locallyDisabled.delete(origin);
           return previous + 1;

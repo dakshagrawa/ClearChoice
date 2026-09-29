@@ -51,6 +51,26 @@ it('authorizes exact active popup site before enabling; never registers on spoof
   expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup)).toEqual({ ok: false, error: 'request-failed' });
 });
 
+it.each(['focus', 'navigation'])('rejects %s change during registration without saving a grant or leaving a script', async (change) => {
+  grantedOrigins.add('https://merchant.test/*');
+  await boot();
+  let release!: () => void;
+  registerContentScripts.mockImplementationOnce(async (scripts) => {
+    registeredScripts.push(...scripts);
+    await new Promise<void>((resolve) => { release = resolve; });
+  });
+  const pending = dispatch({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' }, popup);
+  await vi.waitFor(() => expect(registerContentScripts).toHaveBeenCalledTimes(1));
+  if (change === 'focus') query.mockResolvedValue([{ id: 7 }]);
+  else tabGet.mockResolvedValue({ id: 42, url: 'https://other.test/path' });
+  release();
+  expect(await pending).toEqual({ ok: false, error: 'request-failed' });
+  expect(registeredScripts).toHaveLength(0);
+  expect((state.grantState as { sites?: Record<string, unknown> } | undefined)?.sites?.['https://merchant.test']).toBeUndefined();
+  expect(set.mock.calls.filter(([value]) => 'grantState' in value)).toHaveLength(0);
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
+});
+
 it('revokes only the active site even when another site remains registered', async () => {
   grantedOrigins.add('https://merchant.test/*');
   grantedOrigins.add('https://b.test/*');

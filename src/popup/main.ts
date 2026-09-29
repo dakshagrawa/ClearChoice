@@ -62,10 +62,21 @@ function controls(enabled: boolean): void {
   enableButton.disabled = busy || !site || enabled;
   disableButton.disabled = busy || !site || !enabled;
 }
+function invalidateSite(): void {
+  site = undefined;
+  revision++;
+  controls(false);
+  siteStatus.textContent = 'Active tab changed. Reopen the popup for the new site.';
+}
+chrome.tabs.onActivated?.addListener(({ tabId }) => { if (site && tabId !== site.id) invalidateSite(); });
+chrome.tabs.onUpdated?.addListener((tabId, change) => {
+  if (site?.id === tabId && (change.url !== undefined || change.status === 'loading')) invalidateSite();
+});
+chrome.tabs.onRemoved?.addListener((tabId) => { if (site?.id === tabId) invalidateSite(); });
 void (async () => {
   try {
     const target = await activeSite();
-    if (busy) return;
+    if (busy || revision !== 0) return;
     site = target;
     if (!target) { siteStatus.textContent = 'Site detection is available only on an HTTPS site.'; return; }
     const response = await siteMessage(CLEARCHOICE_SITE_STATUS, target.origin);
@@ -94,9 +105,9 @@ enableButton.addEventListener('click', () => {
     try {
       const allowed = await permission;
       if (!allowed) { siteStatus.textContent = `Access denied for ${target.origin}; detection remains off.`; return; }
-      if (!await sameSite(target)) { site = undefined; siteStatus.textContent = `Active tab changed. Detection was not enabled for ${target.origin}; browser site access may remain. Remove it in Chrome settings if unwanted.`; return; }
+      if (site !== target || !await sameSite(target)) { site = undefined; siteStatus.textContent = `Active tab changed. Detection was not enabled for ${target.origin}; browser site access may remain. Remove it in Chrome settings if unwanted.`; return; }
       const response = await siteMessage(CLEARCHOICE_SITE_ENABLE, target.origin);
-      if (!await sameSite(target)) {
+      if (site !== target || !await sameSite(target)) {
         site = undefined;
         siteStatus.textContent = `Active tab changed after the enable request for ${target.origin}. Check this site's detection and access in Chrome settings.`;
         return;

@@ -92,7 +92,8 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
         || !(await isCurrentActiveTab(active.id))) return { ok: false, error: 'request-failed' };
       // A second tab read guards against a same-tab navigation while the focus check awaits.
       if (senderOrigin((await chrome.tabs.get(active.id)).url) !== origin) return { ok: false, error: 'request-failed' };
-      if (request.type === CLEARCHOICE_SITE_ENABLE) await grants.enable(origin);
+      if (request.type === CLEARCHOICE_SITE_ENABLE) await grants.enable(origin, async () =>
+        await isCurrentActiveTab(active.id!) && senderOrigin((await chrome.tabs.get(active.id!)).url) === origin);
       if (request.type === CLEARCHOICE_SITE_REVOKE) {
         try { await grants.revoke(origin); }
         catch (error) {
