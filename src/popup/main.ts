@@ -38,6 +38,7 @@ let busy = false;
 let revision = 0;
 let enabled = false;
 let permitted = false;
+let workerUnavailable = false;
 
 function originOf(url: unknown): string | undefined {
   if (typeof url !== 'string') return undefined;
@@ -61,7 +62,7 @@ async function siteMessage(type: string, origin: string): Promise<SiteResponse> 
   } catch { return { ok: false, error: 'request-failed' }; }
 }
 function controls(): void {
-  enableButton.disabled = busy || !site || enabled;
+  enableButton.disabled = busy || !site || workerUnavailable || enabled;
   disableButton.disabled = busy || !site || (!enabled && !permitted);
 }
 function invalidateSite(): void {
@@ -85,7 +86,17 @@ void (async () => {
     if (busy || revision !== 0) return;
     if (!await sameSite(target)) { site = undefined; siteStatus.textContent = 'Active tab changed. Reopen the popup for the new site.'; return; }
     if (busy || revision !== 0) return;
-    if (!response.ok) { siteStatus.textContent = 'Could not check site detection. Reopen the popup.'; controls(); return; }
+    if (!response.ok) {
+      workerUnavailable = true;
+      try { permitted = await chrome.permissions.contains({ origins: [`${target.origin}/*`] }); }
+      catch { permitted = false; }
+      if (revision !== 0 || !await sameSite(target)) { invalidateSite(); return; }
+      controls();
+      siteStatus.textContent = permitted
+        ? `Could not check detection for ${target.origin}, but browser site access remains. Use Disable below or remove access in Chrome settings.`
+        : 'Could not check site detection. Reopen the popup; check Chrome settings if site access remains.';
+      return;
+    }
     enabled = response.enabled;
     permitted = response.permitted;
     controls();

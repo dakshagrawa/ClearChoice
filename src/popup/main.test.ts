@@ -226,6 +226,27 @@ it('keeps Disable available immediately when permission succeeds but worker regi
   expect(disable.disabled).toBe(false);
 });
 
+it('offers browser-access removal when the worker cannot answer site status', async () => {
+  vi.resetModules();
+  document.body.innerHTML = '<div id="app"></div>';
+  const permissions = new Set(['https://a.test/*']);
+  const contains = vi.fn(async ({ origins }: { origins: string[] }) => origins.every((origin) => permissions.has(origin)));
+  const remove = vi.fn(async ({ origins }: { origins: string[] }) => permissions.delete(origins[0]));
+  const sendMessage = vi.fn().mockResolvedValue({ ok: false, error: 'request-failed' });
+  vi.stubGlobal('chrome', {
+    tabs: { query: vi.fn().mockResolvedValue([{ id: 42 }]), get: vi.fn().mockResolvedValue({ id: 42, url: 'https://a.test/checkout' }) },
+    permissions: { contains, remove, request: vi.fn() }, runtime: { sendMessage },
+  });
+  await import('./main');
+  const disable = document.querySelector<HTMLButtonElement>('[data-action="site-disable"]')!;
+  await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).toContain('Chrome settings'));
+  expect(disable.disabled).toBe(false);
+  disable.click();
+  await vi.waitFor(() => expect(remove).toHaveBeenCalledWith({ origins: ['https://a.test/*'] }));
+  expect(permissions.size).toBe(0);
+  expect(document.querySelector('[data-site-status]')?.textContent).not.toContain('Detection disabled and browser site access removed');
+});
+
 it('uses the exact local-only initial, working, and singular successful statuses', async () => {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
