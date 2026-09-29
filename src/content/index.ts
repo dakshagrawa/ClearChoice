@@ -12,7 +12,7 @@ import type {
   AnalyzeResponse,
   RestoreResponse,
 } from '../shared/messages';
-import { buildFindingBatch } from './candidates';
+import { buildFindingBatchWithSources } from './candidates';
 import { removePanel, renderPanel } from './panel';
 
 const contentSentinel = '__clearchoiceContentListenerInstalled__';
@@ -71,9 +71,11 @@ if (!pageWindow[contentSentinel]) {
       }
 
       const result = analyzePage();
+      let displayResult = result;
       let findingCount = result.findings.length;
       if (request.requestId && request.nonce) {
-        const batch = await buildFindingBatch(result.findings, request.requestId);
+        const { batch, eligibleFindings } = await buildFindingBatchWithSources(result.findings, request.requestId);
+        displayResult = { findings: eligibleFindings };
         findingCount = batch.findings.length;
         const receipt: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_SUBMIT, nonce: request.nonce, batch });
         if (typeof receipt !== 'object' || receipt === null || Object.keys(receipt).length !== 2
@@ -81,7 +83,7 @@ if (!pageWindow[contentSentinel]) {
           || receipt.findingCount !== batch.findings.length) throw new Error('Batch receipt refused');
       }
       if (!(await getDismissed())) {
-        renderPanel(result, () => {
+        renderPanel(displayResult, () => {
           void setDismissed(true).catch(() => undefined);
         });
       }

@@ -14,17 +14,17 @@ export function createScanRequestId(): string {
 }
 
 /** Consumes the DOM-ordered findings from analyzePage; never reorders by selector or hash. */
-export async function buildFindingBatch(findings: readonly Finding[], requestId: string): Promise<FindingsBatchRequest> {
+export async function buildFindingBatchWithSources(findings: readonly Finding[], requestId: string): Promise<{ batch: FindingsBatchRequest; eligibleFindings: Finding[] }> {
   if (!isValidRequestId(requestId)) throw new Error('Invalid request ID');
   if (typeof crypto?.subtle?.digest !== 'function') throw new Error('Web Crypto unavailable');
   const screened = findings.flatMap((finding) => {
     const dto = toFindingDto(finding, requestId, 1, screeningFingerprint);
-    return dto ? [dto] : [];
+    return dto ? [{ dto, finding }] : [];
   });
   if (screened.length > MAX_FINDING_BATCH) throw new Error('Finding batch exceeds 100 eligible items');
   const ordinals = new Map<string, number>();
   const result: FindingsBatchRequest['findings'] = [];
-  for (const dto of screened) {
+  for (const { dto } of screened) {
     const fingerprint = await semanticFingerprint(dto);
     const ordinal = (ordinals.get(fingerprint) ?? 0) + 1;
     ordinals.set(fingerprint, ordinal);
@@ -32,5 +32,9 @@ export async function buildFindingBatch(findings: readonly Finding[], requestId:
   }
   const batch = { type: CLEARCHOICE_FINDINGS_BATCH, version: 1, requestId, findings: result };
   if (!isFindingsBatchRequest(batch)) throw new Error('Invalid finding batch');
-  return batch;
+  return { batch, eligibleFindings: screened.map(({ finding }) => finding) };
+}
+
+export async function buildFindingBatch(findings: readonly Finding[], requestId: string): Promise<FindingsBatchRequest> {
+  return (await buildFindingBatchWithSources(findings, requestId)).batch;
 }

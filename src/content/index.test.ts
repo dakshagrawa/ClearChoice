@@ -64,6 +64,9 @@ it('reports only persisted eligible findings when checkout evidence is screened 
   const submission = sendMessage.mock.calls.find(([message]) => message.type === 'CLEARCHOICE_SUBMIT')?.[0];
   expect(submission?.batch.findings).toHaveLength(0);
   expect(reply).toHaveBeenCalledWith({ ok: true, status: 'supported', findingCount: 0 });
+  const panel = document.querySelector<HTMLElement>('[data-clearchoice-panel]');
+  expect(panel?.shadowRoot?.querySelectorAll('article')).toHaveLength(0);
+  expect(panel?.shadowRoot?.textContent).not.toContain('example.com/checkout');
 });
 
 it('registers one listener and renders one panel when the payload is injected repeatedly', async () => {
