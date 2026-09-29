@@ -2,6 +2,12 @@ import { createHash } from 'node:crypto';
 import { afterEach, expect, it, vi } from 'vitest';
 
 const listeners: Array<(message: unknown, sender: chrome.runtime.MessageSender, reply: (value: unknown) => void) => boolean | undefined> = [];
+const permissionRemoved: Array<(permissions: chrome.permissions.Permissions) => void> = [];
+const registeredScripts: chrome.scripting.RegisteredContentScript[] = [];
+const grantedOrigins = new Set<string>();
+const getRegisteredContentScripts = vi.fn(async (filter?: { ids?: string[] }) => registeredScripts.filter((script) => !filter?.ids || filter.ids.includes(script.id)));
+const unregisterContentScripts = vi.fn(async ({ ids }: { ids: string[] }) => { for (const id of ids) { const index = registeredScripts.findIndex((script) => script.id === id); if (index >= 0) registeredScripts.splice(index, 1); } });
+const contains = vi.fn(async ({ origins }: { origins: string[] }) => origins.every((origin) => grantedOrigins.has(origin)));
 const state: Record<string, unknown> = {};
 const sessionState: Record<string, unknown> = {};
 const setAccessLevel = vi.fn().mockResolvedValue(undefined);
@@ -18,14 +24,37 @@ const popup = { id: 'extension', url: 'chrome-extension://extension/popup/index.
 const content = { id: 'extension', tab: { id: 42 }, frameId: 0, documentId: 'doc-A', url: 'https://merchant.test/checkout' } as chrome.runtime.MessageSender;
 
 async function boot() {
-  vi.stubGlobal('chrome', { runtime: { id: 'extension', onMessage: { addListener: (fn: typeof listeners[number]) => listeners.push(fn) } }, tabs: { query, get: tabGet, sendMessage }, scripting: { executeScript }, storage: { local: { setAccessLevel, get, set }, session: { setAccessLevel: sessionAccessLevel, get: sessionGet, set: sessionSet } } });
+  vi.stubGlobal('chrome', { runtime: { id: 'extension', onMessage: { addListener: (fn: typeof listeners[number]) => listeners.push(fn) } }, tabs: { query, get: tabGet, sendMessage }, action: { setBadgeText: vi.fn(async () => undefined) }, permissions: { contains, onRemoved: { addListener: (fn: typeof permissionRemoved[number]) => permissionRemoved.push(fn) } }, scripting: { executeScript, getRegisteredContentScripts, unregisterContentScripts }, storage: { local: { setAccessLevel, get, set }, session: { setAccessLevel: sessionAccessLevel, get: sessionGet, set: sessionSet } } });
   await import('./index');
   await vi.waitFor(() => expect(listeners).toHaveLength(1));
+  await new Promise<void>((resolve) => { listeners[0]({ type: 'INVALID' }, popup, () => resolve()); });
 }
 async function dispatch(message: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
   return new Promise((resolve) => { const accepted = listeners[0](message, sender, resolve); if (!accepted) resolve(undefined); });
 }
-afterEach(() => { listeners.length = 0; for (const key of Object.keys(state)) delete state[key]; for (const key of Object.keys(sessionState)) delete sessionState[key]; vi.clearAllMocks(); query.mockResolvedValue([{ id: 42 }]); vi.resetModules(); vi.unstubAllGlobals(); });
+afterEach(() => { listeners.length = 0; permissionRemoved.length = 0; registeredScripts.length = 0; grantedOrigins.clear(); for (const key of Object.keys(state)) delete state[key]; for (const key of Object.keys(sessionState)) delete sessionState[key]; vi.clearAllMocks(); get.mockReset().mockImplementation(async () => ({ ...state })); sendMessage.mockReset().mockResolvedValue({ ok: true, status: 'unsupported-context', findingCount: 0 }); query.mockReset().mockResolvedValue([{ id: 42 }]); tabGet.mockReset().mockResolvedValue({ id: 42, url: 'https://merchant.test/checkout' }); vi.resetModules(); vi.unstubAllGlobals(); });
+
+it('reconciles stale enabled grants on startup and listens for permission removal without changing manual Analyze', async () => {
+  state.grantState = { version: 1, sites: { 'https://a.test': { enabled: true, generation: 1 } } };
+  await boot();
+  await vi.waitFor(() => expect((state.grantState as { sites: Record<string, { generation: number }> }).sites['https://a.test'].generation).toBe(2));
+  expect(permissionRemoved).toHaveLength(1);
+  expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: true, status: 'unsupported-context', findingCount: 0 });
+});
+
+it('handles an external permission removal event for one enabled origin', async () => {
+  const origin = 'https://a.test';
+  const id = `clearchoice-site-${createHash('sha256').update(origin).digest('hex')}`;
+  state.grantState = { version: 1, sites: { [origin]: { enabled: true, generation: 1 } } };
+  registeredScripts.push({ id, matches: [`${origin}/*`], js: ['content.js'], allFrames: false, persistAcrossSessions: true, world: 'ISOLATED' });
+  grantedOrigins.add(`${origin}/*`);
+  await boot();
+  expect(permissionRemoved).toHaveLength(1);
+  grantedOrigins.delete(`${origin}/*`);
+  permissionRemoved[0]({ origins: [`${origin}/*`] });
+  await vi.waitFor(() => expect((state.grantState as { sites: Record<string, { generation: number }> }).sites[origin].generation).toBe(2));
+  expect(registeredScripts).toHaveLength(0);
+});
 
 it('coordinates a popup Analyze only after trusted-only storage initialization and targets the injected top document', async () => {
   await boot();
@@ -206,7 +235,7 @@ it('does not commit a challenged finding when focus switches during the queued s
     const finding = { version: 1, requestId: challenge.requestId, kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt, opaqueFingerprint, ordinal: 1 };
     const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: challenge.requestId, findings: [finding] };
     const submission = dispatch({ type: 'CLEARCHOICE_SUBMIT', nonce: challenge.nonce, batch }, content);
-    await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(3));
     query.mockResolvedValue([{ id: 7 }]);
     releaseRead({ ...state });
     expect(await submission).toEqual({ ok: false, error: 'request-failed' });
@@ -228,7 +257,7 @@ it('does not commit a challenged finding when navigation changes during the queu
     const finding = { version: 1, requestId: challenge.requestId, kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt, opaqueFingerprint, ordinal: 1 };
     const batch = { type: 'CLEARCHOICE_FINDINGS_BATCH', version: 1, requestId: challenge.requestId, findings: [finding] };
     const submission = dispatch({ type: 'CLEARCHOICE_SUBMIT', nonce: challenge.nonce, batch }, content);
-    await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(3));
     tabGet.mockResolvedValue({ id: 42, url: 'https://other.test/checkout' });
     releaseRead({ ...state });
     expect(await submission).toEqual({ ok: false, error: 'request-failed' });

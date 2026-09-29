@@ -3,13 +3,20 @@ import { canonicalOrigin } from '../shared/models';
 import { getDismissed, setDismissed } from '../shared/storage';
 import { isCurrentActiveTab } from '../shared/tab-analysis';
 import { createWorkerStore } from './store';
+import { createGrantManager } from './grants';
 
 const store = createWorkerStore();
-// Fail closed: no content injection until trusted-only access and queued retention read succeed.
+const grants = createGrantManager(store);
+chrome.permissions.onRemoved.addListener((removed) => {
+  void grants.onRemoved(removed.origins ?? []).catch(() => {
+    // No authorization is granted from this event; the next startup retries reconciliation.
+  });
+});
+// Fail closed: no content injection until trusted-only access, retention read and grant reconciliation succeed.
 const ready = Promise.all([
   chrome.storage.local.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }),
   chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' }),
-]).then(() => store.readHistory()).then(() => true, () => false);
+]).then(() => store.readHistory()).then(() => grants.reconcile()).then(() => true, () => false);
 const pending = new Map<string, { tabId: number; documentId: string; nonce: string; requestId: string; origin: string; count?: number }>();
 const authorizationKey = (tabId: number): string => `clearchoice.document.${tabId}`;
 async function authorizedDocument(tabId: number, documentId: string, origin: string): Promise<boolean> {

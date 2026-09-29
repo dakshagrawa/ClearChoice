@@ -37,6 +37,8 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
   }
 
   return {
+    /** Share the worker's only mutation queue with grant registration/state transitions. */
+    enqueue,
     setRetentionPolicy(policy: unknown): Promise<void> {
       return enqueue(async () => {
         if (!isRetentionPolicy(policy)) throw new Error('Invalid retention policy');

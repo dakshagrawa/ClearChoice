@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 
-import { getDismissed, setDismissed, loadLocalState, saveConfirmedSubscriptions } from './storage';
+import { getDismissed, setDismissed, loadLocalState, saveConfirmedSubscriptions, loadGrantState, saveGrantState, isGrantOrigin } from './storage';
 
 const manual = {
   id: 'sub-1', merchant: 'Example Market', amount: '12.50', currency: 'USD', cadence: 'monthly' as const,
@@ -22,6 +22,30 @@ beforeEach(() => {
     configurable: true,
     value: { storage: { local: { get, set } } },
   });
+});
+
+it('rejects corrupt versioned grant records without rewriting them', async () => {
+  for (const grantState of [
+    { version: 2, sites: {} }, { version: 1, sites: { 'https://a.test': { enabled: true, generation: 0 } } },
+    { version: 1, sites: { 'https://a.test/path': { enabled: true, generation: 1 } } },
+    { version: 1, sites: { 'https://a.test': { enabled: true, generation: 1, extra: 'x' } } },
+  ]) {
+    get.mockResolvedValue({ grantState });
+    await expect(loadGrantState()).rejects.toThrow('Corrupt grant state');
+  }
+  expect(set).not.toHaveBeenCalled();
+});
+
+it('isolates grant state from review storage and rejects unsafe origins', async () => {
+  const data: Record<string, unknown> = {};
+  get.mockImplementation(async () => ({ ...data }));
+  set.mockImplementation(async (value) => { Object.assign(data, value); });
+  expect(await loadGrantState()).toEqual({ version: 1, sites: {} });
+  await saveGrantState({ version: 1, sites: { 'https://a.test': { enabled: false, generation: 2 } } });
+  expect(data).toEqual({ grantState: { version: 1, sites: { 'https://a.test': { enabled: false, generation: 2 } } } });
+  for (const unsafe of ['http://a.test', 'https://a.test/', 'https://a.test/checkout', 'https://a.test?q=x', 'https://a.test#x', 'https://*.test', 'https://127.0.0.1']) {
+    expect(isGrantOrigin(unsafe)).toBe(false);
+  }
 });
 
 it('reads only the local dismissed flag', async () => {

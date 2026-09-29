@@ -3,6 +3,47 @@ import { isValidRequestId, MAX_FINDING_BATCH } from './finding-dto';
 import type { FindingRecord, RetentionPolicy, Subscription } from './models';
 
 export const LOCAL_STATE_VERSION = 1 as const;
+export const GRANT_STATE_VERSION = 1 as const;
+
+export interface SiteGrant { enabled: boolean; generation: number }
+export interface GrantState { version: typeof GRANT_STATE_VERSION; sites: Record<string, SiteGrant> }
+
+/** The permission-grant schema is separate from review data; unknown/corrupt grants fail closed. */
+export function isGrantOrigin(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 255) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.origin === value && url.hostname.includes('.')
+      && !/^\d+(?:\.\d+){3}$/.test(url.hostname) && !url.hostname.includes(':')
+      && url.hostname.split('.').every((label) => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label));
+  } catch { return false; }
+}
+
+export function isGrantState(value: unknown): value is GrantState {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  if (Object.keys(item).length !== 2 || item.version !== GRANT_STATE_VERSION || !Object.hasOwn(item, 'sites')) return false;
+  const sites = item.sites;
+  if (typeof sites !== 'object' || sites === null || Array.isArray(sites) || Object.keys(sites).length > 500) return false;
+  return Object.entries(sites).every(([origin, entry]) => {
+    if (!isGrantOrigin(origin) || typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false;
+    const grant = entry as Record<string, unknown>;
+    return Object.keys(grant).length === 2 && typeof grant.enabled === 'boolean'
+      && Number.isSafeInteger(grant.generation) && (grant.generation as number) > 0;
+  });
+}
+
+export async function loadGrantState(): Promise<GrantState> {
+  const stored = await chrome.storage.local.get('grantState');
+  if (!Object.hasOwn(stored, 'grantState')) return { version: GRANT_STATE_VERSION, sites: {} };
+  if (!isGrantState(stored.grantState)) throw new Error('Corrupt grant state');
+  return stored.grantState;
+}
+
+export async function saveGrantState(state: GrantState): Promise<void> {
+  if (!isGrantState(state)) throw new Error('Invalid grant state');
+  await chrome.storage.local.set({ grantState: state });
+}
 
 export interface LocalState {
   version: typeof LOCAL_STATE_VERSION;
