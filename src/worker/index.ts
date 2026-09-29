@@ -177,18 +177,29 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       if (request.type === CLEARCHOICE_SITE_ENABLE) {
         const currentSite = async () => await isCurrentActiveTab(active.id!)
           && senderOrigin((await chrome.tabs.get(active.id!)).url) === origin;
-        const generation = await grants.enable(origin, currentSite);
-        if (!await currentSite() || !await grants.isEnabled(origin, generation)) return { ok: false, error: 'request-failed' };
-        // An inert top-frame probe supplies the document ID; tabs.Tab has none.
-        const probe = await chrome.scripting.executeScript({ target: { tabId: active.id }, func: () => undefined });
-        const top = probe.find((entry) => entry.frameId === 0 && typeof entry.documentId === 'string' && entry.documentId.length > 0);
-        if (!top || !await currentSite() || !await grants.isEnabled(origin, generation)) return { ok: false, error: 'request-failed' };
-        await chrome.scripting.executeScript({ target: { tabId: active.id, documentIds: [top.documentId!] }, files: ['content.js'] });
-        if (!await currentSite() || !await grants.isEnabled(origin, generation)) return { ok: false, error: 'request-failed' };
-        const started: unknown = await chrome.tabs.sendMessage(active.id, { type: CLEARCHOICE_AUTO_START }, { documentId: top.documentId! });
-        if (typeof started !== 'object' || started === null || Object.keys(started).length !== 1
-          || !('ok' in started) || started.ok !== true || !await currentSite()
-          || !await grants.isEnabled(origin, generation)) return { ok: false, error: 'request-failed' };
+        const { generation, newlyEnabled } = await grants.enable(origin, currentSite);
+        try {
+          if (!await currentSite() || !await grants.isEnabled(origin, generation)) throw new Error('Bootstrap site changed');
+          // An inert top-frame probe supplies the document ID; tabs.Tab has none.
+          const probe = await chrome.scripting.executeScript({ target: { tabId: active.id }, func: () => undefined });
+          const top = probe.find((entry) => entry.frameId === 0 && typeof entry.documentId === 'string' && entry.documentId.length > 0);
+          if (!top || !await currentSite() || !await grants.isEnabled(origin, generation)) throw new Error('Bootstrap document unavailable');
+          await chrome.scripting.executeScript({ target: { tabId: active.id, documentIds: [top.documentId!] }, files: ['content.js'] });
+          if (!await currentSite() || !await grants.isEnabled(origin, generation)) throw new Error('Bootstrap site changed');
+          const started: unknown = await chrome.tabs.sendMessage(active.id, { type: CLEARCHOICE_AUTO_START, version: 1, generation }, { documentId: top.documentId! });
+          if (typeof started !== 'object' || started === null || Object.keys(started).length !== 1
+            || !('ok' in started) || started.ok !== true || !await currentSite()
+            || !await grants.isEnabled(origin, generation)) throw new Error('Bootstrap start refused');
+        } catch {
+          if (newlyEnabled) {
+            try { await grants.rollbackEnable(origin, generation); }
+            catch { return { ok: false, error: 'revocation-unsafe' }; }
+            return { ok: false, error: 'request-failed' };
+          }
+          // A prior opt-in remains in force: report its actual state, not a revoked grant.
+          if (!await currentSite() || !await grants.isEnabled(origin, generation)) return { ok: false, error: 'request-failed' };
+          return { ok: true, enabled: true, permitted: true };
+        }
       }
       if (request.type === CLEARCHOICE_SITE_REVOKE) {
         try { await grants.revoke(origin); }

@@ -91,7 +91,7 @@ async function automaticGeneration(): Promise<number | undefined> {
 }
 
 /** The worker grants this document a generation before any DOM observer is installed. */
-function startAutomaticObserver(): { stop: () => void; isAuthorized: () => boolean } {
+function startAutomaticObserver(): { stop: () => void; currentGeneration: () => number | undefined; ready: Promise<boolean> } {
   let active = true;
   let observer: MutationObserver | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -186,8 +186,8 @@ function startAutomaticObserver(): { stop: () => void; isAuthorized: () => boole
     }
   };
   window.addEventListener('pagehide', stop);
-  void automaticGeneration().then((allowed) => {
-    if (!valid() || allowed === undefined) { stop(); return; }
+  const ready = automaticGeneration().then((allowed) => {
+    if (!valid() || allowed === undefined) { stop(); return false; }
     generation = allowed;
     observer = new MutationObserver((records) => {
       if (records.some((record) => !isOwnedPanelMutation(record))) queue();
@@ -196,8 +196,9 @@ function startAutomaticObserver(): { stop: () => void; isAuthorized: () => boole
     window.addEventListener('popstate', queue);
     window.addEventListener('hashchange', queue);
     queue();
-  }).catch(stop);
-  return { stop, isAuthorized: () => active && generation !== undefined };
+    return true;
+  }).catch(() => { stop(); return false; });
+  return { stop, currentGeneration: () => active ? generation : undefined, ready };
 }
 
 const pageWindow = window as ClearChoiceWindow;
@@ -205,7 +206,7 @@ if (!pageWindow[contentSentinel]) {
   pageWindow[contentSentinel] = true;
   let automatic = startAutomaticObserver();
   const restartAutomatic = () => {
-    if (automatic.isAuthorized()) return;
+    if (automatic.currentGeneration() !== undefined) return;
     automatic.stop();
     automatic = startAutomaticObserver();
   };
@@ -233,7 +234,15 @@ if (!pageWindow[contentSentinel]) {
       }
       if (request.type === CLEARCHOICE_AUTO_START) {
         if (sender.id !== chrome.runtime.id) { sendResponse({ ok: false, error: 'request-failed' }); return; }
-        restartAutomatic();
+        const allowed = await automaticGeneration();
+        if (allowed !== request.generation) { sendResponse({ ok: false, error: 'request-failed' }); return; }
+        if (automatic.currentGeneration() !== allowed) {
+          automatic.stop();
+          automatic = startAutomaticObserver();
+          if (!await automatic.ready || automatic.currentGeneration() !== allowed) {
+            sendResponse({ ok: false, error: 'request-failed' }); return;
+          }
+        }
         sendResponse({ ok: true });
         return;
       }

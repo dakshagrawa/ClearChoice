@@ -103,7 +103,7 @@ export interface RestoreRequest {
   type: typeof CLEARCHOICE_RESTORE;
 }
 
-export type ContentRequest = AnalyzeRequest | RestoreRequest | FindingsChallenge | { type: typeof CLEARCHOICE_DISABLE } | { type: typeof CLEARCHOICE_AUTO_START };
+export type ContentRequest = AnalyzeRequest | RestoreRequest | FindingsChallenge | { type: typeof CLEARCHOICE_DISABLE } | { type: typeof CLEARCHOICE_AUTO_START; version: 1; generation: number };
 export type AnalyzeResponse =
   | { ok: true; status: 'supported'; findingCount: number }
   | { ok: true; status: 'unsupported-context'; findingCount: 0 }
@@ -116,7 +116,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isContentRequest(value: unknown): value is ContentRequest {
   return isFindingsChallenge(value) || (isRecord(value)
-    && ((hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISABLE || value.type === CLEARCHOICE_AUTO_START))
+    && ((hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISABLE))
+      || (hasExactKeys(value, ['type', 'version', 'generation']) && value.type === CLEARCHOICE_AUTO_START
+        && value.version === 1 && Number.isSafeInteger(value.generation) && (value.generation as number) > 0)
       || (hasExactKeys(value, ['type', 'requestId', 'nonce']) && value.type === CLEARCHOICE_ANALYZE
         && isValidRequestId(value.requestId) && isValidRequestId(value.nonce))));
 }

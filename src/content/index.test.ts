@@ -40,6 +40,27 @@ const betaCheckout = '<main><aside>Order summary — Subtotal: $24</aside><secti
 const automaticSubmits = (sendMessage: ReturnType<typeof vi.fn>) => sendMessage.mock.calls.filter(([message]) => message.type === 'CLEARCHOICE_AUTO_SUBMIT');
 const ownedPanel = () => Array.from(document.querySelectorAll<HTMLElement>('[data-clearchoice-panel]')).find((panel) => panel.shadowRoot?.querySelector('.clearchoice-panel'));
 
+it('restarts an active observer after failed exact-document disable and scans at the new generation', async () => {
+  const { addListener, sendMessage } = autoChrome();
+  let generation = 3;
+  sendMessage.mockImplementation(async (message: { type: string; batch?: { findings: unknown[] } }) => {
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS') return { ok: true, generation };
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return { ok: true, findingCount: message.batch?.findings.length };
+    return { ok: true, dismissed: false };
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(1));
+  generation = 5; // The exact-document DISABLE message failed; no content message was received.
+  const listener = addListener.mock.calls[0][0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean | undefined;
+  const reply = vi.fn();
+  expect(listener({ type: 'CLEARCHOICE_AUTO_START', version: 1, generation: 5 }, { id: 'extension' }, reply)).toBe(true);
+  await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ ok: true }));
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(2));
+  expect(automaticSubmits(sendMessage)[1][0].generation).toBe(5);
+  expect(addListener).toHaveBeenCalledTimes(1);
+});
+
 it('enable-now supersedes a pending denied bootstrap instead of losing the restart', async () => {
   const { addListener, sendMessage } = autoChrome();
   let deny!: (response: unknown) => void;
@@ -48,7 +69,7 @@ it('enable-now supersedes a pending denied bootstrap instead of losing the resta
   await import('./index');
   const listener = addListener.mock.calls[0][0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
   const reply = vi.fn();
-  listener({ type: 'CLEARCHOICE_AUTO_START' }, { id: 'extension' }, reply);
+  listener({ type: 'CLEARCHOICE_AUTO_START', version: 1, generation: 3 }, { id: 'extension' }, reply);
   deny({ ok: false, error: 'request-failed' });
   await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
   expect(automaticSubmits(sendMessage)).toHaveLength(1);
@@ -65,11 +86,11 @@ it('a denied initial status can be restarted by a worker-targeted enable without
   const rejected = vi.fn();
   expect(listener({ type: 'CLEARCHOICE_AUTO_START', extra: 'unsafe' }, { id: 'extension' }, rejected)).toBeUndefined();
   const reply = vi.fn();
-  expect(listener({ type: 'CLEARCHOICE_AUTO_START' }, { id: 'extension' }, reply)).toBe(true);
+  expect(listener({ type: 'CLEARCHOICE_AUTO_START', version: 1, generation: 3 }, { id: 'extension' }, reply)).toBe(true);
   await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ ok: true }));
   await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
   expect(addListener).toHaveBeenCalledTimes(1);
-  listener({ type: 'CLEARCHOICE_AUTO_START' }, { id: 'extension' }, vi.fn());
+  listener({ type: 'CLEARCHOICE_AUTO_START', version: 1, generation: 3 }, { id: 'extension' }, vi.fn());
   await new Promise((resolve) => setTimeout(resolve, 200));
   expect(automaticSubmits(sendMessage)).toHaveLength(1);
 });

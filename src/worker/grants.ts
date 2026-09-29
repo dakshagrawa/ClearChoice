@@ -90,7 +90,7 @@ export function createGrantManager(store: Queue) {
 
   return {
     /** Caller must already hold the exact-origin browser permission from a popup click. */
-    enable(origin: string, stillActive?: () => Promise<boolean>): Promise<number> {
+    enable(origin: string, stillActive?: () => Promise<boolean>): Promise<{ generation: number; newlyEnabled: boolean }> {
       return store.enqueue(async () => {
         if (!isGrantOrigin(origin)) throw new Error('Invalid HTTPS origin');
         const id = await scriptId(origin);
@@ -100,7 +100,7 @@ export function createGrantManager(store: Queue) {
           else await unregister(id);
           throw new Error('Origin permission not granted');
         }
-        if (state.sites[origin]?.enabled && !locallyDisabled.has(origin) && await registered(origin, id)) return state.sites[origin].generation;
+        if (state.sites[origin]?.enabled && !locallyDisabled.has(origin) && await registered(origin, id)) return { generation: state.sites[origin].generation, newlyEnabled: false };
         // Never leave a mismatched/old registration active while enabling.
         await unregister(id);
         const previous = state.sites[origin]?.generation ?? 0;
@@ -111,7 +111,7 @@ export function createGrantManager(store: Queue) {
           if (stillActive && !await stillActive()) throw new Error('Active site changed');
           await saveGrantState({ version: 1, sites: { ...state.sites, [origin]: { enabled: true, generation: previous + 1 } } });
           locallyDisabled.delete(origin);
-          return previous + 1;
+          return { generation: previous + 1, newlyEnabled: true };
         } catch (error) {
           locallyDisabled.add(origin);
           // If a former grant was enabled, invalidate it before reporting failure.
@@ -121,6 +121,14 @@ export function createGrantManager(store: Queue) {
           try { await unregister(id); } catch { /* Reconciliation cleans up orphans on restart. */ }
           throw error;
         }
+      });
+    },
+    rollbackEnable(origin: string, generation: number): Promise<void> {
+      return store.enqueue(async () => {
+        const state = await loadGrantState();
+        // A newer operation owns this site now; never revoke that operation's grant.
+        if (state.sites[origin]?.generation !== generation || !state.sites[origin].enabled) return;
+        await disable(origin);
       });
     },
     revoke(origin: string): Promise<void> { return store.enqueue(() => disable(origin)); },

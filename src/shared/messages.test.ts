@@ -50,6 +50,10 @@ it('accepts only canonical HTTPS origin site controls and exact site responses',
 });
 
 it('accepts only the exact disable control shape in content, not worker requests', () => {
+  expect(isContentRequest({ type: 'CLEARCHOICE_AUTO_START', version: 1, generation: 5 })).toBe(true);
+  expect(isContentRequest({ type: 'CLEARCHOICE_AUTO_START' })).toBe(false);
+  expect(isContentRequest({ type: 'CLEARCHOICE_AUTO_START', version: 1, generation: 5, extra: true })).toBe(false);
+  expect(isContentRequest({ type: 'CLEARCHOICE_AUTO_START', version: 1, generation: 0 })).toBe(false);
   expect(isContentRequest({ type: 'CLEARCHOICE_DISABLE' })).toBe(true);
   expect(isContentRequest({ type: 'CLEARCHOICE_DISABLE', origin: 'https://a.test' })).toBe(false);
   expect(isWorkerRequest({ type: 'CLEARCHOICE_DISABLE' })).toBe(false);

@@ -290,6 +290,8 @@ it('fails closed before enable-now injection when focus changes during top-docum
   expect(await pending).toEqual({ ok: false, error: 'request-failed' });
   expect(executeScript).toHaveBeenCalledTimes(1);
   expect(sendMessage).not.toHaveBeenCalled();
+  expect(registeredScripts).toHaveLength(0);
+  expect((state.grantState as { sites: Record<string, { enabled: boolean }> }).sites['https://merchant.test'].enabled).toBe(false);
 });
 
 it('never widens a missing document target to tab-wide injection', async () => {
@@ -300,6 +302,44 @@ it('never widens a missing document target to tab-wide injection', async () => {
     .toEqual({ ok: false, error: 'request-failed' });
   expect(executeScript).toHaveBeenCalledTimes(1);
   expect(sendMessage).not.toHaveBeenCalled();
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(registeredScripts).toHaveLength(0);
+  expect((state.grantState as { sites: Record<string, { enabled: boolean }> }).sites['https://merchant.test'].enabled).toBe(false);
+  expect(grantedOrigins.has('https://merchant.test/*')).toBe(true);
+});
+
+it('preserves a previously enabled grant when its immediate bootstrap fails', async () => {
+  await enabledAuto();
+  executeScript.mockRejectedValueOnce(new Error('probe unavailable'));
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' }, popup))
+    .toEqual({ ok: true, enabled: true, permitted: true });
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: true, generation: 1 });
+});
+
+it('reports unsafe rollback if both persistence and registration cleanup fail', async () => {
+  grantedOrigins.add('https://merchant.test/*');
+  await boot();
+  executeScript.mockRejectedValueOnce(new Error('probe unavailable'));
+  set.mockImplementationOnce(async (value: Record<string, unknown>) => { Object.assign(state, value); });
+  set.mockRejectedValueOnce(new Error('disk failure'));
+  unregisterContentScripts.mockRejectedValueOnce(new Error('unregister failure'));
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' }, popup))
+    .toEqual({ ok: false, error: 'revocation-unsafe' });
+  expect(registeredScripts).toHaveLength(1);
+});
+
+it('re-enables the same document at a new generation after a missed disable', async () => {
+  await enabledAuto();
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: true, generation: 1 });
+  sendMessage.mockRejectedValueOnce(new Error('exact document did not receive disable'));
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup))
+    .toEqual({ ok: true, enabled: false, permitted: true });
+  sendMessage.mockResolvedValue({ ok: true });
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' }, popup))
+    .toEqual({ ok: true, enabled: true, permitted: true });
+  expect(sendMessage).toHaveBeenCalledWith(42, { type: 'CLEARCHOICE_AUTO_START', version: 1, generation: 3 }, { documentId: 'doc-A' });
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: true, generation: 3 });
+  expect(await dispatch(autoRequest(1), content)).toEqual({ ok: false, error: 'request-failed' });
 });
 
 it('revokes a recorded automatic document even when tab URL is unavailable, without touching B', async () => {
@@ -331,7 +371,7 @@ it('authorizes exact active popup site before enabling; never registers on spoof
   expect(await dispatch({ type: 'CLEARCHOICE_SITE_STATUS', origin: 'https://merchant.test' }, popup)).toEqual({ ok: true, enabled: true, permitted: true });
   expect(executeScript).toHaveBeenCalledWith({ target: { tabId: 42 }, func: expect.any(Function) });
   expect(executeScript).toHaveBeenCalledWith({ target: { tabId: 42, documentIds: ['doc-A'] }, files: ['content.js'] });
-  expect(sendMessage).toHaveBeenCalledWith(42, { type: 'CLEARCHOICE_AUTO_START' }, { documentId: 'doc-A' });
+  expect(sendMessage).toHaveBeenCalledWith(42, { type: 'CLEARCHOICE_AUTO_START', version: 1, generation: 1 }, { documentId: 'doc-A' });
   tabGet.mockResolvedValue({ id: 42, url: 'https://b.test/path' });
   expect(await dispatch(enable, popup)).toEqual({ ok: false, error: 'request-failed' });
   expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup)).toEqual({ ok: false, error: 'request-failed' });
