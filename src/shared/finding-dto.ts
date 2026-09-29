@@ -19,11 +19,16 @@ export interface FindingDto {
 
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
 const FINGERPRINT = /^[a-f0-9]{64}$/;
-const URL = /(?:\b(?:https?:\/\/|www\.)|\b[a-z0-9.-]+\.[a-z]{2,}(?:\/|\?))/i;
+const URL = /(?:\b[a-z][a-z0-9+.-]*:\/\/|\b[a-z0-9.-]+\.[a-z]{2,}\b)/i;
+// Reject format/bidi and control characters before normalization or sensitive matching.
+// TAB, LF and CR remain safe in raw evidence because normalization collapses them.
+const FORMAT_CHARACTER = /\p{Cf}/u;
 function hasUnsafeControl(text: string): boolean {
   return Array.from(text).some((character) => {
-    const code = character.charCodeAt(0);
-    return (code < 32 && code !== 9 && code !== 10 && code !== 13) || code === 127;
+    const code = character.codePointAt(0)!;
+    return FORMAT_CHARACTER.test(character)
+      || (code < 32 && code !== 9 && code !== 10 && code !== 13)
+      || (code >= 127 && code <= 159) || code === 0x2028 || code === 0x2029;
   });
 }
 

@@ -62,6 +62,32 @@ it('rejects sensitive excerpt supplied directly to the wire validator', () => {
   }
 });
 
+it('rejects bare domains and non-HTTP scheme URLs throughout source and on receipt', () => {
+  for (const text of ['Subscription renewal example.com', 'Subscription renewal ftp://example.com',
+    'Subscription renewal example.co.uk', 'Subscription renewal ftp://localhost']) {
+    expect(toFindingDto({ ...rawFinding, evidence: text }, 'req-1', 1, fingerprint)).toBeNull();
+    expect(isFindingDto({ ...valid(), screenedExcerpt: text })).toBe(false);
+    expect(toFindingDto({ ...rawFinding, evidence: `${'A'.repeat(160)} ${text}` }, 'req-1', 1, fingerprint)).toBeNull();
+  }
+});
+
+it('rejects zero-width, bidi and other format controls on both boundaries', () => {
+  for (const text of ['Subscription card ••••\u200b1234', 'Subscription card 4111\u200b1111\u200b1111\u200b1111',
+    'Subscription renewal\u202e monthly', 'Subscription renewal\u0000 monthly',
+    'Subscription renewal\u0085 monthly']) {
+    expect(toFindingDto({ ...rawFinding, evidence: text }, 'req-1', 1, fingerprint)).toBeNull();
+    expect(isFindingDto({ ...valid(), screenedExcerpt: text })).toBe(false);
+    expect(toFindingDto({ ...rawFinding, evidence: `${'A'.repeat(160)} ${text}` }, 'req-1', 1, fingerprint)).toBeNull();
+  }
+});
+
+it('keeps benign subscription text and decimal prices without domain false positives', () => {
+  for (const text of ['Subscription renews monthly', '$10.00 per month', 'Save 20% on annual plan']) {
+    expect(toFindingDto({ ...rawFinding, evidence: text }, 'req-1', 1, fingerprint)?.screenedExcerpt).toBe(text);
+    expect(isFindingDto({ ...valid(), screenedExcerpt: text })).toBe(true);
+  }
+});
+
 it('rejects extra keys, unsupported versions and kind/reason combinations', () => {
   for (const extra of [{ selector: '#private' }, { evidence: 'raw' }, { url: 'https://example.test/x' },
     { pageTitle: 'private' }, { formValue: 'private' }, { version: 2 },
