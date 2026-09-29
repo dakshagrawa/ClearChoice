@@ -92,9 +92,15 @@ function validateManifest(manifest) {
   const remoteExecutableError = findRemoteExecutableUrl(manifest);
   if (remoteExecutableError) return remoteExecutableError;
   if (Object.hasOwn(manifest, 'optional_permissions')) return 'optional_permissions is not allowed';
-  if (Object.hasOwn(manifest, 'optional_host_permissions')) return 'optional_host_permissions is not allowed';
+  if (!Array.isArray(manifest.optional_host_permissions) ||
+    manifest.optional_host_permissions.length !== 1 ||
+    manifest.optional_host_permissions[0] !== 'https://*/*') {
+    return 'optional_host_permissions must be exactly ["https://*/*"]';
+  }
   if (Object.hasOwn(manifest, 'content_scripts')) return 'content_scripts is not allowed';
-  if (Object.hasOwn(manifest, 'background')) return 'background is not allowed';
+  if (JSON.stringify(manifest.background) !== JSON.stringify({ service_worker: 'worker.js' })) {
+    return 'background must be exactly { service_worker: "worker.js" }';
+  }
   if (Object.hasOwn(manifest, 'externally_connectable')) return 'externally_connectable is not allowed';
   return findRemoteExecutableUrl(manifest) ?? findUnsafeString(manifest);
 }
@@ -148,5 +154,7 @@ if (manifestError) fail(manifestError);
 if (isDist || isZip) {
   const artifactError = findForbiddenArtifactPattern(assets);
   if (artifactError) fail(`artifact policy check failed: ${artifactError}`);
+  const worker = assets.find(([path]) => isZip ? path === 'worker.js' : path === join(argument.path, 'worker.js'));
+  if (!worker || !worker[1].trim()) fail('worker.js is missing or empty');
   process.stdout.write(`artifact policy check passed (${isZip ? 'ZIP' : 'dist'}; static package policy only; does not prove all runtime behavior)\n`);
 } else process.stdout.write('manifest contract passed\n');

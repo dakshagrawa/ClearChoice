@@ -5,8 +5,8 @@ import { expect, test } from 'vitest';
 import { generateManifest } from '../scripts/build-manifest.mjs';
 
 const repositoryRoot = resolve(process.cwd());
-const candidatePackageVersion = '0.3.0-beta.1';
-const candidateChromeVersion = '0.3.0';
+const candidatePackageVersion = '0.4.0-beta.1';
+const candidateChromeVersion = '0.4.0';
 const chromeVersionPattern = /^\d+(?:\.\d+){0,3}$/;
 const betaPermissions = ['activeTab', 'scripting', 'storage'];
 const betaCommands = { _execute_action: { suggested_key: { default: 'Ctrl+Shift+Y' } } };
@@ -22,6 +22,8 @@ function betaManifest() {
     commands: structuredClone(betaCommands),
     permissions: [...betaPermissions],
     host_permissions: [],
+    optional_host_permissions: ['https://*/*'],
+    background: { service_worker: 'worker.js' },
   };
 }
 
@@ -35,10 +37,10 @@ function assertBetaManifestPolicy(manifest) {
   expect(manifest.host_permissions).toEqual([]);
   expect(manifest).not.toHaveProperty('content_scripts');
   expect(manifest).not.toHaveProperty('optional_permissions');
-  expect(manifest).not.toHaveProperty('optional_host_permissions');
-  expect(manifest).not.toHaveProperty('background');
+  expect(manifest.optional_host_permissions).toEqual(['https://*/*']);
+  expect(manifest.background).toEqual({ service_worker: 'worker.js' });
   expect(manifest).not.toHaveProperty('externally_connectable');
-  expect(JSON.stringify(manifest)).not.toMatch(/<all_urls>|https?:\/\/|(?:import|importScripts)\s*\(?\s*["']https?:\/\//i);
+  expect(JSON.stringify(manifest)).not.toMatch(/<all_urls>|(?:import|importScripts)\s*\(?\s*["']https?:\/\//i);
 }
 
 test('accepts exactly the temporary active-tab private-beta permission shape', () => {
@@ -46,7 +48,7 @@ test('accepts exactly the temporary active-tab private-beta permission shape', (
 });
 
 test('Chrome manifest version rejects prerelease strings while version_name carries the beta display identity', () => {
-  expect('0.3.0-beta.1').not.toMatch(chromeVersionPattern);
+  expect('0.4.0-beta.1').not.toMatch(chromeVersionPattern);
   assertBetaManifestPolicy(betaManifest());
 });
 
@@ -59,11 +61,16 @@ test.each([
   ['forbidden declarativeNetRequest permission', (manifest) => { manifest.permissions.push('declarativeNetRequest'); }],
   ['duplicate permission', (manifest) => { manifest.permissions.push('storage'); }],
   ['optional permissions', (manifest) => { manifest.optional_permissions = ['tabs']; }],
-  ['optional host permissions', (manifest) => { manifest.optional_host_permissions = ['https://example.test/*']; }],
+  ['unrelated optional origin', (manifest) => { manifest.optional_host_permissions = ['https://example.test/*']; }],
+  ['all URLs optional origin', (manifest) => { manifest.optional_host_permissions = ['<all_urls>']; }],
+  ['HTTP optional origin', (manifest) => { manifest.optional_host_permissions = ['http://*/*']; }],
+  ['additional optional origin', (manifest) => { manifest.optional_host_permissions.push('https://example.test/*'); }],
+  ['missing optional origin', (manifest) => { delete manifest.optional_host_permissions; }],
   ['nonempty host permissions', (manifest) => { manifest.host_permissions = ['https://example.test/*']; }],
   ['all URLs host permission', (manifest) => { manifest.host_permissions = ['<all_urls>']; }],
   ['static content script', (manifest) => { manifest.content_scripts = [{ matches: ['https://example.test/*'], js: ['content.js'] }]; }],
-  ['service worker', (manifest) => { manifest.background = { service_worker: 'worker.js' }; }],
+  ['wrong service worker', (manifest) => { manifest.background = { service_worker: 'other.js' }; }],
+  ['additional background capability', (manifest) => { manifest.background.type = 'module'; }],
   ['externally connectable', (manifest) => { manifest.externally_connectable = { matches: ['https://example.test/*'] }; }],
   ['remote executable', (manifest) => { manifest.background = { service_worker: 'https://example.test/worker.js' }; }],
 ])('rejects %s', (_label, mutate) => {

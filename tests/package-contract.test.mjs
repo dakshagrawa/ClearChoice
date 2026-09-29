@@ -8,8 +8,8 @@ import { readCandidateVersionMapping } from '../scripts/release-artifact.mjs';
 
 const verifier = resolve(process.cwd(), 'scripts/verify-package.mjs');
 const repositoryRoot = process.cwd();
-const candidatePackageVersion = '0.3.0-beta.1';
-const candidateChromeVersion = '0.3.0';
+const candidatePackageVersion = '0.4.0-beta.1';
+const candidateChromeVersion = '0.4.0';
 const candidateArchive = `ClearChoice-v${candidatePackageVersion}-unpacked.zip`;
 
 const safeManifest = {
@@ -22,6 +22,8 @@ const safeManifest = {
   commands: { _execute_action: { suggested_key: { default: 'Ctrl+Shift+Y' } } },
   permissions: ['activeTab', 'scripting', 'storage'],
   host_permissions: [],
+  optional_host_permissions: ['https://*/*'],
+  background: { service_worker: 'worker.js' },
 };
 
 function verify(manifest) {
@@ -184,6 +186,7 @@ test('package verifier accepts ordinary local asset references', () => {
   writeFileSync(join(directory, 'popup', 'index.html'), '<script type="module" src="./main.js"></script><img src="./image.png">');
   writeFileSync(join(directory, 'popup', 'style.css'), '.logo { background-image: url("./image.png"); }');
   writeFileSync(join(directory, 'popup', 'main.js'), 'document.querySelector("a").href = "./details.html";');
+  writeFileSync(join(directory, 'worker.js'), '(()=>{})();');
 
   try {
     const result = verifyDist(directory);
@@ -237,6 +240,8 @@ test('built dist manifest and runtime assets satisfy package validation', () => 
   const distManifest = JSON.parse(readFileSync(resolve(dist, 'manifest.json'), 'utf8'));
   expect(distManifest.version).toBe(candidateChromeVersion);
   expect(distManifest.version_name).toBe(candidatePackageVersion);
+  expect(distManifest.background).toEqual({ service_worker: 'worker.js' });
+  expect(readFileSync(resolve(dist, 'worker.js'), 'utf8')).toBeTruthy();
   expect(runtimeAssetContents(dist)).not.toMatch(/\b(?:fetch|XMLHttpRequest|WebSocket)\b/);
 }, 15_000);
 
@@ -253,6 +258,8 @@ test('unpacked ZIP manifest and runtime assets satisfy package validation', () =
   const archiveManifest = JSON.parse(spawnSync('unzip', ['-p', archive, 'manifest.json'], { encoding: 'utf8' }).stdout);
   expect(archiveManifest.version).toBe(candidateChromeVersion);
   expect(archiveManifest.version_name).toBe(candidatePackageVersion);
+  expect(archiveManifest.background).toEqual({ service_worker: 'worker.js' });
+  expect(spawnSync('unzip', ['-p', archive, 'worker.js'], { encoding: 'utf8' }).stdout).toBeTruthy();
 }, 15_000);
 
 test('package verifier rejects unsafe MV3 manifest capabilities', () => {
@@ -265,7 +272,11 @@ test('package verifier rejects unsafe MV3 manifest capabilities', () => {
     ['webRequest', { ...safeManifest, permissions: [...safeManifest.permissions, 'webRequest'] }],
     ['cookies', { ...safeManifest, permissions: [...safeManifest.permissions, 'cookies'] }],
     ['declarativeNetRequest', { ...safeManifest, permissions: [...safeManifest.permissions, 'declarativeNetRequest'] }],
-    ['optional host grant', { ...safeManifest, optional_host_permissions: ['https://example.test/*'] }],
+    ['unrelated optional host grant', { ...safeManifest, optional_host_permissions: ['https://example.test/*'] }],
+    ['all URLs optional host grant', { ...safeManifest, optional_host_permissions: ['<all_urls>'] }],
+    ['HTTP optional host grant', { ...safeManifest, optional_host_permissions: ['http://*/*'] }],
+    ['additional optional host grant', { ...safeManifest, optional_host_permissions: ['https://*/*', 'https://example.test/*'] }],
+    ['missing optional host grant', { ...safeManifest, optional_host_permissions: undefined }],
     ['non-local content script', { ...safeManifest, content_scripts: [{ matches: ['https://example.test/*'], js: ['content.js'] }] }],
     ['nonempty host permissions', { ...safeManifest, host_permissions: ['https://example.test/*'] }],
     ['externally connectable', { ...safeManifest, externally_connectable: { matches: ['https://example.test/*'] } }],
@@ -275,11 +286,27 @@ test('package verifier rejects unsafe MV3 manifest capabilities', () => {
   }
 });
 
-test('package verifier rejects background service workers', () => {
-  const result = verify({ ...safeManifest, background: { service_worker: 'worker.js' } });
+test.each([
+  ['wrong worker', { service_worker: 'other.js' }],
+  ['remote worker', { service_worker: 'https://example.test/worker.js' }],
+  ['extra background key', { service_worker: 'worker.js', type: 'module' }],
+])('package verifier rejects %s', (_label, background) => {
+  const result = verify({ ...safeManifest, background });
 
   expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain('background is not allowed');
+  expect(result.stderr).toMatch(/background|remote executable URL/);
+});
+
+test('package verifier rejects absent packaged worker', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'clearchoice-dist-'));
+  writeFileSync(join(directory, 'manifest.json'), JSON.stringify(safeManifest));
+  try {
+    const result = verifyDist(directory);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('worker.js');
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 test('package verifier rejects remote executable URLs', () => {

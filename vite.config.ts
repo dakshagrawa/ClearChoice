@@ -11,21 +11,23 @@ const manifestSource = existsSync(generatedManifest)
 
 export default defineConfig(() => {
   const contentBuild = process.env.CLEARCHOICE_CONTENT_BUILD === '1';
+  const workerBuild = process.env.CLEARCHOICE_WORKER_BUILD === '1';
+  const standaloneBuild = contentBuild || workerBuild;
 
   return {
     root: 'src',
     build: {
       outDir: '../dist',
-      emptyOutDir: !contentBuild,
+      emptyOutDir: !standaloneBuild,
       modulePreload: false,
       rollupOptions: {
-        input: contentBuild
-          ? resolve(projectRoot, 'src/content/index.ts')
+        input: standaloneBuild
+          ? resolve(projectRoot, workerBuild ? 'src/worker/index.ts' : 'src/content/index.ts')
           : resolve(projectRoot, 'src/popup/index.html'),
-        output: contentBuild
+        output: standaloneBuild
           ? {
               format: 'iife',
-              entryFileNames: 'content.js',
+              entryFileNames: workerBuild ? 'worker.js' : 'content.js',
             }
           : {
               entryFileNames: 'assets/[name]-[hash].js',
@@ -36,7 +38,7 @@ export default defineConfig(() => {
       {
         name: 'copy-extension-manifest',
         closeBundle() {
-          if (!contentBuild) cpSync(manifestSource, resolve(projectRoot, 'dist/manifest.json'));
+          if (!standaloneBuild) cpSync(manifestSource, resolve(projectRoot, 'dist/manifest.json'));
         },
       },
     ],
