@@ -76,13 +76,13 @@ test('Chromium rejects a built extension whose manifest version is a prerelease 
   const manifestPath = resolve(invalidExtensionPath, 'manifest.json');
   const originalManifest = await readFile(manifestPath);
   const originalManifestText = originalManifest.toString('utf8');
-  const numericVersion = /("version"\s*:\s*")0\.3\.0(")/g;
+  const numericVersion = /("version"\s*:\s*")0\.4\.0(")/g;
   const numericVersionMatches = [...originalManifestText.matchAll(numericVersion)];
   expect(numericVersionMatches).toHaveLength(1);
   const [numericVersionMatch] = numericVersionMatches;
   const versionStart = numericVersionMatch.index! + numericVersionMatch[1].length;
-  const originalVersion = '0.3.0';
-  const invalidVersion = '0.3.0-beta.1';
+  const originalVersion = '0.4.0';
+  const invalidVersion = '0.4.0-beta.1';
   const originalVersionEnd = versionStart + originalVersion.length;
   const invalidVersionEnd = versionStart + invalidVersion.length;
   const invalidManifest = Buffer.from(`${originalManifestText.slice(0, versionStart)}${invalidVersion}${originalManifestText.slice(originalVersionEnd)}`);
@@ -133,7 +133,7 @@ test('packaged direct-popup automation does not claim an activeTab grant', async
     await popup.getByRole('button', { name: 'Analyze' }).click();
 
     await expect(fixture.locator('aside[data-clearchoice-panel]')).toHaveCount(0);
-    await expect(popup.getByRole('status')).toHaveText('ClearChoice could not analyze this tab. Reload it and try again.');
+    await expect(popup.getByRole('status')).toHaveText('ClearChoice could not analyze this page. Reload and try again.');
   } finally {
     await closeExtension(context, userDataDir);
     await closeServer(server);
