@@ -16,7 +16,7 @@ ClearChoice does not automate purchases, payments, account actions, cancellation
 
 Read [the beta test protocol](docs/beta-test-protocol.md) before using the beta, and use [the feedback template](docs/beta-feedback-template.md) for optional external feedback. The extension does not collect feedback.
 
-Contributors need Node **22.12+**; the current verified version is **Node 22.23.2**. From a clean checkout:
+Contributors need Node **24** (currently verified: **Node 24.21.0**); `.nvmrc` pins the same major. From a clean checkout:
 
 ```sh
 npm ci

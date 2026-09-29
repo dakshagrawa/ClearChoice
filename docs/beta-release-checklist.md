@@ -18,7 +18,7 @@
 - [ ] All page data remains local: there is no telemetry, accounts, or uploads. Typed editable values are excluded; sensitive-looking static candidates are discarded whole rather than redacted or retained.
 - [ ] The extension does not automate purchases, payments, accounts, cancellations, refunds, subscriptions, or checkout submission.
 - [ ] Manual testers use [the beta test protocol](beta-test-protocol.md) and [feedback template](beta-feedback-template.md). Feedback is voluntary, external, sanitized, and not collected by the extension.
-- [ ] Contributors use Node 22.12+; current verified Node is 22.23.2. `check:beta` may pass only with a real external human activeTab marker for the exact commit and manifest. Do not create or forge a marker; without it, the gate must fail closed.
+- [ ] Contributors use Node 24 (`.nvmrc`; current verified Node is 24.21.0). `check:beta` may pass only with a real external human activeTab marker for the exact commit and manifest. Do not create or forge a marker; without it, the gate must fail closed.
 
 ## Historical prototypes
 

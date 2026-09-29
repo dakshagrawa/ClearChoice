@@ -199,8 +199,11 @@ test('documentation preserves both archived mock-only prototypes and official re
   expect(readme).toMatch(/contains `manifest\.json`/i);
   expect(readme).toMatch(/check out that tag, run `npm ci`, then run `npm run serve:fixtures`/i);
   expect(readme).toMatch(/Do not load it on third-party checkout pages/i);
-  expect(readme).toMatch(/Node\s+\**22\.12\+\**/);
-  expect(readme).toMatch(/current verified (version is )?\**Node 22\.23\.2\**/i);
+  expect(readme).toMatch(/Contributors need Node \*\*24\*\*/);
+  expect(readme).toMatch(/currently verified: \*\*Node 24\.21\.0\*\*/i);
+  expect(read('.nvmrc').trim()).toBe('24');
+  expect(JSON.parse(read('package.json')).engines.node).toBe('^24.0.0');
+  expect(JSON.parse(read('package.json')).devDependencies['@types/node']).toMatch(/^24\./);
   expect(readme).toContain('2026-09-23');
   for (const url of officialChromeReferences) expect(readme).toContain(url);
 });
