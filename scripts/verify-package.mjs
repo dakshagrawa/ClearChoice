@@ -101,6 +101,7 @@ function validateManifest(manifest) {
   if (JSON.stringify(manifest.background) !== JSON.stringify({ service_worker: 'worker.js' })) {
     return 'background must be exactly { service_worker: "worker.js" }';
   }
+  if (manifest.action?.default_popup !== 'popup/index.html') return 'action.default_popup must be popup/index.html';
   if (Object.hasOwn(manifest, 'externally_connectable')) return 'externally_connectable is not allowed';
   return findRemoteExecutableUrl(manifest) ?? findUnsafeString(manifest);
 }
@@ -154,7 +155,10 @@ if (manifestError) fail(manifestError);
 if (isDist || isZip) {
   const artifactError = findForbiddenArtifactPattern(assets);
   if (artifactError) fail(`artifact policy check failed: ${artifactError}`);
-  const worker = assets.find(([path]) => isZip ? path === 'worker.js' : path === join(argument.path, 'worker.js'));
-  if (!worker || !worker[1].trim()) fail('worker.js is missing or empty');
+  for (const asset of [manifest.action.default_popup, 'content.js', manifest.background.service_worker]) {
+    const expectedPath = isZip ? asset : join(argument.path, asset);
+    const entry = assets.find(([path]) => path === expectedPath);
+    if (!entry || !entry[1].trim()) fail(`${asset} is missing or empty`);
+  }
   process.stdout.write(`artifact policy check passed (${isZip ? 'ZIP' : 'dist'}; static package policy only; does not prove all runtime behavior)\n`);
 } else process.stdout.write('manifest contract passed\n');

@@ -186,6 +186,7 @@ test('package verifier accepts ordinary local asset references', () => {
   writeFileSync(join(directory, 'popup', 'index.html'), '<script type="module" src="./main.js"></script><img src="./image.png">');
   writeFileSync(join(directory, 'popup', 'style.css'), '.logo { background-image: url("./image.png"); }');
   writeFileSync(join(directory, 'popup', 'main.js'), 'document.querySelector("a").href = "./details.html";');
+  writeFileSync(join(directory, 'content.js'), '(()=>{})();');
   writeFileSync(join(directory, 'worker.js'), '(()=>{})();');
 
   try {
@@ -307,9 +308,18 @@ test.each([
   expect(result.stderr).toMatch(/background|remote executable URL/);
 });
 
+test('package verifier requires the local popup path declared in its manifest', () => {
+  const result = verify({ ...safeManifest, action: { default_popup: '../popup/index.html' } });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain('action.default_popup must be popup/index.html');
+});
+
 test('package verifier rejects absent packaged worker', () => {
   const directory = mkdtempSync(join(tmpdir(), 'clearchoice-dist-'));
   writeFileSync(join(directory, 'manifest.json'), JSON.stringify(safeManifest));
+  mkdirSync(join(directory, 'popup'));
+  writeFileSync(join(directory, 'popup', 'index.html'), '<main>Local popup</main>');
+  writeFileSync(join(directory, 'content.js'), '(()=>{})();');
   try {
     const result = verifyDist(directory);
     expect(result.status).not.toBe(0);
@@ -339,6 +349,73 @@ test('package verifier rejects a ZIP missing its declared worker', () => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test.each(['popup/index.html', 'content.js'])(
+  'package verifier rejects a dist missing %s', (missingAsset) => {
+    const directory = mkdtempSync(join(tmpdir(), 'clearchoice-dist-'));
+    mkdirSync(join(directory, 'popup'));
+    writeFileSync(join(directory, 'manifest.json'), JSON.stringify(safeManifest));
+    for (const asset of ['popup/index.html', 'content.js', 'worker.js']) {
+      if (asset !== missingAsset) writeFileSync(join(directory, asset), 'local asset');
+    }
+
+    try {
+      const result = verifyDist(directory);
+      expect(result.status, result.stdout).not.toBe(0);
+      expect(result.stderr).toContain(`${missingAsset} is missing or empty`);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test.each(['popup/index.html', 'content.js'])(
+  'package verifier rejects a ZIP missing %s', (missingAsset) => {
+    const directory = mkdtempSync(join(tmpdir(), 'clearchoice-zip-'));
+    const archive = join(directory, 'missing-asset.zip');
+    mkdirSync(join(directory, 'popup'));
+    writeFileSync(join(directory, 'manifest.json'), JSON.stringify(safeManifest));
+    for (const asset of ['popup/index.html', 'content.js', 'worker.js']) {
+      if (asset !== missingAsset) writeFileSync(join(directory, asset), 'local asset');
+    }
+
+    try {
+      const packed = spawnSync('zip', ['-q', '-r', archive, 'manifest.json', 'popup', 'worker.js',
+        ...(missingAsset === 'content.js' ? [] : ['content.js'])], { cwd: directory, encoding: 'utf8' });
+      expect(packed.status, packed.stderr).toBe(0);
+      const result = spawnSync(process.execPath, [verifier, '--zip', archive], { encoding: 'utf8' });
+      expect(result.status, result.stdout).not.toBe(0);
+      expect(result.stderr).toContain(`${missingAsset} is missing or empty`);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+test.each(['popup/index.html', 'content.js'])(
+  'package verifier rejects an empty %s in dist and ZIP', (emptyAsset) => {
+    const directory = mkdtempSync(join(tmpdir(), 'clearchoice-empty-'));
+    const archive = join(directory, 'empty-asset.zip');
+    mkdirSync(join(directory, 'popup'));
+    writeFileSync(join(directory, 'manifest.json'), JSON.stringify(safeManifest));
+    for (const asset of ['popup/index.html', 'content.js', 'worker.js']) {
+      writeFileSync(join(directory, asset), asset === emptyAsset ? '  ' : 'local asset');
+    }
+
+    try {
+      const packed = spawnSync('zip', ['-q', '-r', archive, 'manifest.json', 'popup', 'content.js', 'worker.js'], {
+        cwd: directory, encoding: 'utf8',
+      });
+      expect(packed.status, packed.stderr).toBe(0);
+      for (const result of [verifyDist(directory), spawnSync(process.execPath, [verifier, '--zip', archive], { encoding: 'utf8' })]) {
+        expect(result.status, result.stdout).not.toBe(0);
+        expect(result.stderr).toContain(`${emptyAsset} is missing or empty`);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
 
 test('package verifier rejects remote executable URLs', () => {
   const result = verify({
