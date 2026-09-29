@@ -13,19 +13,21 @@ const state: Record<string, unknown> = {};
 const sessionState: Record<string, unknown> = {};
 const setAccessLevel = vi.fn().mockResolvedValue(undefined);
 const sessionAccessLevel = vi.fn().mockResolvedValue(undefined);
-const sessionGet = vi.fn().mockImplementation(async (key: string) => ({ [key]: sessionState[key] }));
+const sessionGet = vi.fn().mockImplementation(async (key: string | null) => key === null ? { ...sessionState } : ({ [key]: sessionState[key] }));
 const sessionSet = vi.fn().mockImplementation(async (value: Record<string, unknown>) => { Object.assign(sessionState, value); });
+const sessionRemove = vi.fn().mockImplementation(async (key: string) => { delete sessionState[key]; });
 const query = vi.fn().mockResolvedValue([{ id: 42 }]);
 const tabGet = vi.fn().mockResolvedValue({ id: 42, url: 'https://merchant.test/checkout' });
 const executeScript = vi.fn().mockResolvedValue([{ frameId: 0, documentId: 'doc-A', result: undefined }]);
-const sendMessage = vi.fn().mockResolvedValue({ ok: true, status: 'unsupported-context', findingCount: 0 });
+const sendMessage = vi.fn().mockImplementation(async (_tab: number, message: { type: string }) => message.type === 'CLEARCHOICE_AUTO_START'
+  ? { ok: true } : { ok: true, status: 'unsupported-context', findingCount: 0 });
 const get = vi.fn().mockImplementation(async () => ({ ...state }));
 const set = vi.fn().mockImplementation(async (value: Record<string, unknown>) => { Object.assign(state, value); });
 const popup = { id: 'extension', url: 'chrome-extension://extension/popup/index.html' } as chrome.runtime.MessageSender;
 const content = { id: 'extension', tab: { id: 42 }, frameId: 0, documentId: 'doc-A', url: 'https://merchant.test/checkout' } as chrome.runtime.MessageSender;
 
 async function boot() {
-  vi.stubGlobal('chrome', { runtime: { id: 'extension', onMessage: { addListener: (fn: typeof listeners[number]) => listeners.push(fn) } }, tabs: { query, get: tabGet, sendMessage }, action: { setBadgeText: vi.fn(async () => undefined) }, permissions: { contains, onRemoved: { addListener: (fn: typeof permissionRemoved[number]) => permissionRemoved.push(fn) } }, scripting: { executeScript, getRegisteredContentScripts, registerContentScripts, unregisterContentScripts }, storage: { local: { setAccessLevel, get, set }, session: { setAccessLevel: sessionAccessLevel, get: sessionGet, set: sessionSet } } });
+  vi.stubGlobal('chrome', { runtime: { id: 'extension', onMessage: { addListener: (fn: typeof listeners[number]) => listeners.push(fn) } }, tabs: { query, get: tabGet, sendMessage }, action: { setBadgeText: vi.fn(async () => undefined) }, permissions: { contains, onRemoved: { addListener: (fn: typeof permissionRemoved[number]) => permissionRemoved.push(fn) } }, scripting: { executeScript, getRegisteredContentScripts, registerContentScripts, unregisterContentScripts }, storage: { local: { setAccessLevel, get, set }, session: { setAccessLevel: sessionAccessLevel, get: sessionGet, set: sessionSet, remove: sessionRemove } } });
   await import('./index');
   await vi.waitFor(() => expect(listeners).toHaveLength(1));
   await new Promise<void>((resolve) => { listeners[0]({ type: 'INVALID' }, popup, () => resolve()); });
@@ -33,7 +35,7 @@ async function boot() {
 async function dispatch(message: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
   return new Promise((resolve) => { const accepted = listeners[0](message, sender, resolve); if (!accepted) resolve(undefined); });
 }
-afterEach(() => { listeners.length = 0; permissionRemoved.length = 0; registeredScripts.length = 0; grantedOrigins.clear(); for (const key of Object.keys(state)) delete state[key]; for (const key of Object.keys(sessionState)) delete sessionState[key]; vi.clearAllMocks(); get.mockReset().mockImplementation(async () => ({ ...state })); sendMessage.mockReset().mockResolvedValue({ ok: true, status: 'unsupported-context', findingCount: 0 }); query.mockReset().mockResolvedValue([{ id: 42 }]); tabGet.mockReset().mockResolvedValue({ id: 42, url: 'https://merchant.test/checkout' }); vi.resetModules(); vi.unstubAllGlobals(); });
+afterEach(() => { listeners.length = 0; permissionRemoved.length = 0; registeredScripts.length = 0; grantedOrigins.clear(); for (const key of Object.keys(state)) delete state[key]; for (const key of Object.keys(sessionState)) delete sessionState[key]; vi.clearAllMocks(); get.mockReset().mockImplementation(async () => ({ ...state })); sendMessage.mockReset().mockImplementation(async (_tab: number, message: { type: string }) => message.type === 'CLEARCHOICE_AUTO_START' ? { ok: true } : { ok: true, status: 'unsupported-context', findingCount: 0 }); query.mockReset().mockResolvedValue([{ id: 42 }]); tabGet.mockReset().mockResolvedValue({ id: 42, url: 'https://merchant.test/checkout' }); vi.resetModules(); vi.unstubAllGlobals(); });
 
 const autoBatch = (requestId = 'auto-1') => {
   const screenedExcerpt = 'Monthly plan $10.00';
@@ -168,7 +170,7 @@ it('reports a transient initial grant checkpoint read failure as retryable witho
   await enabledAuto();
   get.mockRejectedValueOnce(new Error('temporary grant storage failure'));
   expect(await dispatch(autoRequest(), content)).toEqual({ ok: false, error: 'retryable-failure' });
-  expect(sendMessage).not.toHaveBeenCalled();
+  expect(sendMessage.mock.calls.filter(([, message]) => message.type === 'CLEARCHOICE_FINDINGS_CHALLENGE')).toHaveLength(0);
   expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
   expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });
 });
@@ -276,6 +278,47 @@ it('vetoes automatic commit after a document navigation during the queued storag
   expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
 });
 
+it('fails closed before enable-now injection when focus changes during top-document probe', async () => {
+  grantedOrigins.add('https://merchant.test/*');
+  await boot();
+  let release!: (value: chrome.scripting.InjectionResult[]) => void;
+  executeScript.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+  const pending = dispatch({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' }, popup);
+  await vi.waitFor(() => expect(executeScript).toHaveBeenCalledTimes(1));
+  query.mockResolvedValue([{ id: 7 }]);
+  release([{ frameId: 0, documentId: 'doc-A' }]);
+  expect(await pending).toEqual({ ok: false, error: 'request-failed' });
+  expect(executeScript).toHaveBeenCalledTimes(1);
+  expect(sendMessage).not.toHaveBeenCalled();
+});
+
+it('never widens a missing document target to tab-wide injection', async () => {
+  grantedOrigins.add('https://merchant.test/*');
+  await boot();
+  executeScript.mockResolvedValueOnce([{ frameId: 1, documentId: 'other' }]);
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' }, popup))
+    .toEqual({ ok: false, error: 'request-failed' });
+  expect(executeScript).toHaveBeenCalledTimes(1);
+  expect(sendMessage).not.toHaveBeenCalled();
+});
+
+it('revokes a recorded automatic document even when tab URL is unavailable, without touching B', async () => {
+  await enabledAuto();
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: true, generation: 1 });
+  expect(sessionState['clearchoice.automatic.42']).toEqual({ tabId: 42, documentId: 'doc-A', origin: 'https://merchant.test' });
+  sessionState['clearchoice.automatic.7'] = { tabId: 7, documentId: 'doc-B', origin: 'https://b.test' };
+  tabGet.mockResolvedValue({ id: 42 });
+  // Restore a visible active A only for the popup request, then lose the URL during cleanup.
+  tabGet.mockResolvedValueOnce({ id: 42, url: 'https://merchant.test/checkout' })
+    .mockResolvedValueOnce({ id: 42, url: 'https://merchant.test/checkout' });
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup))
+    .toMatchObject({ ok: false });
+  expect(sendMessage).toHaveBeenCalledWith(42, { type: 'CLEARCHOICE_DISABLE' }, { documentId: 'doc-A' });
+  expect(sendMessage).not.toHaveBeenCalledWith(7, expect.anything(), expect.anything());
+  expect(sessionState['clearchoice.automatic.42']).toBeUndefined();
+  expect(sessionState['clearchoice.automatic.7']).toEqual({ tabId: 7, documentId: 'doc-B', origin: 'https://b.test' });
+});
+
 it('authorizes exact active popup site before enabling; never registers on spoof or missing permission', async () => {
   await boot();
   const enable = { type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://merchant.test' };
@@ -286,7 +329,9 @@ it('authorizes exact active popup site before enabling; never registers on spoof
   expect(await dispatch(enable, popup)).toEqual({ ok: true, enabled: true, permitted: true });
   expect(registeredScripts).toEqual([expect.objectContaining({ matches: ['https://merchant.test/*'], allFrames: false })]);
   expect(await dispatch({ type: 'CLEARCHOICE_SITE_STATUS', origin: 'https://merchant.test' }, popup)).toEqual({ ok: true, enabled: true, permitted: true });
-  expect(executeScript).not.toHaveBeenCalled();
+  expect(executeScript).toHaveBeenCalledWith({ target: { tabId: 42 }, func: expect.any(Function) });
+  expect(executeScript).toHaveBeenCalledWith({ target: { tabId: 42, documentIds: ['doc-A'] }, files: ['content.js'] });
+  expect(sendMessage).toHaveBeenCalledWith(42, { type: 'CLEARCHOICE_AUTO_START' }, { documentId: 'doc-A' });
   tabGet.mockResolvedValue({ id: 42, url: 'https://b.test/path' });
   expect(await dispatch(enable, popup)).toEqual({ ok: false, error: 'request-failed' });
   expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup)).toEqual({ ok: false, error: 'request-failed' });

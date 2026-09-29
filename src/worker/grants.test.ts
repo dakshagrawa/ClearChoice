@@ -17,7 +17,7 @@ function fixture() {
   const unregisterContentScripts = vi.fn(async ({ ids }: { ids: string[] }) => { for (const id of ids) { const index = scripts.findIndex((script) => script.id === id); if (index >= 0) scripts.splice(index, 1); } });
   const getRegisteredContentScripts = vi.fn(async (filter?: { ids?: string[] }) => structuredClone(filter?.ids ? scripts.filter((script) => filter.ids!.includes(script.id)) : scripts));
   const contains = vi.fn(async ({ origins }: { origins: string[] }) => origins.every((origin) => allowed.has(origin)));
-  vi.stubGlobal('chrome', { storage: { local: { get, set }, session: { get: vi.fn(async (key: string) => ({ [key]: session[key] })) } }, scripting: { registerContentScripts, unregisterContentScripts, getRegisteredContentScripts }, permissions: { contains }, tabs: { query: vi.fn(async () => tabs), sendMessage }, action: { setBadgeText } });
+  vi.stubGlobal('chrome', { storage: { local: { get, set }, session: { get: vi.fn(async (key: string) => ({ [key]: session[key] })), remove: vi.fn(async (key: string) => { delete session[key]; }) } }, scripting: { registerContentScripts, unregisterContentScripts, getRegisteredContentScripts }, permissions: { contains }, tabs: { query: vi.fn(async () => tabs), sendMessage }, action: { setBadgeText } });
   return { data, scripts, allowed, session, tabs, sendMessage, setBadgeText, get, set, registerContentScripts, unregisterContentScripts, getRegisteredContentScripts, contains };
 }
 
@@ -70,6 +70,21 @@ it('revocation advances generation and only unregisters the specified site', asy
   await grants.enable('https://a.test');
   expect(await grants.isEnabled('https://a.test', 1)).toBe(false);
   expect(await grants.isEnabled('https://a.test', 3)).toBe(true);
+});
+
+it('permission removal cleans an automatic document with hidden tab URL and leaves B untouched', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
+  const grants = createGrantManager(createWorkerStore());
+  await grants.enable('https://a.test'); await grants.enable('https://b.test');
+  f.tabs[0].url = undefined as unknown as string;
+  f.session['clearchoice.automatic.12'] = { tabId: 12, documentId: 'doc-A', origin: 'https://a.test' };
+  f.session['clearchoice.automatic.13'] = { tabId: 13, documentId: 'doc-B', origin: 'https://b.test' };
+  f.allowed.delete('https://a.test/*');
+  await grants.onRemoved(['https://*/*']);
+  expect(f.sendMessage).toHaveBeenCalledExactlyOnceWith(12, { type: 'CLEARCHOICE_DISABLE' }, { documentId: 'doc-A' });
+  expect(f.setBadgeText).toHaveBeenCalledExactlyOnceWith({ tabId: 12, text: '' });
+  expect(f.session['clearchoice.automatic.12']).toBeUndefined();
+  expect(f.session['clearchoice.automatic.13']).toEqual({ tabId: 13, documentId: 'doc-B', origin: 'https://b.test' });
 });
 
 it('external permission removal disables A while B remains active', async () => {

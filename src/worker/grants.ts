@@ -58,22 +58,28 @@ export function createGrantManager(store: Queue) {
     // Even a failed storage or scripting operation must not skip best-effort UI cleanup.
     try {
       const tabs = await chrome.tabs.query({});
-      await Promise.all(tabs.filter((tab) => tab.id !== undefined && typeof tab.url === 'string' && (() => {
-        try { return new URL(tab.url!).origin === origin; } catch { return false; }
-      })()).map(async (tab) => {
+      await Promise.all(tabs.filter((tab) => tab.id !== undefined).map(async (tab) => {
         const tabId = tab.id!;
-        try { await chrome.action.setBadgeText({ tabId, text: '' }); } catch { /* Best effort. */ }
-        try {
-          const key = `clearchoice.document.${tabId}`;
-          const record: unknown = (await chrome.storage.session.get(key))[key];
-          if (typeof record === 'object' && record !== null && !Array.isArray(record)) {
+        const tabOrigin = (() => { try { return typeof tab.url === 'string' ? new URL(tab.url).origin : undefined; } catch { return undefined; } })();
+        const automaticKey = `clearchoice.automatic.${tabId}`;
+        const manualKey = `clearchoice.document.${tabId}`;
+        let tracked = false;
+        for (const key of [automaticKey, manualKey]) {
+          try {
+            const record: unknown = (await chrome.storage.session.get(key))[key];
+            if (typeof record !== 'object' || record === null || Array.isArray(record)) continue;
             const fields = record as Record<string, unknown>;
-            if (Object.keys(fields).length === 3 && fields.tabId === tabId && fields.origin === origin
-              && typeof fields.documentId === 'string' && fields.documentId.length > 0) {
-              await chrome.tabs.sendMessage(tabId, { type: CLEARCHOICE_DISABLE }, { documentId: fields.documentId });
-            }
-          }
-        } catch { /* Missing/expired document or listener; never broadcast to a tab. */ }
+            if (Object.keys(fields).length !== 3 || fields.tabId !== tabId || fields.origin !== origin
+              || typeof fields.documentId !== 'string' || fields.documentId.length === 0) continue;
+            tracked = true;
+            try { await chrome.tabs.sendMessage(tabId, { type: CLEARCHOICE_DISABLE }, { documentId: fields.documentId }); }
+            catch { /* The exact document may have closed. */ }
+            if (key === automaticKey) await chrome.storage.session.remove(key);
+          } catch { /* Continue independently for the other document record. */ }
+        }
+        if (tabOrigin === origin || (tabOrigin === undefined && tracked)) {
+          try { await chrome.action.setBadgeText({ tabId, text: '' }); } catch { /* Best effort. */ }
+        }
       }));
     } catch { /* Badge and message cleanup are best effort; the persisted grant is disabled when storage succeeds. */ }
     if (storageFailed && unregisterFailed) {

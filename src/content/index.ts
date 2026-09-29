@@ -5,6 +5,7 @@ import {
   CLEARCHOICE_DISMISSED_GET,
   CLEARCHOICE_AUTO_SUBMIT,
   CLEARCHOICE_AUTO_STATUS,
+  CLEARCHOICE_AUTO_START,
   CLEARCHOICE_FINDINGS_CHALLENGE,
   CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE,
   isAutomaticObservation,
@@ -90,7 +91,7 @@ async function automaticGeneration(): Promise<number | undefined> {
 }
 
 /** The worker grants this document a generation before any DOM observer is installed. */
-function startAutomaticObserver(): () => void {
+function startAutomaticObserver(): { stop: () => void; isAuthorized: () => boolean } {
   let active = true;
   let observer: MutationObserver | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -184,6 +185,7 @@ function startAutomaticObserver(): () => void {
       if (dirty && valid()) queue();
     }
   };
+  window.addEventListener('pagehide', stop);
   void automaticGeneration().then((allowed) => {
     if (!valid() || allowed === undefined) { stop(); return; }
     generation = allowed;
@@ -193,17 +195,30 @@ function startAutomaticObserver(): () => void {
     observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true });
     window.addEventListener('popstate', queue);
     window.addEventListener('hashchange', queue);
-    window.addEventListener('pagehide', stop);
     queue();
   }).catch(stop);
-  return stop;
+  return { stop, isAuthorized: () => active && generation !== undefined };
 }
 
 const pageWindow = window as ClearChoiceWindow;
 if (!pageWindow[contentSentinel]) {
   pageWindow[contentSentinel] = true;
-  const stopAutomatic = startAutomaticObserver();
-
+  let automatic = startAutomaticObserver();
+  const restartAutomatic = () => {
+    if (automatic.isAuthorized()) return;
+    automatic.stop();
+    automatic = startAutomaticObserver();
+  };
+  // BFCache retains the sentinel and listener; reauthorize before reinstalling one observer.
+  const onPageShow = (event: PageTransitionEvent) => { if (event.persisted) restartAutomatic(); };
+  const onPageHide = (event: PageTransitionEvent) => {
+    if (!event.persisted) {
+      window.removeEventListener('pageshow', onPageShow);
+      window.removeEventListener('pagehide', onPageHide);
+    }
+  };
+  window.addEventListener('pageshow', onPageShow);
+  window.addEventListener('pagehide', onPageHide);
   chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) => {
     if (!isContentRequest(message)) return;
     const request = message;
@@ -216,8 +231,14 @@ if (!pageWindow[contentSentinel]) {
         } else sendResponse({ ok: false, error: 'request-failed' });
         return;
       }
+      if (request.type === CLEARCHOICE_AUTO_START) {
+        if (sender.id !== chrome.runtime.id) { sendResponse({ ok: false, error: 'request-failed' }); return; }
+        restartAutomatic();
+        sendResponse({ ok: true });
+        return;
+      }
       if (request.type === CLEARCHOICE_DISABLE) {
-        stopAutomatic();
+        automatic.stop();
         removePanel();
         sendResponse({ ok: true });
         return;

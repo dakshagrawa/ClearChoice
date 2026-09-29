@@ -1,4 +1,4 @@
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_STATUS, CLEARCHOICE_AUTO_SUBMIT, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_STATUS, CLEARCHOICE_AUTO_SUBMIT, CLEARCHOICE_AUTO_START, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
 import { canonicalOrigin } from '../shared/models';
 import { getDismissed, setDismissed, loadGrantState } from '../shared/storage';
 import { isCurrentActiveTab } from '../shared/tab-analysis';
@@ -67,19 +67,22 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
     if (!isWorkerRequest(message)) return { ok: false, error: 'request-failed' };
     const request = message as Record<string, unknown>;
     if (request.type === CLEARCHOICE_AUTO_STATUS) {
-      if (!contentSender(sender)) return { ok: false, error: 'request-failed' };
-      const origin = senderOrigin(sender.origin ?? sender.url);
-      if (!origin || senderOrigin(sender.url) !== origin) return { ok: false, error: 'request-failed' };
-      const tabId = sender.tab!.id!;
-      const tab = await chrome.tabs.get(tabId);
-      if (tab.id !== tabId || senderOrigin(tab.url) !== origin) return { ok: false, error: 'request-failed' };
-      const state = await loadGrantState();
-      const grant = state.sites[origin];
-      if (!grant?.enabled || !await grants.isEnabled(origin, grant.generation)) return { ok: false, error: 'request-failed' };
-      const current = await chrome.tabs.get(tabId);
-      if (current.id !== tabId || senderOrigin(current.url) !== origin
-        || !await grants.isEnabled(origin, grant.generation)) return { ok: false, error: 'request-failed' };
-      return { ok: true, generation: grant.generation };
+      return store.enqueue(async () => {
+        if (!contentSender(sender)) return { ok: false, error: 'request-failed' };
+        const origin = senderOrigin(sender.origin ?? sender.url);
+        if (!origin || senderOrigin(sender.url) !== origin) return { ok: false, error: 'request-failed' };
+        const tabId = sender.tab!.id!;
+        const tab = await chrome.tabs.get(tabId);
+        if (tab.id !== tabId || senderOrigin(tab.url) !== origin) return { ok: false, error: 'request-failed' };
+        const state = await loadGrantState();
+        const grant = state.sites[origin];
+        if (!grant?.enabled || !await grants.isEnabled(origin, grant.generation)) return { ok: false, error: 'request-failed' };
+        const current = await chrome.tabs.get(tabId);
+        if (current.id !== tabId || senderOrigin(current.url) !== origin
+          || !await grants.isEnabled(origin, grant.generation)) return { ok: false, error: 'request-failed' };
+        await chrome.storage.session.set({ [`clearchoice.automatic.${tabId}`]: { tabId, documentId: sender.documentId!, origin } });
+        return { ok: true, generation: grant.generation };
+      });
     }
     if (request.type === CLEARCHOICE_AUTO_SUBMIT) {
       if (!isAutomaticObservation(message) || !contentSender(sender)) return { ok: false, error: 'request-failed' };
@@ -171,8 +174,22 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
         || !(await isCurrentActiveTab(active.id))) return { ok: false, error: 'request-failed' };
       // A second tab read guards against a same-tab navigation while the focus check awaits.
       if (senderOrigin((await chrome.tabs.get(active.id)).url) !== origin) return { ok: false, error: 'request-failed' };
-      if (request.type === CLEARCHOICE_SITE_ENABLE) await grants.enable(origin, async () =>
-        await isCurrentActiveTab(active.id!) && senderOrigin((await chrome.tabs.get(active.id!)).url) === origin);
+      if (request.type === CLEARCHOICE_SITE_ENABLE) {
+        const currentSite = async () => await isCurrentActiveTab(active.id!)
+          && senderOrigin((await chrome.tabs.get(active.id!)).url) === origin;
+        const generation = await grants.enable(origin, currentSite);
+        if (!await currentSite() || !await grants.isEnabled(origin, generation)) return { ok: false, error: 'request-failed' };
+        // An inert top-frame probe supplies the document ID; tabs.Tab has none.
+        const probe = await chrome.scripting.executeScript({ target: { tabId: active.id }, func: () => undefined });
+        const top = probe.find((entry) => entry.frameId === 0 && typeof entry.documentId === 'string' && entry.documentId.length > 0);
+        if (!top || !await currentSite() || !await grants.isEnabled(origin, generation)) return { ok: false, error: 'request-failed' };
+        await chrome.scripting.executeScript({ target: { tabId: active.id, documentIds: [top.documentId!] }, files: ['content.js'] });
+        if (!await currentSite() || !await grants.isEnabled(origin, generation)) return { ok: false, error: 'request-failed' };
+        const started: unknown = await chrome.tabs.sendMessage(active.id, { type: CLEARCHOICE_AUTO_START }, { documentId: top.documentId! });
+        if (typeof started !== 'object' || started === null || Object.keys(started).length !== 1
+          || !('ok' in started) || started.ok !== true || !await currentSite()
+          || !await grants.isEnabled(origin, generation)) return { ok: false, error: 'request-failed' };
+      }
       if (request.type === CLEARCHOICE_SITE_REVOKE) {
         try { await grants.revoke(origin); }
         catch (error) {

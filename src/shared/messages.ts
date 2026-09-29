@@ -6,6 +6,7 @@ export const CLEARCHOICE_FINDINGS_BATCH = 'CLEARCHOICE_FINDINGS_BATCH' as const;
 export const CLEARCHOICE_FINDINGS_CHALLENGE = 'CLEARCHOICE_FINDINGS_CHALLENGE' as const;
 export const CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE = 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE' as const;
 export const CLEARCHOICE_AUTO_STATUS = 'CLEARCHOICE_AUTO_STATUS' as const;
+export const CLEARCHOICE_AUTO_START = 'CLEARCHOICE_AUTO_START' as const;
 export const CLEARCHOICE_AUTO_SUBMIT = 'CLEARCHOICE_AUTO_SUBMIT' as const;
 export const CLEARCHOICE_REVIEW_LIST = 'CLEARCHOICE_REVIEW_LIST' as const;
 export const CLEARCHOICE_SUBMIT = 'CLEARCHOICE_SUBMIT' as const;
@@ -102,7 +103,7 @@ export interface RestoreRequest {
   type: typeof CLEARCHOICE_RESTORE;
 }
 
-export type ContentRequest = AnalyzeRequest | RestoreRequest | FindingsChallenge | { type: typeof CLEARCHOICE_DISABLE };
+export type ContentRequest = AnalyzeRequest | RestoreRequest | FindingsChallenge | { type: typeof CLEARCHOICE_DISABLE } | { type: typeof CLEARCHOICE_AUTO_START };
 export type AnalyzeResponse =
   | { ok: true; status: 'supported'; findingCount: number }
   | { ok: true; status: 'unsupported-context'; findingCount: 0 }
@@ -115,7 +116,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isContentRequest(value: unknown): value is ContentRequest {
   return isFindingsChallenge(value) || (isRecord(value)
-    && ((hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISABLE))
+    && ((hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISABLE || value.type === CLEARCHOICE_AUTO_START))
       || (hasExactKeys(value, ['type', 'requestId', 'nonce']) && value.type === CLEARCHOICE_ANALYZE
         && isValidRequestId(value.requestId) && isValidRequestId(value.nonce))));
 }

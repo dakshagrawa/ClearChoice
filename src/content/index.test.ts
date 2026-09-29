@@ -40,6 +40,63 @@ const betaCheckout = '<main><aside>Order summary — Subtotal: $24</aside><secti
 const automaticSubmits = (sendMessage: ReturnType<typeof vi.fn>) => sendMessage.mock.calls.filter(([message]) => message.type === 'CLEARCHOICE_AUTO_SUBMIT');
 const ownedPanel = () => Array.from(document.querySelectorAll<HTMLElement>('[data-clearchoice-panel]')).find((panel) => panel.shadowRoot?.querySelector('.clearchoice-panel'));
 
+it('enable-now supersedes a pending denied bootstrap instead of losing the restart', async () => {
+  const { addListener, sendMessage } = autoChrome();
+  let deny!: (response: unknown) => void;
+  sendMessage.mockImplementationOnce(() => new Promise((resolve) => { deny = resolve; }));
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  const listener = addListener.mock.calls[0][0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
+  const reply = vi.fn();
+  listener({ type: 'CLEARCHOICE_AUTO_START' }, { id: 'extension' }, reply);
+  deny({ ok: false, error: 'request-failed' });
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  expect(automaticSubmits(sendMessage)).toHaveLength(1);
+  expect(addListener).toHaveBeenCalledTimes(1);
+});
+
+it('a denied initial status can be restarted by a worker-targeted enable without duplicate listeners', async () => {
+  const { addListener, sendMessage } = autoChrome();
+  sendMessage.mockResolvedValueOnce({ ok: false, error: 'request-failed' });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_AUTO_STATUS' }));
+  const listener = addListener.mock.calls[0][0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean | undefined;
+  const rejected = vi.fn();
+  expect(listener({ type: 'CLEARCHOICE_AUTO_START', extra: 'unsafe' }, { id: 'extension' }, rejected)).toBeUndefined();
+  const reply = vi.fn();
+  expect(listener({ type: 'CLEARCHOICE_AUTO_START' }, { id: 'extension' }, reply)).toBe(true);
+  await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ ok: true }));
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  expect(addListener).toHaveBeenCalledTimes(1);
+  listener({ type: 'CLEARCHOICE_AUTO_START' }, { id: 'extension' }, vi.fn());
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(automaticSubmits(sendMessage)).toHaveLength(1);
+});
+
+it('BFCache pageshow reauthorizes and resumes once, but a revoked restore leaves no panel', async () => {
+  const { addListener, sendMessage } = autoChrome();
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+  expect(ownedPanel()).toBeUndefined();
+  window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  expect(addListener).toHaveBeenCalledTimes(1);
+  const submissions = automaticSubmits(sendMessage).length;
+  window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  expect(automaticSubmits(sendMessage)).toHaveLength(submissions);
+  window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+  sendMessage.mockImplementation(async (message: { type: string }) => message.type === 'CLEARCHOICE_AUTO_STATUS'
+    ? { ok: false, error: 'request-failed' } : { ok: true, dismissed: false });
+  window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  expect(ownedPanel()).toBeUndefined();
+  expect(automaticSubmits(sendMessage)).toHaveLength(submissions);
+});
+
 it('denied or ambiguous status never installs an automatic scan or panel', async () => {
   const { sendMessage } = autoChrome();
   sendMessage.mockResolvedValueOnce({ ok: false, error: 'request-failed' });
