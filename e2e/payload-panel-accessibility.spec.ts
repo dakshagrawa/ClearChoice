@@ -18,11 +18,11 @@ async function installMinimalContentBridge(page: Page): Promise<void> {
               window.__clearchoiceContentListener = listener;
             },
           },
-        },
-        storage: {
-          local: {
-            async get() { return { dismissed }; },
-            async set(value: { dismissed?: boolean }) { dismissed = value.dismissed === true; },
+          async sendMessage(message: { type: string; batch?: { findings: unknown[] } }) {
+            if (message.type === 'CLEARCHOICE_SUBMIT') return { ok: true, findingCount: message.batch?.findings.length ?? 0 };
+            if (message.type === 'CLEARCHOICE_DISMISSED_GET') return { ok: true, dismissed };
+            if (message.type === 'CLEARCHOICE_DISMISSED_SET') { dismissed = true; return { ok: true }; }
+            throw new Error('Unexpected payload-only bridge message');
           },
         },
       },
@@ -34,10 +34,13 @@ async function analyze(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const listener = window.__clearchoiceContentListener;
     if (!listener) throw new Error('Content payload did not register its message listener.');
-    await new Promise<void>((resolveResponse) => {
-      const keepChannelOpen = listener({ type: 'CLEARCHOICE_ANALYZE' }, {}, () => resolveResponse());
+    const response = await new Promise<unknown>((resolveResponse) => {
+      const keepChannelOpen = listener({ type: 'CLEARCHOICE_ANALYZE' }, {}, resolveResponse);
       if (keepChannelOpen !== true) throw new Error('Content payload did not keep its asynchronous response channel open.');
     });
+    if (typeof response !== 'object' || response === null || !('ok' in response) || response.ok !== true) {
+      throw new Error('Content payload failed to analyze the fixture.');
+    }
   });
 }
 
