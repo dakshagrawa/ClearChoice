@@ -24,7 +24,9 @@ import { buildFindingBatchWithSources, createScanRequestId } from './candidates'
 import { isOwnedPanelMutation, removePanel, renderAutomaticDiagnostic, renderPanel } from './panel';
 
 const contentSentinel = '__clearchoiceContentListenerInstalled__';
-let automaticRequestId: string | undefined;
+// One active observer and at most one superseded observer awaiting its worker receipt.
+const automaticRequestIds = new Set<string>();
+const maxPendingAutomaticRequests = 2;
 
 export class AutomaticObservationFailure extends Error {
   constructor(readonly retryable: boolean) { super('Automatic observation refused'); }
@@ -33,8 +35,9 @@ export class AutomaticObservationFailure extends Error {
 /** Task 10 will call this only after its opt-in checkout observer screens a batch. */
 export async function submitAutomaticObservation(generation: number, batch: FindingsBatchRequest): Promise<{ ok: true; findingCount: number }> {
   const request = { type: CLEARCHOICE_AUTO_SUBMIT, version: 1, generation, batch };
-  if (automaticRequestId || !isAutomaticObservation(request)) throw new Error('Automatic observation unavailable');
-  automaticRequestId = batch.requestId;
+  if (automaticRequestIds.size >= maxPendingAutomaticRequests || automaticRequestIds.has(batch.requestId)
+    || !isAutomaticObservation(request)) throw new Error('Automatic observation unavailable');
+  automaticRequestIds.add(batch.requestId);
   try {
     let reply: unknown;
     try { reply = await chrome.runtime.sendMessage(request); }
@@ -48,7 +51,7 @@ export async function submitAutomaticObservation(generation: number, batch: Find
       || !('ok' in reply) || reply.ok !== true || !('findingCount' in reply)
       || reply.findingCount !== batch.findings.length) throw new Error('Automatic observation refused');
     return { ok: true, findingCount: batch.findings.length };
-  } finally { automaticRequestId = undefined; }
+  } finally { automaticRequestIds.delete(batch.requestId); }
 }
 
 async function getDismissed(): Promise<boolean> {
@@ -226,7 +229,7 @@ if (!pageWindow[contentSentinel]) {
 
     void (async () => {
       if (request.type === CLEARCHOICE_FINDINGS_CHALLENGE) {
-        if (sender.id === chrome.runtime.id && automaticRequestId === request.requestId) {
+        if (sender.id === chrome.runtime.id && automaticRequestIds.has(request.requestId)) {
           sendResponse({ type: CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE, version: 1,
             requestId: request.requestId, nonce: request.nonce });
         } else sendResponse({ ok: false, error: 'request-failed' });

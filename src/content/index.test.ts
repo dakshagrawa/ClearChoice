@@ -61,6 +61,47 @@ it('restarts an active observer after failed exact-document disable and scans at
   expect(addListener).toHaveBeenCalledTimes(1);
 });
 
+it('restarts during an old in-flight submit and keeps each challenge scoped to its pending request', async () => {
+  const { addListener, sendMessage } = autoChrome();
+  let generation = 3;
+  const finish = new Map<number, (value: unknown) => void>();
+  sendMessage.mockImplementation((message: { type: string; generation?: number; batch?: { findings: unknown[] } }) => {
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS') return Promise.resolve({ ok: true, generation });
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return new Promise((resolve) => { finish.set(message.generation!, resolve); });
+    return Promise.resolve({ ok: true, dismissed: false });
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(1));
+  const listener = addListener.mock.calls[0][0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
+  const oldId = automaticSubmits(sendMessage)[0][0].batch.requestId as string;
+  generation = 5; // DISABLE was lost; the old worker receipt remains pending.
+  const started = vi.fn();
+  listener({ type: 'CLEARCHOICE_AUTO_START', version: 1, generation: 5 }, { id: 'extension' }, started);
+  await vi.waitFor(() => expect(started).toHaveBeenCalledWith({ ok: true }));
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(2));
+  const next = automaticSubmits(sendMessage)[1][0];
+  expect(next.generation).toBe(5);
+  expect(next.batch.requestId).not.toBe(oldId);
+  const challenge = (requestId: string, nonce: string, senderId = 'extension') => {
+    const reply = vi.fn();
+    listener({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId, nonce }, { id: senderId }, reply);
+    return reply;
+  };
+  expect(challenge(oldId, 'old-nonce')).toHaveBeenCalledWith({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: oldId, nonce: 'old-nonce' });
+  expect(challenge(next.batch.requestId, 'new-nonce')).toHaveBeenCalledWith({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: next.batch.requestId, nonce: 'new-nonce' });
+  expect(challenge('unrelated', 'wrong-nonce')).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+  expect(challenge(next.batch.requestId, 'wrong-sender', 'other')).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+  finish.get(3)!({ ok: true, findingCount: 1 });
+  await vi.waitFor(() => expect(challenge(oldId, 'late')).toHaveBeenCalledWith({ ok: false, error: 'request-failed' }));
+  expect(challenge(next.batch.requestId, 'still-pending')).toHaveBeenCalledWith({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: next.batch.requestId, nonce: 'still-pending' });
+  expect(ownedPanel()).toBeUndefined();
+  finish.get(5)!({ ok: true, findingCount: next.batch.findings.length });
+  await vi.waitFor(() => expect(ownedPanel()?.shadowRoot?.querySelectorAll('article')).toHaveLength(1));
+  expect(challenge(next.batch.requestId, 'late')).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+  expect(addListener).toHaveBeenCalledTimes(1);
+});
+
 it('enable-now supersedes a pending denied bootstrap instead of losing the restart', async () => {
   const { addListener, sendMessage } = autoChrome();
   let deny!: (response: unknown) => void;
@@ -372,6 +413,32 @@ it('attests only the matching in-flight automatic observation without scanning',
   const late = vi.fn();
   listener(request, { id: 'extension' }, late);
   await vi.waitFor(() => expect(late).toHaveBeenCalledWith({ ok: false, error: 'request-failed' }));
+});
+
+it('rejects duplicate request IDs and bounds simultaneous automatic challenges', async () => {
+  const { addListener, sendMessage } = installChrome();
+  const { submitAutomaticObservation } = await import('./index');
+  const listener = addListener.mock.calls[0][0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
+  const pending = new Map<string, (value: unknown) => void>();
+  sendMessage.mockImplementation((message: { type: string; batch?: { requestId: string } }) => message.type === 'CLEARCHOICE_AUTO_SUBMIT'
+    ? new Promise((resolve) => { pending.set(message.batch!.requestId, resolve); }) : Promise.resolve({ ok: false, error: 'request-failed' }));
+  const batch = (requestId: string) => ({ type: 'CLEARCHOICE_FINDINGS_BATCH' as const, version: 1 as const, requestId, findings: [] });
+  const first = submitAutomaticObservation(3, batch('auto-first'));
+  await expect(submitAutomaticObservation(3, batch('auto-first'))).rejects.toThrow('Automatic observation unavailable');
+  const second = submitAutomaticObservation(5, batch('auto-second'));
+  await expect(submitAutomaticObservation(7, batch('auto-third'))).rejects.toThrow('Automatic observation unavailable');
+  expect(automaticSubmits(sendMessage)).toHaveLength(2);
+  const challenge = vi.fn();
+  listener({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId: 'auto-third', nonce: 'nonce' }, { id: 'extension' }, challenge);
+  expect(challenge).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+  pending.get('auto-first')!({ ok: true, findingCount: 0 });
+  await expect(first).resolves.toEqual({ ok: true, findingCount: 0 });
+  const third = submitAutomaticObservation(7, batch('auto-third'));
+  expect(automaticSubmits(sendMessage)).toHaveLength(3);
+  pending.get('auto-second')!({ ok: true, findingCount: 0 });
+  pending.get('auto-third')!({ ok: true, findingCount: 0 });
+  await expect(second).resolves.toEqual({ ok: true, findingCount: 0 });
+  await expect(third).resolves.toEqual({ ok: true, findingCount: 0 });
 });
 
 it('exposes a structured retryable signal to the future automatic observer', async () => {
