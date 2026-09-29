@@ -75,7 +75,15 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
             && response.nonce === nonce;
         } catch { return false; }
       };
-      if (!await checkpoint() || !await challenge() || !await checkpoint()) return { ok: false, error: 'request-failed' };
+      const checked = async (): Promise<'authorized' | 'denied' | 'retryable'> => {
+        try { return await checkpoint() ? 'authorized' : 'denied'; }
+        catch { return 'retryable'; }
+      };
+      const before = await checked();
+      if (before !== 'authorized') return { ok: false, error: before === 'retryable' ? 'retryable-failure' : 'request-failed' };
+      if (!await challenge()) return { ok: false, error: 'request-failed' };
+      const after = await checked();
+      if (after !== 'authorized') return { ok: false, error: after === 'retryable' ? 'retryable-failure' : 'request-failed' };
       let result: { ids: string[] };
       try {
         result = await store.upsertFindings(message.batch, origin, async () =>

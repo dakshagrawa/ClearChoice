@@ -88,6 +88,15 @@ it.each(['wrong nonce', 'wrong request', 'surplus', 'failed target'])('rejects %
   expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
 });
 
+it('reports a transient initial grant checkpoint read failure as retryable without writing', async () => {
+  await enabledAuto();
+  get.mockRejectedValueOnce(new Error('temporary grant storage failure'));
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: false, error: 'retryable-failure' });
+  expect(sendMessage).not.toHaveBeenCalled();
+  expect(set.mock.calls.filter(([value]) => 'receipts' in value)).toHaveLength(0);
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });
+});
+
 it('identifies an unavailable worker initialization as retryable only for a valid automatic sender', async () => {
   grantedOrigins.add('https://merchant.test/*');
   setAccessLevel.mockRejectedValueOnce(new Error('temporary storage setup error'));
