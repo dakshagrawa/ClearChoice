@@ -3,6 +3,7 @@ import { canonicalOrigin, isFindingHistory, MAX_REVIEW_HISTORY } from '../shared
 import type { FindingRecord } from '../shared/models';
 import { loadReviewStoreState } from '../shared/storage';
 import type { BatchReceipt } from '../shared/storage';
+import { semanticFingerprint } from '../shared/semantic-fingerprint';
 
 export interface WorkerStoreOptions {
   now?: () => Date;
@@ -28,6 +29,11 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
       return enqueue(async () => {
         if (!isFindingsBatchRequest(request)) throw new Error('Invalid findings batch');
         if (!canonicalOrigin(origin)) throw new Error('Invalid canonical origin');
+        // Authenticate every DTO before any read/write, including receipt replays.
+        for (const finding of request.findings) {
+          if (finding.opaqueFingerprint !== await semanticFingerprint(finding))
+            throw new Error('Invalid semantic fingerprint');
+        }
         const identities = request.findings.map((finding) => `${finding.opaqueFingerprint}:${finding.ordinal}`);
         if (new Set(identities).size !== identities.length) throw new Error('Duplicate finding identity');
         // Digest all validated DTO fields in wire order, not a sorted or lossy subset.

@@ -2,9 +2,9 @@ import type { Finding } from '../core/types';
 import { isValidRequestId, MAX_FINDING_BATCH, toFindingDto } from '../shared/finding-dto';
 import { CLEARCHOICE_FINDINGS_BATCH, isFindingsBatchRequest } from '../shared/messages';
 import type { FindingsBatchRequest } from '../shared/messages';
+import { semanticFingerprint } from '../shared/semantic-fingerprint';
 
 const screeningFingerprint = '0'.repeat(64);
-const encoder = new TextEncoder();
 
 /** Create once per scan; pass the same ID to buildFindingBatch on retries. */
 export function createScanRequestId(): string {
@@ -25,9 +25,7 @@ export async function buildFindingBatch(findings: readonly Finding[], requestId:
   const ordinals = new Map<string, number>();
   const result: FindingsBatchRequest['findings'] = [];
   for (const dto of screened) {
-    const identity = `${dto.kind}\u0000${dto.reason}\u0000${dto.screenedExcerpt}`;
-    const bytes = await crypto.subtle.digest('SHA-256', encoder.encode(identity));
-    const fingerprint = Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    const fingerprint = await semanticFingerprint(dto);
     const ordinal = (ordinals.get(fingerprint) ?? 0) + 1;
     ordinals.set(fingerprint, ordinal);
     result.push({ ...dto, ordinal, opaqueFingerprint: fingerprint });

@@ -1,13 +1,17 @@
+import { createHash } from 'node:crypto';
 import { expect, it, vi } from 'vitest';
 import { CLEARCHOICE_FINDINGS_BATCH } from '../shared/messages';
 import { createWorkerStore } from './store';
 
-const fingerprint = 'a'.repeat(64);
-const finding = (requestId: string) => ({
+const semanticFingerprint = (kind: string, reason: string, excerpt: string) =>
+  createHash('sha256').update(`${kind}\0${reason}\0${excerpt}`, 'utf8').digest('hex');
+const fingerprint = semanticFingerprint('recurring-charge', 'price-cadence', 'Monthly plan $10.00');
+const evidence = (requestId: string, screenedExcerpt: string, ordinal = 1) => ({
   version: 1 as const, requestId, kind: 'recurring-charge' as const,
-  reason: 'price-cadence' as const, screenedExcerpt: 'Monthly plan $10.00',
-  opaqueFingerprint: fingerprint, ordinal: 1,
+  reason: 'price-cadence' as const, screenedExcerpt,
+  opaqueFingerprint: semanticFingerprint('recurring-charge', 'price-cadence', screenedExcerpt), ordinal,
 });
+const finding = (requestId: string) => evidence(requestId, 'Monthly plan $10.00');
 const batch = (requestId: string) => ({
   type: CLEARCHOICE_FINDINGS_BATCH, version: 1 as const, requestId, findings: [finding(requestId)],
 });
@@ -21,6 +25,54 @@ function fakeStorage() {
   });
   return { data, get, set };
 }
+
+it('rejects a changed excerpt under an existing fingerprint before reading or changing reviewed history', async () => {
+  const storage = fakeStorage();
+  const store = createWorkerStore();
+  await store.upsertFindings(batch('req-1'), 'https://example.com');
+  (storage.data.reviewHistory as Array<{ status: string }>)[0].status = 'reviewed';
+  const snapshot = structuredClone(storage.data);
+  const reads = storage.get.mock.calls.length;
+  const writes = storage.set.mock.calls.length;
+  for (const requestId of ['req-1', 'req-2']) {
+    const forged = batch(requestId);
+    forged.findings[0].screenedExcerpt = 'Annual plan $10.00';
+    await expect(store.upsertFindings(forged, 'https://example.com')).rejects.toThrow('fingerprint');
+  }
+  expect(storage.get).toHaveBeenCalledTimes(reads);
+  expect(storage.set).toHaveBeenCalledTimes(writes);
+  expect(storage.data).toEqual(snapshot);
+});
+
+it('rejects a forged new record and an invalid member of a mixed batch before storage access', async () => {
+  const storage = fakeStorage();
+  const store = createWorkerStore();
+  const forged = { ...evidence('req-new', 'Annual plan $10.00'), opaqueFingerprint: fingerprint };
+  await expect(store.upsertFindings({ ...batch('req-new'), findings: [forged] }, 'https://example.com'))
+    .rejects.toThrow('fingerprint');
+  const mixed = { ...batch('req-mixed'), findings: [finding('req-mixed'), { ...forged, requestId: 'req-mixed' }] };
+  await expect(store.upsertFindings(mixed, 'https://example.com')).rejects.toThrow('fingerprint');
+  expect(storage.get).not.toHaveBeenCalled();
+  expect(storage.set).not.toHaveBeenCalled();
+  expect(storage.data).toEqual({});
+});
+
+it('accepts distinct evidence with its own fingerprint and replays the identical request without mutation', async () => {
+  const storage = fakeStorage();
+  const clock = vi.fn().mockReturnValueOnce(new Date('2026-09-28T12:00:00.000Z'))
+    .mockReturnValueOnce(new Date('2026-09-29T12:00:00.000Z'));
+  const store = createWorkerStore({ now: clock });
+  const first = await store.upsertFindings(batch('req-1'), 'https://example.com');
+  const distinct = { ...batch('req-2'), findings: [evidence('req-2', 'Annual plan $10.00')] };
+  const second = await store.upsertFindings(distinct, 'https://example.com');
+  expect(second.ids[0]).not.toBe(first.ids[0]);
+  const snapshot = structuredClone(storage.data);
+  const writes = storage.set.mock.calls.length;
+  await expect(store.upsertFindings(distinct, 'https://example.com')).resolves.toEqual(second);
+  expect(storage.set).toHaveBeenCalledTimes(writes);
+  expect(storage.data).toEqual(snapshot);
+  expect(clock).toHaveBeenCalledTimes(2);
+});
 
 it('writes history and receipt in exactly one payload on a versioned store', async () => {
   const storage = fakeStorage();
@@ -104,20 +156,24 @@ it('rejects request ID reuse with changed DTO, order, or origin without mutation
   const writes = storage.set.mock.calls.length;
   const changed = batch('req-1');
   changed.findings[0].screenedExcerpt = 'Annual plan $10.00';
+  changed.findings[0].opaqueFingerprint = semanticFingerprint('recurring-charge', 'price-cadence', changed.findings[0].screenedExcerpt);
   await expect(store.upsertFindings(changed, 'https://example.com')).rejects.toThrow('collision');
   await expect(store.upsertFindings(batch('req-1'), 'https://other.example')).rejects.toThrow('collision');
   expect(storage.data).toEqual(snapshot);
   expect(storage.set).toHaveBeenCalledTimes(writes);
 });
 
-it('reports quota rejection and retries without phantom in-memory success', async () => {
+it('reports quota rejection on versioned storage and retries the same failed request without phantom success', async () => {
   const storage = fakeStorage();
+  Object.assign(storage.data, { version: 1, subscriptions: [], reviewHistory: [], receipts: [] });
+  const snapshot = structuredClone(storage.data);
   const store = createWorkerStore();
   storage.set.mockRejectedValueOnce(new Error('quota exceeded'));
   await expect(store.upsertFindings(batch('req-1'), 'https://example.com')).rejects.toThrow('quota exceeded');
-  expect(storage.data).toEqual({});
+  expect(storage.data).toEqual(snapshot);
   const outcome = await store.upsertFindings(batch('req-1'), 'https://example.com');
   expect(outcome.ids).toHaveLength(1);
+  expect(storage.set).toHaveBeenCalledTimes(2);
   expect(storage.data.reviewHistory).toHaveLength(1);
   expect(storage.data.receipts).toHaveLength(1);
 });
@@ -129,7 +185,7 @@ it('rejects the entire malformed batch and duplicate semantic identities before 
   invalid.findings.push({ ...finding('req-1'), ordinal: 2, screenedExcerpt: 'account routing 123456789' });
   await expect(store.upsertFindings(invalid, 'https://example.com')).rejects.toThrow('Invalid findings batch');
   const duplicate = batch('req-1');
-  duplicate.findings.push({ ...finding('req-1'), screenedExcerpt: 'Annual plan' });
+  duplicate.findings.push({ ...finding('req-1') });
   await expect(store.upsertFindings(duplicate, 'https://example.com')).rejects.toThrow('Duplicate finding identity');
   await expect(store.upsertFindings(batch('req-1'), 'https://example.com/path')).rejects.toThrow('origin');
   expect(storage.set).not.toHaveBeenCalled();
@@ -182,17 +238,14 @@ it('serializes overlapping scans with one storage read per operation', async () 
 it('refuses history overflow without a partial receipt or second history write', async () => {
   const storage = fakeStorage();
   const store = createWorkerStore();
-  const findings = Array.from({ length: 100 }, (_, index) => ({
-    ...finding('req-1'), opaqueFingerprint: index.toString(16).padStart(64, '0'),
-  }));
+  const findings = Array.from({ length: 100 }, (_, index) => evidence('req-1', `Monthly plan $10.00 item ${index}`));
   for (let scan = 0; scan < 5; scan++) {
-    await store.upsertFindings({ ...batch(`req-${scan}`), findings: findings.map((entry) => ({
-      ...entry, requestId: `req-${scan}`, opaqueFingerprint: (scan * 100 + Number.parseInt(entry.opaqueFingerprint, 16)).toString(16).padStart(64, '0'),
-    })) }, 'https://example.com');
+    await store.upsertFindings({ ...batch(`req-${scan}`), findings: findings.map((_, index) =>
+      evidence(`req-${scan}`, `Monthly plan $10.00 item ${scan * 100 + index}`)) }, 'https://example.com');
   }
   const snapshot = structuredClone(storage.data);
   const writes = storage.set.mock.calls.length;
-  await expect(store.upsertFindings({ ...batch('overflow'), findings: [{ ...finding('overflow'), opaqueFingerprint: 'f'.repeat(64) }] }, 'https://example.com'))
+  await expect(store.upsertFindings({ ...batch('overflow'), findings: [evidence('overflow', 'Monthly plan $10.00 item 500')] }, 'https://example.com'))
     .rejects.toThrow('capacity');
   expect(storage.data).toEqual(snapshot);
   expect(storage.set).toHaveBeenCalledTimes(writes);
