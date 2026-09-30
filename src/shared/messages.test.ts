@@ -6,6 +6,14 @@ import type { Finding } from '../core/types';
 import type { AnalyzeRequest, AnalyzeResponse, RestoreResponse } from './messages';
 import { isFindingsChallengeResponse } from './messages';
 
+it('accepts a privacy-minimal versioned empty document status only', () => {
+  const status = { type: 'CLEARCHOICE_AUTO_DOCUMENT_STATUS', version: 1, generation: 3, requestId: 'status-1', status: 'supported-zero' };
+  expect(isWorkerRequest(status)).toBe(true);
+  expect(isWorkerRequest({ ...status, status: 'unsupported-context' })).toBe(true);
+  for (const extra of [{ url: '/checkout' }, { findingCount: 1 }, { evidence: 'private' }]) expect(isWorkerRequest({ ...status, ...extra })).toBe(false);
+  for (const changed of [{ version: 2 }, { generation: 0 }, { status: 'supported' }, { requestId: '' }]) expect(isWorkerRequest({ ...status, ...changed })).toBe(false);
+});
+
 it('accepts only the exact generation-bootstrap request shape', () => {
   expect(isWorkerRequest({ type: 'CLEARCHOICE_AUTO_STATUS' })).toBe(true);
   expect(isWorkerRequest({ type: 'CLEARCHOICE_AUTO_STATUS', origin: 'https://merchant.test' })).toBe(false);

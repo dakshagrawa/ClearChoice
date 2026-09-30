@@ -16,6 +16,9 @@ const sessionAccessLevel = vi.fn().mockResolvedValue(undefined);
 const sessionGet = vi.fn().mockImplementation(async (key: string | null) => key === null ? { ...sessionState } : ({ [key]: sessionState[key] }));
 const sessionSet = vi.fn().mockImplementation(async (value: Record<string, unknown>) => { Object.assign(sessionState, value); });
 const sessionRemove = vi.fn().mockImplementation(async (key: string) => { delete sessionState[key]; });
+const updated: Array<(tabId: number, change: chrome.tabs.TabChangeInfo) => void> = [];
+const removedTabs: Array<(tabId: number) => void> = [];
+const badgeText = vi.fn<(details: { tabId: number; text: string }) => Promise<void>>().mockResolvedValue(undefined);
 const query = vi.fn().mockResolvedValue([{ id: 42 }]);
 const tabGet = vi.fn().mockResolvedValue({ id: 42, url: 'https://merchant.test/checkout' });
 const executeScript = vi.fn().mockResolvedValue([{ frameId: 0, documentId: 'doc-A', result: undefined }]);
@@ -27,7 +30,7 @@ const popup = { id: 'extension', url: 'chrome-extension://extension/popup/index.
 const content = { id: 'extension', tab: { id: 42 }, frameId: 0, documentId: 'doc-A', url: 'https://merchant.test/checkout' } as chrome.runtime.MessageSender;
 
 async function boot() {
-  vi.stubGlobal('chrome', { runtime: { id: 'extension', onMessage: { addListener: (fn: typeof listeners[number]) => listeners.push(fn) } }, tabs: { query, get: tabGet, sendMessage }, action: { setBadgeText: vi.fn(async () => undefined) }, permissions: { contains, onRemoved: { addListener: (fn: typeof permissionRemoved[number]) => permissionRemoved.push(fn) } }, scripting: { executeScript, getRegisteredContentScripts, registerContentScripts, unregisterContentScripts }, storage: { local: { setAccessLevel, get, set }, session: { setAccessLevel: sessionAccessLevel, get: sessionGet, set: sessionSet, remove: sessionRemove } } });
+  vi.stubGlobal('chrome', { runtime: { id: 'extension', onMessage: { addListener: (fn: typeof listeners[number]) => listeners.push(fn) } }, tabs: { query, get: tabGet, sendMessage, onUpdated: { addListener: (fn: typeof updated[number]) => updated.push(fn) }, onRemoved: { addListener: (fn: typeof removedTabs[number]) => removedTabs.push(fn) } }, action: { setBadgeText: badgeText }, permissions: { contains, onRemoved: { addListener: (fn: typeof permissionRemoved[number]) => permissionRemoved.push(fn) } }, scripting: { executeScript, getRegisteredContentScripts, registerContentScripts, unregisterContentScripts }, storage: { local: { setAccessLevel, get, set }, session: { setAccessLevel: sessionAccessLevel, get: sessionGet, set: sessionSet, remove: sessionRemove } } });
   await import('./index');
   await vi.waitFor(() => expect(listeners).toHaveLength(1));
   await new Promise<void>((resolve) => { listeners[0]({ type: 'INVALID' }, popup, () => resolve()); });
@@ -150,7 +153,7 @@ it('does not acknowledge failed mark or deletion and leaves stored history uncha
     .toEqual({ ok: false, error: 'request-failed' });
   expect(state.reviewHistory).toHaveLength(1);
 });
-afterEach(() => { listeners.length = 0; permissionRemoved.length = 0; registeredScripts.length = 0; grantedOrigins.clear(); for (const key of Object.keys(state)) delete state[key]; for (const key of Object.keys(sessionState)) delete sessionState[key]; vi.clearAllMocks(); get.mockReset().mockImplementation(async () => ({ ...state })); sendMessage.mockReset().mockImplementation(async (_tab: number, message: { type: string }) => message.type === 'CLEARCHOICE_AUTO_START' ? { ok: true } : { ok: true, status: 'unsupported-context', findingCount: 0 }); query.mockReset().mockResolvedValue([{ id: 42 }]); tabGet.mockReset().mockResolvedValue({ id: 42, url: 'https://merchant.test/checkout' }); vi.resetModules(); vi.unstubAllGlobals(); });
+afterEach(() => { updated.length = 0; removedTabs.length = 0; listeners.length = 0; permissionRemoved.length = 0; registeredScripts.length = 0; grantedOrigins.clear(); for (const key of Object.keys(state)) delete state[key]; for (const key of Object.keys(sessionState)) delete sessionState[key]; vi.clearAllMocks(); get.mockReset().mockImplementation(async () => ({ ...state })); sendMessage.mockReset().mockImplementation(async (_tab: number, message: { type: string }) => message.type === 'CLEARCHOICE_AUTO_START' ? { ok: true } : { ok: true, status: 'unsupported-context', findingCount: 0 }); query.mockReset().mockResolvedValue([{ id: 42 }]); tabGet.mockReset().mockResolvedValue({ id: 42, url: 'https://merchant.test/checkout' }); vi.resetModules(); vi.unstubAllGlobals(); });
 
 const autoBatch = (requestId = 'auto-1') => {
   const screenedExcerpt = 'Monthly plan $10.00';
@@ -195,6 +198,161 @@ it('returns a generation only to a live top-frame document on a permitted regist
   grantedOrigins.clear();
   expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content))
     .toEqual({ ok: false, error: 'request-failed' });
+});
+
+const emptyStatus = (status = 'supported-zero', generation = 1) => ({ type: 'CLEARCHOICE_AUTO_DOCUMENT_STATUS', version: 1, generation, requestId: 'status-1', status });
+
+it.each(['supported-zero', 'unsupported-context'])('clears %s only with a current-frame and exact-document live challenge', async (status) => {
+  await enabledAuto();
+  await dispatch(autoRequest(), content);
+  badgeText.mockClear();
+  // Bootstrap must not enqueue behind this challenge, even during beforeCommit.
+  sendMessage.mockImplementation(async (_tab: number, challenge: { nonce: string; requestId: string }) => {
+    expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: true, generation: 1 });
+    return { type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: challenge.requestId, nonce: challenge.nonce };
+  });
+  expect(await dispatch(emptyStatus(status), content)).toEqual({ ok: true });
+  expect(badgeText).toHaveBeenLastCalledWith({ tabId: 42, text: '' });
+  expect(sendMessage).toHaveBeenCalledWith(42, expect.objectContaining({ requestId: 'status-1' }), { frameId: 0 });
+  expect(sendMessage).toHaveBeenCalledWith(42, expect.objectContaining({ requestId: 'status-1' }), { documentId: 'doc-A' });
+});
+
+it.each(['status', 'submit'])('rejects an old same-origin document %s even if its exact target still replies', async (kind) => {
+  await enabledAuto();
+  await dispatch(autoRequest(), content);
+  badgeText.mockClear();
+  sendMessage.mockImplementation(async (_tab: number, challenge: { nonce: string; requestId: string }, target: { frameId?: number }) => target.frameId === 0
+    ? { ok: false, error: 'request-failed' }
+    : { type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: challenge.requestId, nonce: challenge.nonce });
+  expect(await dispatch(kind === 'status' ? emptyStatus() : autoRequest(), content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(badgeText).not.toHaveBeenCalled();
+});
+
+it.each([
+  { ...content, tab: { id: 7 } }, { ...content, frameId: 1 }, { ...content, id: 'spoof' }, { ...content, documentId: undefined }, { ...content, url: 'https://b.test/path' },
+])('rejects an unauthorized status sender %#', async (sender) => {
+  await enabledAuto();
+  expect(await dispatch(emptyStatus(), sender as chrome.runtime.MessageSender)).toEqual({ ok: false, error: 'request-failed' });
+  expect(badgeText).not.toHaveBeenCalled();
+});
+
+it.each(['revoke', 'permission'])('keeps a concurrent site B badge intact when A loses access by %s', async (operation) => {
+  await enabledAuto();
+  const bOrigin = 'https://b.test';
+  const bContent = { ...content, tab: { id: 7 }, documentId: 'doc-B', url: `${bOrigin}/checkout` } as chrome.runtime.MessageSender;
+  grantedOrigins.add(`${bOrigin}/*`);
+  query.mockResolvedValue([{ id: 7, url: `${bOrigin}/checkout` }]);
+  tabGet.mockImplementation(async (tabId: number) => ({ id: tabId, url: tabId === 7 ? `${bOrigin}/checkout` : 'https://merchant.test/checkout' }));
+  sendMessage.mockImplementation(async (_tab: number, challenge: { type: string; requestId: string; nonce: string }) => challenge.type === 'CLEARCHOICE_AUTO_START'
+    ? { ok: true } : { type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: challenge.requestId, nonce: challenge.nonce });
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_ENABLE', origin: bOrigin }, popup)).toMatchObject({ ok: true });
+  expect(await dispatch(autoRequest(), content)).toMatchObject({ ok: true });
+  expect(await dispatch({ ...autoRequest(), batch: autoBatch('b-scan') }, bContent)).toMatchObject({ ok: true });
+  badgeText.mockClear();
+  if (operation === 'permission') {
+    grantedOrigins.delete('https://merchant.test/*');
+    permissionRemoved[0]({ origins: ['https://merchant.test/*'] });
+  } else {
+    query.mockResolvedValue([{ id: 42, url: 'https://merchant.test/checkout' }]);
+    expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup)).toMatchObject({ ok: true, enabled: false });
+  }
+  await vi.waitFor(() => expect(badgeText).toHaveBeenCalledWith({ tabId: 42, text: '' }));
+  expect(badgeText.mock.calls.some(([value]) => value.tabId === 7)).toBe(false);
+  expect(sessionState['clearchoice.badge.7']).toMatchObject({ documentId: 'doc-B', generation: 1 });
+});
+
+it('navigation clears immediately even while an automatic challenge is blocked', async () => {
+  await enabledAuto();
+  await dispatch(autoRequest(), content);
+  let finish!: (reply: unknown) => void;
+  sendMessage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const delayed = dispatch({ ...autoRequest(), batch: autoBatch('delayed') }, content);
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  expect(updated).toHaveLength(1);
+  updated[0](42, { status: 'loading' });
+  await vi.waitFor(() => expect(badgeText).toHaveBeenLastCalledWith({ tabId: 42, text: '' }));
+  expect(sessionState['clearchoice.badge.42']).toBeUndefined();
+  const challenge = sendMessage.mock.calls.at(-1)![1];
+  finish({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: challenge.requestId, nonce: challenge.nonce });
+  expect(await delayed).toEqual({ ok: false, error: 'request-failed' });
+  expect(badgeText).toHaveBeenLastCalledWith({ tabId: 42, text: '' });
+  expect(removedTabs).toHaveLength(1);
+  removedTabs[0](42);
+  await vi.waitFor(() => expect(sessionRemove).toHaveBeenCalledWith('clearchoice.document.42'));
+});
+
+it.each(['status', 'submit'])('revocation rejects delayed old-generation %s and cannot restore its badge', async (kind) => {
+  await enabledAuto();
+  await dispatch(autoRequest(), content);
+  let finish!: (reply: unknown) => void;
+  sendMessage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const delayed = dispatch(kind === 'status' ? emptyStatus() : { ...autoRequest(), batch: autoBatch('delayed') }, content);
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  const challenge = sendMessage.mock.calls.at(-1)![1];
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup)).toMatchObject({ ok: true, enabled: false });
+  finish({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: challenge.requestId, nonce: challenge.nonce });
+  expect(await delayed).toEqual({ ok: false, error: 'request-failed' });
+  expect(badgeText).toHaveBeenLastCalledWith({ tabId: 42, text: '' });
+  badgeText.mockClear();
+  expect(await dispatch(emptyStatus(), content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(badgeText).not.toHaveBeenCalled();
+});
+
+it('manual activeTab analysis sets accepted count without a host grant and clears unsupported', async () => {
+  await boot();
+  sendMessage.mockImplementationOnce(async (_tab: number, challenge: { requestId: string; nonce: string }) => {
+    expect(await dispatch({ type: 'CLEARCHOICE_SUBMIT', nonce: challenge.nonce, batch: autoBatch(challenge.requestId) }, content)).toEqual({ ok: true, findingCount: 1 });
+    return { ok: true, status: 'supported', findingCount: 1 };
+  });
+  expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: true, status: 'supported', findingCount: 1 });
+  expect(badgeText).toHaveBeenLastCalledWith({ tabId: 42, text: '1' });
+  expect(grantedOrigins.size).toBe(0);
+  expect(await dispatch({ type: 'CLEARCHOICE_ANALYZE' }, popup)).toEqual({ ok: true, status: 'unsupported-context', findingCount: 0 });
+  expect(badgeText).toHaveBeenLastCalledWith({ tabId: 42, text: '' });
+});
+
+it('places revoke clearing after a concurrently delayed browser badge set', async () => {
+  await enabledAuto();
+  let finish!: () => void;
+  badgeText.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+  const submitting = dispatch(autoRequest(), content);
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  const revoked = dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup);
+  // Allow the popup's focus/origin checkpoints to retire the badge capture.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  finish();
+  expect(await submitting).toEqual({ ok: false, error: 'request-failed' });
+  expect(await revoked).toMatchObject({ ok: true, enabled: false });
+  expect(badgeText).toHaveBeenLastCalledWith({ tabId: 42, text: '' });
+  expect(sessionState['clearchoice.badge.42']).toBeUndefined();
+});
+
+it('classifies status operational failures as retryable without a success badge', async () => {
+  await enabledAuto();
+  sessionSet.mockRejectedValueOnce(new Error('temporary session failure'));
+  expect(await dispatch(emptyStatus(), content)).toEqual({ ok: false, error: 'retryable-failure' });
+  expect(badgeText).not.toHaveBeenCalled();
+  expect(await dispatch(emptyStatus(), content)).toEqual({ ok: true });
+});
+
+it('automatic pre-write challenges can reenter generation bootstrap without queue deadlock', async () => {
+  await enabledAuto();
+  sendMessage.mockImplementation(async (_tab: number, challenge: { requestId: string; nonce: string }) => {
+    expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: true, generation: 1 });
+    return { type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: challenge.requestId, nonce: challenge.nonce };
+  });
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });
+});
+
+it('sets a badge only from accepted persisted automatic findings', async () => {
+  await enabledAuto();
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });
+  expect(badgeText).toHaveBeenLastCalledWith({ tabId: 42, text: '1' });
+  expect(sessionState['clearchoice.badge.42']).toEqual({ documentId: 'doc-A', generation: 1, origin: 'https://merchant.test' });
+  badgeText.mockClear();
+  set.mockRejectedValueOnce(new Error('quota'));
+  expect(await dispatch({ ...autoRequest(), batch: autoBatch('new-request') }, content)).toEqual({ ok: false, error: 'retryable-failure' });
+  expect(badgeText).not.toHaveBeenCalled();
 });
 
 it('challenges the exact automatic top document and persists only a count acknowledgement', async () => {

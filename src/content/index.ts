@@ -5,6 +5,8 @@ import {
   CLEARCHOICE_DISMISSED_GET,
   CLEARCHOICE_AUTO_SUBMIT,
   CLEARCHOICE_AUTO_STATUS,
+  CLEARCHOICE_AUTO_DOCUMENT_STATUS,
+  isAutomaticDocumentStatus,
   CLEARCHOICE_AUTO_START,
   CLEARCHOICE_FINDINGS_CHALLENGE,
   CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE,
@@ -26,7 +28,30 @@ import { isOwnedPanelMutation, removePanel, renderAutomaticDiagnostic, renderPan
 const contentSentinel = '__clearchoiceContentListenerInstalled__';
 // Retired observers cannot attest a pending worker challenge or occupy a slot.
 const automaticRequestIds = new Map<string, symbol>();
+const automaticStatusIds = new Map<string, { live: () => boolean }>();
 const maxPendingAutomaticRequests = 2;
+
+export async function submitAutomaticStatus(generation: number, status: 'supported-zero' | 'unsupported-context', signal?: AbortSignal, live: () => boolean = () => true): Promise<void> {
+  const requestId = createScanRequestId();
+  const request = { type: CLEARCHOICE_AUTO_DOCUMENT_STATUS, version: 1, generation, requestId, status };
+  if (signal?.aborted || !live() || automaticStatusIds.size >= maxPendingAutomaticRequests || !isAutomaticDocumentStatus(request)) throw new Error('Automatic status unavailable');
+  const entry = { live };
+  automaticStatusIds.set(requestId, entry);
+  const retire = () => { if (automaticStatusIds.get(requestId) === entry) automaticStatusIds.delete(requestId); };
+  signal?.addEventListener('abort', retire, { once: true });
+  try {
+    let reply: unknown;
+    try { reply = await chrome.runtime.sendMessage(request); }
+    catch { if (signal?.aborted || !live()) return; throw new AutomaticObservationFailure(true); }
+    if (signal?.aborted || !live()) return; // A superseding DOM revision owns the next scan.
+    if (typeof reply === 'object' && reply !== null && Object.keys(reply).length === 2
+      && 'ok' in reply && reply.ok === false && 'error' in reply
+      && (reply.error === 'retryable-failure' || reply.error === 'request-failed'))
+      throw new AutomaticObservationFailure(reply.error === 'retryable-failure');
+    if (typeof reply !== 'object' || reply === null || Object.keys(reply).length !== 1 || !('ok' in reply) || reply.ok !== true)
+      throw new AutomaticObservationFailure(false);
+  } finally { retire(); signal?.removeEventListener('abort', retire); }
+}
 
 export class AutomaticObservationFailure extends Error {
   constructor(readonly retryable: boolean) { super('Automatic observation refused'); }
@@ -142,19 +167,24 @@ function startAutomaticObserver(): { stop: () => void; currentGeneration: () => 
     dirty = false;
     firstChange = 0;
     const scanRevision = revision;
+    const reportEmpty = async (status: 'supported-zero' | 'unsupported-context') => {
+      removeAutomaticPanel();
+      if (lastSignature === status) return;
+      await submitAutomaticStatus(generation!, status, lifetime.signal, () => valid() && revision === scanRevision);
+      if (valid() && revision === scanRevision) { lastSignature = status; retries = 0; }
+    };
     try {
       const currentGeneration = await automaticGeneration();
       if (!valid() || currentGeneration !== generation) { stop(); return; }
       if (classifyCheckoutContext(document.documentElement) === 'unsupported') {
-        lastSignature = undefined;
-        removeAutomaticPanel();
+        await reportEmpty('unsupported-context');
         return;
       }
       const findings = analyzePage().findings;
-      if (!findings.length) { lastSignature = undefined; removeAutomaticPanel(); return; }
+      if (!findings.length) { await reportEmpty('supported-zero'); return; }
       const { batch, eligibleFindings } = await buildFindingBatchWithSources(findings, createScanRequestId());
       if (!valid() || revision !== scanRevision) return;
-      if (!batch.findings.length) { lastSignature = undefined; removeAutomaticPanel(); return; }
+      if (!batch.findings.length) { await reportEmpty('supported-zero'); return; }
       const signature = JSON.stringify(batch.findings.map(({ kind, reason, screenedExcerpt, opaqueFingerprint, ordinal }) =>
         [kind, reason, screenedExcerpt, opaqueFingerprint, ordinal]));
       if (signature === lastSignature) return;
@@ -234,7 +264,7 @@ if (!pageWindow[contentSentinel]) {
 
     void (async () => {
       if (request.type === CLEARCHOICE_FINDINGS_CHALLENGE) {
-        if (sender.id === chrome.runtime.id && automaticRequestIds.has(request.requestId)) {
+        if (sender.id === chrome.runtime.id && (automaticRequestIds.has(request.requestId) || automaticStatusIds.get(request.requestId)?.live())) {
           sendResponse({ type: CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE, version: 1,
             requestId: request.requestId, nonce: request.nonce });
         } else sendResponse({ ok: false, error: 'request-failed' });

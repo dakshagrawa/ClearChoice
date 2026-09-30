@@ -33,6 +33,22 @@ export interface FindingsChallenge {
   nonce: string;
 }
 
+export const CLEARCHOICE_AUTO_DOCUMENT_STATUS = 'CLEARCHOICE_AUTO_DOCUMENT_STATUS' as const;
+export interface AutomaticDocumentStatus {
+  type: typeof CLEARCHOICE_AUTO_DOCUMENT_STATUS;
+  version: 1;
+  generation: number;
+  requestId: string;
+  status: 'supported-zero' | 'unsupported-context';
+}
+export function isAutomaticDocumentStatus(value: unknown): value is AutomaticDocumentStatus {
+  return isRecord(value) && hasExactKeys(value, ['type', 'version', 'generation', 'requestId', 'status'])
+    && value.type === CLEARCHOICE_AUTO_DOCUMENT_STATUS && value.version === 1
+    && Number.isSafeInteger(value.generation) && (value.generation as number) > 0
+    && isValidRequestId(value.requestId)
+    && (value.status === 'supported-zero' || value.status === 'unsupported-context');
+}
+
 export interface AutomaticObservation {
   type: typeof CLEARCHOICE_AUTO_SUBMIT;
   version: typeof FINDING_WIRE_VERSION;
@@ -150,7 +166,7 @@ export function isContentRequest(value: unknown): value is ContentRequest {
 
 export function isWorkerRequest(value: unknown): boolean {
   if (!isRecord(value)) return false;
-  if (isAutomaticObservation(value)) return true;
+  if (isAutomaticObservation(value) || isAutomaticDocumentStatus(value)) return true;
   if (hasExactKeys(value, ['type', 'version', 'offset', 'limit']) && value.type === CLEARCHOICE_REVIEW_LIST)
     return value.version === 1 && boundedOffset(value.offset) && pageLimit(value.limit);
   if (hasExactKeys(value, ['type', 'version', 'id']) && (value.type === CLEARCHOICE_REVIEW_MARK || value.type === CLEARCHOICE_REVIEW_DELETE))

@@ -1,14 +1,25 @@
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_STATUS, CLEARCHOICE_AUTO_SUBMIT, CLEARCHOICE_AUTO_START, CLEARCHOICE_REVIEW_LIST, CLEARCHOICE_REVIEW_MARK, CLEARCHOICE_REVIEW_DELETE, CLEARCHOICE_REVIEW_RETENTION, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_STATUS, CLEARCHOICE_AUTO_DOCUMENT_STATUS, isAutomaticDocumentStatus, CLEARCHOICE_AUTO_SUBMIT, CLEARCHOICE_AUTO_START, CLEARCHOICE_REVIEW_LIST, CLEARCHOICE_REVIEW_MARK, CLEARCHOICE_REVIEW_DELETE, CLEARCHOICE_REVIEW_RETENTION, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
 import { canonicalOrigin } from '../shared/models';
 import { getDismissed, setDismissed, loadGrantState } from '../shared/storage';
 import { isCurrentActiveTab } from '../shared/tab-analysis';
 import { createWorkerStore, NonRetryableFindingError, ScanAuthorizationError } from './store';
 import { createGrantManager } from './grants';
+import { createTabBadges } from './badge';
+
+const badges = createTabBadges();
 
 const store = createWorkerStore();
 const grants = createGrantManager(store);
 chrome.permissions.onRemoved.addListener((removed) => {
-  void grants.onRemoved(removed.origins ?? []).catch(() => {
+  void (async () => {
+    // Chrome's event may remove a broader pattern. Check each tracked origin;
+    // do not blank unrelated sites, and do not wait behind a blocked scan.
+    await Promise.allSettled(badges.origins().map(async (origin) => {
+      if (canonicalOrigin(origin) && !await chrome.permissions.contains({ origins: [`${origin}/*`] }))
+        await badges.clearOrigin(origin);
+    }));
+    await grants.onRemoved(removed.origins ?? []);
+  })().catch(() => {
     // No authorization is granted from this event; the next startup retries reconciliation.
   });
 });
@@ -32,6 +43,15 @@ function ensureReady(): Promise<boolean> {
 }
 void ensureReady();
 const pending = new Map<string, { tabId: number; documentId: string; nonce: string; requestId: string; origin: string; count?: number }>();
+const revoking = new Set<string>();
+function retireTab(tabId: number): void {
+  for (const [id, scan] of pending) if (scan.tabId === tabId) pending.delete(id);
+  void badges.clearTab(tabId).catch(() => undefined);
+}
+chrome.tabs.onUpdated.addListener((tabId, change) => {
+  if (change.status === 'loading' || change.url !== undefined) retireTab(tabId);
+});
+chrome.tabs.onRemoved.addListener(retireTab);
 const authorizationKey = (tabId: number): string => `clearchoice.document.${tabId}`;
 async function authorizedDocument(tabId: number, documentId: string, origin: string): Promise<boolean> {
   const key = authorizationKey(tabId);
@@ -60,18 +80,35 @@ function popupSender(sender: chrome.runtime.MessageSender): boolean {
   return sender.id === chrome.runtime.id && sender.tab === undefined
     && sender.url === `chrome-extension://${chrome.runtime.id}/popup/index.html`;
 }
+async function liveChallenge(tabId: number, documentId: string, requestId: string): Promise<boolean> {
+  try {
+    // documentId can address a retained old document. frameId additionally asks
+    // the CURRENT top frame to attest the same unpredictable in-flight ID.
+    for (const target of [{ documentId }, { frameId: 0 }]) {
+      const nonce = token();
+      const response: unknown = await chrome.tabs.sendMessage(tabId, {
+        type: CLEARCHOICE_FINDINGS_CHALLENGE, version: 1, requestId, nonce,
+      }, target);
+      if (!isFindingsChallengeResponse(response) || response.requestId !== requestId || response.nonce !== nonce) return false;
+    }
+    return true;
+  } catch { return false; }
+}
 async function handle(message: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
   try {
-    if (!(await ensureReady())) return isAutomaticObservation(message) && contentSender(sender)
+    if (!(await ensureReady())) return (isAutomaticObservation(message) || isAutomaticDocumentStatus(message)) && contentSender(sender)
       ? { ok: false, error: 'retryable-failure' } : { ok: false, error: 'request-failed' };
     if (!isWorkerRequest(message)) return { ok: false, error: 'request-failed' };
     const request = message as Record<string, unknown>;
     if (request.type === CLEARCHOICE_AUTO_STATUS) {
-      return store.enqueue(async () => {
+      // Read-only grant checks cannot wait on history's queue: its challenge may
+      // be awaiting this very bootstrap. Tracking uses the independent UI queue.
+      return await (async () => {
         if (!contentSender(sender)) return { ok: false, error: 'request-failed' };
         const origin = senderOrigin(sender.origin ?? sender.url);
-        if (!origin || senderOrigin(sender.url) !== origin) return { ok: false, error: 'request-failed' };
+        if (!origin || revoking.has(origin) || senderOrigin(sender.url) !== origin) return { ok: false, error: 'request-failed' };
         const tabId = sender.tab!.id!;
+        const badge = badges.capture(tabId, origin);
         const tab = await chrome.tabs.get(tabId);
         if (tab.id !== tabId || senderOrigin(tab.url) !== origin) return { ok: false, error: 'request-failed' };
         const state = await loadGrantState();
@@ -80,9 +117,28 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
         const current = await chrome.tabs.get(tabId);
         if (current.id !== tabId || senderOrigin(current.url) !== origin
           || !await grants.isEnabled(origin, grant.generation)) return { ok: false, error: 'request-failed' };
-        await chrome.storage.session.set({ [`clearchoice.automatic.${tabId}`]: { tabId, documentId: sender.documentId!, origin } });
+        if (!await badges.trackAutomatic(badge, sender.documentId!) || !await grants.isEnabled(origin, grant.generation)) return { ok: false, error: 'request-failed' };
         return { ok: true, generation: grant.generation };
-      });
+      })();
+    }
+    if (request.type === CLEARCHOICE_AUTO_DOCUMENT_STATUS) {
+      if (!isAutomaticDocumentStatus(message) || !contentSender(sender)) return { ok: false, error: 'request-failed' };
+      const origin = senderOrigin(sender.origin ?? sender.url);
+      if (!origin || senderOrigin(sender.url) !== origin) return { ok: false, error: 'request-failed' };
+      const tabId = sender.tab!.id!;
+      const badge = badges.capture(tabId, origin);
+      const checkpoint = async (): Promise<boolean> => {
+        if (revoking.has(origin) || !badges.current(badge) || !await grants.isEnabled(origin, message.generation)) return false;
+        const tab = await chrome.tabs.get(tabId);
+        return tab.id === tabId && senderOrigin(tab.url) === origin && await grants.isEnabled(origin, message.generation);
+      };
+      if (!await checkpoint() || !await liveChallenge(tabId, sender.documentId!, message.requestId) || !await checkpoint())
+        return { ok: false, error: 'request-failed' };
+      // Challenge outside both queues. A revoked generation is rechecked under
+      // the history/grant queue immediately before the short UI side effect.
+      const published = await store.enqueue(async () => await checkpoint()
+        && await badges.publish(badge, sender.documentId!, message.generation, 0));
+      return published ? { ok: true } : { ok: false, error: 'request-failed' };
     }
     if (request.type === CLEARCHOICE_AUTO_SUBMIT) {
       if (!isAutomaticObservation(message) || !contentSender(sender)) return { ok: false, error: 'request-failed' };
@@ -90,23 +146,14 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       const documentId = sender.documentId!;
       const origin = senderOrigin(sender.origin ?? sender.url);
       if (!origin || senderOrigin(sender.url) !== origin) return { ok: false, error: 'request-failed' };
+      const badge = badges.capture(tabId, origin);
       const checkpoint = async (): Promise<boolean> => {
-        if (!await grants.isEnabled(origin, message.generation)) return false;
+        if (revoking.has(origin) || !badges.current(badge) || !await grants.isEnabled(origin, message.generation)) return false;
         const tab = await chrome.tabs.get(tabId);
         return tab.id === tabId && senderOrigin(tab.url) === origin
           && await grants.isEnabled(origin, message.generation);
       };
-      const challenge = async (): Promise<boolean> => {
-        const nonce = token();
-        try {
-          const response: unknown = await chrome.tabs.sendMessage(tabId, {
-            type: CLEARCHOICE_FINDINGS_CHALLENGE, version: 1,
-            requestId: message.batch.requestId, nonce,
-          }, { documentId });
-          return isFindingsChallengeResponse(response) && response.requestId === message.batch.requestId
-            && response.nonce === nonce;
-        } catch { return false; }
-      };
+      const challenge = () => liveChallenge(tabId, documentId, message.batch.requestId);
       const checked = async (): Promise<'authorized' | 'denied' | 'retryable'> => {
         try { return await checkpoint() ? 'authorized' : 'denied'; }
         catch { return 'retryable'; }
@@ -124,6 +171,10 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
         return { ok: false, error: error instanceof ScanAuthorizationError || error instanceof NonRetryableFindingError
           ? 'request-failed' : 'retryable-failure' };
       }
+      if (!await challenge()) return { ok: false, error: 'request-failed' };
+      const published = await store.enqueue(async () => await checkpoint()
+        && await badges.publish(badge, documentId, message.generation, result.ids.length));
+      if (!published) return { ok: false, error: 'request-failed' };
       return { ok: true, findingCount: result.ids.length };
     }
     if (request.type === CLEARCHOICE_SUBMIT) {
@@ -222,11 +273,16 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
         }
       }
       if (request.type === CLEARCHOICE_SITE_REVOKE) {
-        try { await grants.revoke(origin); }
+        revoking.add(origin);
+        try {
+          // Retire queued/in-flight badge work before the grant queue can block.
+          await badges.clearOrigin(origin).catch(() => undefined);
+          await grants.revoke(origin);
+        }
         catch (error) {
           return { ok: false, error: error instanceof Error && error.message.startsWith('Revocation could not be confirmed')
             ? 'revocation-unsafe' : 'request-failed' };
-        }
+        } finally { revoking.delete(origin); }
       }
       if (!(await isCurrentActiveTab(active.id)) || senderOrigin((await chrome.tabs.get(active.id)).url) !== origin)
         return { ok: false, error: 'request-failed' };
@@ -238,6 +294,8 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     const tabId = tab?.id;
     if (tabId === undefined || !(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
+    const initialOrigin = senderOrigin((await chrome.tabs.get(tabId)).url);
+    const badge = badges.capture(tabId, initialOrigin ?? '');
     let injected: chrome.scripting.InjectionResult[];
     try {
       injected = await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
@@ -246,7 +304,7 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       return { ok: false, error: /cannot access|extensions gallery|webstore|cannot script.*extension/i.test(text) ? 'restricted-page' : 'injection-failed' };
     }
     const top = injected.find((result) => result.frameId === 0 && typeof result.documentId === 'string' && result.documentId.length > 0);
-    if (!top || !(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
+    if (!top || !badges.current(badge) || !(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
     const documentId = top.documentId!;
     if (request.type === CLEARCHOICE_RESTORE) {
       const tabDetails = await chrome.tabs.get(tabId);
@@ -264,7 +322,7 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
     const nonce = token();
     const tabDetails = await chrome.tabs.get(tabId);
     const origin = senderOrigin(tabDetails.url);
-    if (!origin || !(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
+    if (!origin || origin !== initialOrigin || !badges.current(badge) || !(await isCurrentActiveTab(tabId))) return { ok: false, error: 'request-failed' };
     // Focus and document checks are checkpoints, not atomic with the subsequent send:
     // a switch in the check-to-send interval remains a browser-level race.
     const scan = { tabId, documentId, nonce, requestId, origin, count: undefined as number | undefined };
@@ -278,9 +336,14 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
         await chrome.storage.session.set({ [authorizationKey(tabId)]: { tabId, documentId, origin } });
         if (pending.get(documentId) !== scan) return { ok: false, error: 'request-failed' };
       }
+      if (response.ok) {
+        if (!badges.current(badge) || pending.get(documentId) !== scan
+          || senderOrigin((await chrome.tabs.get(tabId)).url) !== origin || !await isCurrentActiveTab(tabId)
+          || !await badges.publish(badge, documentId, 0, response.findingCount)) return { ok: false, error: 'request-failed' };
+      }
       return response;
     } finally { if (pending.get(documentId) === scan) pending.delete(documentId); }
-  } catch { return { ok: false, error: 'request-failed' }; }
+  } catch { return { ok: false, error: isAutomaticDocumentStatus(message) && contentSender(sender) ? 'retryable-failure' : 'request-failed' }; }
 }
 chrome.runtime.onMessage.addListener((message: unknown, sender, reply) => {
   void handle(message, sender).then(reply);

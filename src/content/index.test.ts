@@ -40,6 +40,78 @@ const betaCheckout = '<main><aside>Order summary — Subtotal: $24</aside><secti
 const automaticSubmits = (sendMessage: ReturnType<typeof vi.fn>) => sendMessage.mock.calls.filter(([message]) => message.type === 'CLEARCHOICE_AUTO_SUBMIT');
 const ownedPanel = () => Array.from(document.querySelectorAll<HTMLElement>('[data-clearchoice-panel]')).find((panel) => panel.shadowRoot?.querySelector('.clearchoice-panel'));
 
+it('reports mutation zero and SPA exit without transporting page evidence', async () => {
+  const { sendMessage } = autoChrome();
+  sendMessage.mockImplementation(async (message: { type: string; batch?: { findings: unknown[] } }) => {
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS') return { ok: true, generation: 3 };
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return { ok: true, findingCount: message.batch?.findings.length };
+    if (message.type === 'CLEARCHOICE_AUTO_DOCUMENT_STATUS') return { ok: true };
+    return { ok: true, dismissed: false };
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  document.querySelector('section')!.textContent = 'No recurring charges.';
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_AUTO_DOCUMENT_STATUS', generation: 3, version: 1, status: 'supported-zero' })));
+  document.body.innerHTML = '<main>Ordinary article</main>';
+  window.dispatchEvent(new PopStateEvent('popstate'));
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_AUTO_DOCUMENT_STATUS', status: 'unsupported-context' })));
+  for (const [message] of sendMessage.mock.calls.filter(([value]) => value.type === 'CLEARCHOICE_AUTO_DOCUMENT_STATUS')) {
+    expect(Object.keys(message).sort()).toEqual(['generation', 'requestId', 'status', 'type', 'version']);
+  }
+  expect(ownedPanel()).toBeUndefined();
+});
+
+it('ignores retired status denial after a newer DOM revision and keeps scanning', async () => {
+  const { sendMessage } = autoChrome();
+  let deny!: (reply: unknown) => void;
+  sendMessage.mockImplementation((message: { type: string; batch?: { findings: unknown[] } }) => {
+    if (message.type === 'CLEARCHOICE_AUTO_DOCUMENT_STATUS') return new Promise((resolve) => { deny = resolve; });
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS') return Promise.resolve({ ok: true, generation: 3 });
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return Promise.resolve({ ok: true, findingCount: message.batch?.findings.length });
+    return Promise.resolve({ ok: true, dismissed: false });
+  });
+  document.body.innerHTML = '<main>Ordinary article</main>'; // Fixed fake fixture, not untrusted HTML.
+  await import('./index');
+  await vi.waitFor(() => expect(deny).toBeDefined());
+  document.body.innerHTML = betaCheckout;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  deny({ ok: false, error: 'request-failed' });
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(1));
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+});
+
+it.each(['retryable-failure', 'request-failed'])('classifies an exact status %s receipt', async (error) => {
+  const { sendMessage } = installChrome();
+  const module = await import('./index');
+  sendMessage.mockResolvedValueOnce({ ok: false, error });
+  await expect(module.submitAutomaticStatus(3, 'supported-zero')).rejects.toMatchObject({ retryable: error === 'retryable-failure' });
+});
+
+it('attests status only while its exact live ID is pending and retires on abort', async () => {
+  const { addListener, sendMessage } = installChrome();
+  const module = await import('./index');
+  let finish!: (value: unknown) => void;
+  sendMessage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const abort = new AbortController();
+  const promise = module.submitAutomaticStatus(3, 'supported-zero', abort.signal);
+  const request = sendMessage.mock.calls.at(-1)![0];
+  const listener = addListener.mock.calls[0][0];
+  const challenge = (requestId: string, id = 'extension') => {
+    const response = vi.fn();
+    listener({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId, nonce: 'status-nonce' }, { id }, response);
+    return response;
+  };
+  expect(challenge(request.requestId)).toHaveBeenCalledWith({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: request.requestId, nonce: 'status-nonce' });
+  expect(challenge('other')).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+  expect(challenge(request.requestId, 'spoof')).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+  abort.abort();
+  expect(challenge(request.requestId)).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+  finish({ ok: true });
+  await promise;
+  expect(challenge(request.requestId)).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+});
+
 it('restarts an active observer after failed exact-document disable and scans at the new generation', async () => {
   const { addListener, sendMessage } = autoChrome();
   let generation = 3;
