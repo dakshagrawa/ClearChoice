@@ -527,7 +527,8 @@ it('retryable overflow status clears the accepted count on a fresh retry and rep
   expect(acceptedCount).toBe(1);
   for (let i = 0; i < 100; i++) document.querySelector('main')!.insertAdjacentHTML('beforeend',
     `<label><input type="checkbox" checked> Add protection for $${i + 1} per month</label>`);
-  await vi.waitFor(() => expect(statuses).toHaveLength(2));
+  // Two complete 101-finding JSDOM scans can exceed waitFor's 1s default.
+  await vi.waitFor(() => expect(statuses).toHaveLength(2), { timeout: 5000 });
   expect(statuses[0]).not.toBe(statuses[1]);
   expect(acceptedCount).toBe(1);
   expect(ownedPanel()).toBeUndefined();
@@ -560,7 +561,8 @@ it.each([
   // Fixed local fixtures only; no page-supplied HTML enters these tests.
   for (let i = 0; i < 100; i++) document.querySelector('main')!.insertAdjacentHTML('beforeend',
     `<label><input type="checkbox" checked> Add protection for $${i + 1} per month</label>`);
-  await vi.waitFor(() => expect(attempts).toBe(expectedAttempts));
+  // Retryable receipts require two complete 101-finding JSDOM scans.
+  await vi.waitFor(() => expect(attempts).toBe(expectedAttempts), { timeout: 5000 });
   await new Promise((resolve) => setTimeout(resolve, 250));
   expect(attempts).toBe(expectedAttempts);
   expect(ownedPanel()).toBeUndefined();
