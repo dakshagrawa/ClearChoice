@@ -72,6 +72,34 @@ it('review observation and cancel never create; blank confirmation fields requir
   await restart(); expect((await mount()).root.textContent).toContain('Acme');
 });
 
+it.each(['add', 'edit'])('history refresh preserves unrelated manual %s after a failed pending Save', async (operation) => {
+  const { set } = await install(); const { root, view } = await mount();
+  if (operation === 'edit') {
+    click(root, 'add'); fill(root); submit(root);
+    await vi.waitFor(() => expect(root.textContent).toContain('Subscription saved locally.'));
+  }
+  const reviewRoot = document.createElement('div'); document.body.append(reviewRoot);
+  const { mountReview } = await import('./review');
+  mountReview(reviewRoot, view.reviewAsSubscription, view.invalidateSuggestion);
+  await vi.waitFor(() => expect(reviewRoot.textContent).not.toContain('Loading local history'));
+  click(root, operation); fill(root);
+  const form = root.querySelector('form')!;
+  const refresh = reviewRoot.querySelector<HTMLButtonElement>('[data-action="review-refresh"]')!;
+  refresh.click();
+  expect(root.querySelector('form')).toBe(form);
+  let fail!: (error: Error) => void;
+  set.mockImplementationOnce(() => new Promise((_, reject) => { fail = reject; }));
+  submit(root);
+  await vi.waitFor(() => expect(fail).toBeTypeOf('function'));
+  refresh.click();
+  fail(new Error('quota'));
+  await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled).toBe(false));
+  expect(root.querySelector('form')).toBe(form);
+  expect(root.querySelector<HTMLInputElement>('[name="merchant"]')!.value).toBe('  Acme  ');
+  expect(root.textContent).toContain('Could not save local subscription.');
+  expect(root.textContent).not.toContain('Observation changed or refreshed.');
+});
+
 it('switches suggestion sources without saving a detached old form or carrying old fields', async () => {
   await install(); const { root, view } = await mount();
   const source = { id: 'f_first', origin: 'https://merchant.test', kind: 'recurring-charge' as const, reason: 'price-cadence' as const, screenedExcerpt: 'Monthly plan $10.00', firstSeen: new Date().toISOString(), latestSeen: new Date().toISOString(), status: 'needs-review' as const };

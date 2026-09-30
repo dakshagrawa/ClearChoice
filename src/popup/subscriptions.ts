@@ -14,10 +14,15 @@ export function mountSubscriptions(root: HTMLElement) {
   let revision = 0;
   let busy = false;
   let suggestionOpen = false;
+  let suggestionInvalidationPending = false;
+  const invalidationMessage = 'Observation changed or refreshed. Review it again before saving a subscription.';
   function invalidateSuggestion() {
-    if (busy || !suggestionOpen) return;
+    if (!suggestionOpen) return;
+    // An in-flight worker commit cannot be cancelled. Discard its stale editor on settlement.
+    if (busy) { suggestionInvalidationPending = true; return; }
     suggestionOpen = false; editor.replaceChildren();
-    status.textContent = 'Observation changed or refreshed. Review it again before saving a subscription.';
+    status.textContent = invalidationMessage;
+    add.focus();
   }
   function controls() {
     for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>('button, input, select, textarea')) control.disabled = busy;
@@ -111,7 +116,17 @@ export function mountSubscriptions(root: HTMLElement) {
           if (!entries.some((saved) => Object.keys(saved).length === Object.keys(response.subscription).length
             && Object.entries(response.subscription).every(([key, value]) => saved[key as keyof Subscription] === value))) throw new Error('Save readback mismatch');
           suggestionOpen = false; editor.replaceChildren(); status.textContent = 'Subscription saved locally.';
-        } catch { status.textContent = 'Could not save local subscription. Check the list before retrying.'; } finally { busy = false; controls(); if (!editor.childElementCount) add.focus(); }
+        } catch {
+          status.textContent = 'Could not save local subscription. Check the list before retrying.';
+          if (suggestionInvalidationPending) status.textContent += ` ${invalidationMessage}`;
+        } finally {
+          if (suggestionInvalidationPending) {
+            suggestionInvalidationPending = false;
+            suggestionOpen = false;
+            editor.replaceChildren();
+          }
+          busy = false; controls(); if (!editor.childElementCount) add.focus();
+        }
       })();
     });
   }

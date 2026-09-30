@@ -36,6 +36,59 @@ it('opens suggestion confirmation after subscriptions mount and invalidates unsa
   expect(sendMessage.mock.calls.some(([message]) => message.type === 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING')).toBe(false);
 });
 
+it.each(['rejected', 'invalid acknowledgement', 'readback failure', 'readback mismatch', 'saved'])('consumes history refresh invalidation after a pending suggestion Save: %s', async (outcome) => {
+  vi.resetModules(); document.body.innerHTML = '<div id="app"></div>';
+  const item = { id: 'f_source', origin: 'https://merchant.test', kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt: 'Monthly plan $10.00', firstSeen: '2026-09-29T00:00:00.000Z', latestSeen: '2026-09-29T00:00:00.000Z', status: 'reviewed' };
+  const subscription = { id: 's_saved', merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly', createdAt: item.firstSeen, updatedAt: item.firstSeen, sourceFindingId: item.id };
+  let settle!: (value: unknown) => void;
+  let reject!: (error: Error) => void;
+  let pending = false;
+  const sendMessage = vi.fn((message: { type: string }) => {
+    if (message.type === 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING') {
+      pending = true;
+      return new Promise((resolve, fail) => { settle = resolve; reject = fail; });
+    }
+    if (message.type === 'CLEARCHOICE_SUBSCRIPTION_LIST') {
+      if (pending && outcome === 'readback failure') return Promise.reject(new Error('read failed'));
+      return Promise.resolve({ type: message.type, version: 1, subscriptions: pending && outcome === 'saved' ? [subscription] : [] });
+    }
+    return Promise.resolve({ type: message.type, version: 1, offset: 0, total: 1, needsReviewCount: 0, findings: [item], retentionPolicy: 'never' });
+  });
+  vi.stubGlobal('chrome', { runtime: { sendMessage }, tabs: { query: vi.fn().mockResolvedValue([]) } });
+  await import('./main');
+  await vi.waitFor(() => expect(document.querySelector('[data-action="review-as-subscription"]')).not.toBeNull());
+  document.querySelector<HTMLButtonElement>('[data-action="review-as-subscription"]')!.click();
+  const form = document.querySelector('form')!;
+  for (const [name, value] of Object.entries({ merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' }))
+    (form.elements.namedItem(name) as HTMLInputElement).value = value;
+  form.dispatchEvent(new Event('submit', { cancelable: true }));
+  expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING', version: 1, id: item.id, fields: { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' } });
+  expect(form.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled).toBe(true);
+  const refresh = document.querySelector<HTMLButtonElement>('[data-action="review-refresh"]')!;
+  refresh.click();
+  await vi.waitFor(() => expect(refresh.disabled).toBe(false));
+  if (outcome === 'rejected') reject(new Error('save failed'));
+  else settle(outcome === 'invalid acknowledgement' ? null : { type: 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING', version: 1, subscription });
+  const root = document.querySelector<HTMLElement>('[aria-label="Subscriptions"]')!;
+  await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>('[data-subscription-action="add"]')!.disabled).toBe(false));
+  expect(root.querySelector('form')).toBeNull();
+  expect(form.isConnected).toBe(false);
+  expect(document.activeElement).toBe(root.querySelector('[data-subscription-action="add"]'));
+  if (outcome === 'saved') {
+    expect(root.textContent).toContain('Subscription saved locally.');
+    expect(root.querySelector('[data-subscription-list]')!.textContent).toContain('Acme');
+  } else {
+    expect(root.textContent).toContain('Could not save local subscription. Check the list before retrying.');
+    expect(root.textContent).toContain('Observation changed or refreshed. Review it again before saving a subscription.');
+    expect(root.textContent).not.toContain('Subscription saved locally.');
+  }
+  form.dispatchEvent(new Event('submit', { cancelable: true }));
+  expect(sendMessage.mock.calls.filter(([message]) => message.type === 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING')).toHaveLength(1);
+  // A fresh observation may be reviewed after settlement; the invalidation is consumed.
+  document.querySelector<HTMLButtonElement>('[data-action="review-as-subscription"]')!.click();
+  expect(root.querySelector('form')).not.toBeNull();
+});
+
 it('packages a popup stylesheet with visible keyboard focus and light/dark surfaces, without nested main landmarks', () => {
   const html = readFileSync('src/popup/index.html', 'utf8');
   expect(html).toContain('href="./popup.css"');
