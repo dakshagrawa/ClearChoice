@@ -504,6 +504,89 @@ it('accepted count to overflow sends unavailable without claiming zero or a part
   await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(2));
 });
 
+async function expectSupersededStatusRecovery(status: 'unavailable-overflow' | 'supported-zero' | 'unsupported-context', retryable = false): Promise<void> {
+  const { addListener, sendMessage } = autoChrome();
+  const original = sendMessage.getMockImplementation() as (message: { type: string }) => Promise<unknown>;
+  const statuses: string[] = [];
+  let acceptedCount: number | undefined;
+  let finishStatus!: (reply: unknown) => void;
+  let finishRecovery!: (reply: unknown) => void;
+  sendMessage.mockImplementation(async (message) => {
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') {
+      if (automaticSubmits(sendMessage).length === 2) {
+        return new Promise((resolve) => { finishRecovery = (reply) => { acceptedCount = message.batch.findings.length; resolve(reply); }; });
+      }
+      acceptedCount = message.batch.findings.length;
+    }
+    if (message.type === 'CLEARCHOICE_AUTO_DOCUMENT_STATUS') {
+      expect(message.status).toBe(status);
+      statuses.push(message.requestId);
+      if (retryable && statuses.length === 1) return { ok: false, error: 'retryable-failure' };
+      // Model a live worker acceptance clearing the badge before IPC returns.
+      acceptedCount = undefined;
+      return new Promise((resolve) => { finishStatus = resolve; });
+    }
+    return original(message);
+  });
+  // Fixed local fixtures only; no page-supplied HTML enters this scenario.
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()?.shadowRoot?.querySelectorAll('article')).toHaveLength(1));
+  expect(acceptedCount).toBe(1);
+  if (status === 'unavailable-overflow') {
+    for (let i = 0; i < 100; i++) document.querySelector('main')!.insertAdjacentHTML('beforeend',
+      `<label><input type="checkbox" checked> Add protection for $${i + 1} per month</label>`);
+  } else if (status === 'supported-zero') {
+    document.querySelector('section')!.textContent = 'No recurring charges.';
+  } else {
+    document.body.innerHTML = '<main>Ordinary article</main>';
+  }
+  // Measured 101-finding scans take ~1.5s; a retry needs two full scans.
+  await vi.waitFor(() => expect(finishStatus).toBeDefined(), { timeout: 5000 });
+  expect(statuses).toHaveLength(retryable ? 2 : 1);
+  expect(new Set(statuses).size).toBe(statuses.length);
+  expect(acceptedCount).toBeUndefined();
+  expect(ownedPanel()).toBeUndefined();
+  if (status === 'unavailable-overflow') document.querySelectorAll('label').forEach((label) => label.remove());
+  else document.body.innerHTML = betaCheckout;
+  // Flush MutationObserver so the accepted status is obsolete before its receipt.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const challenge = vi.fn();
+  addListener.mock.calls[0][0]({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1,
+    requestId: statuses.at(-1), nonce: 'superseded' }, { id: 'extension' }, challenge);
+  expect(challenge).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+  finishStatus({ ok: true });
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(2), { timeout: 5000 });
+  expect(acceptedCount).toBeUndefined();
+  expect(ownedPanel()).toBeUndefined(); // No stale diagnostic or findings before acceptance.
+  const [first, recovered] = automaticSubmits(sendMessage).map(([message]) => message.batch);
+  const signatureFields = (batch: typeof first) => batch.findings.map(({ kind, reason, screenedExcerpt, opaqueFingerprint, ordinal }: {
+    kind: string; reason: string; screenedExcerpt: string; opaqueFingerprint: string; ordinal: number;
+  }) => [kind, reason, screenedExcerpt, opaqueFingerprint, ordinal]);
+  expect(signatureFields(recovered)).toEqual(signatureFields(first));
+  expect(recovered.requestId).not.toBe(first.requestId);
+  finishRecovery({ ok: true, findingCount: 1 });
+  await vi.waitFor(() => expect(ownedPanel()?.shadowRoot?.querySelectorAll('article')).toHaveLength(1));
+  expect(acceptedCount).toBe(1);
+  expect(ownedPanel()?.shadowRoot?.textContent).not.toContain('could not be saved');
+  document.querySelector('main')!.append(document.createElement('span'));
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(automaticSubmits(sendMessage)).toHaveLength(2);
+  expect(statuses).toHaveLength(retryable ? 2 : 1);
+}
+
+it('republishes identical findings after a superseded accepted overflow status', async () => {
+  await expectSupersededStatusRecovery('unavailable-overflow');
+}, 15000);
+
+it('republishes identical findings after a superseded accepted overflow retry', async () => {
+  await expectSupersededStatusRecovery('unavailable-overflow', true);
+}, 15000);
+
+it.each(['supported-zero', 'unsupported-context'] as const)('republishes identical findings after a superseded accepted %s status', async (status) => {
+  await expectSupersededStatusRecovery(status);
+}, 10000);
+
 it('retryable overflow status clears the accepted count on a fresh retry and republishes recovery', async () => {
   const { sendMessage } = autoChrome();
   const original = sendMessage.getMockImplementation() as (message: { type: string }) => Promise<unknown>;

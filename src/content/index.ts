@@ -171,6 +171,9 @@ function startAutomaticObserver(): { stop: () => void; currentGeneration: () => 
     const reportStatus = async (status: AutomaticDocumentStatus['status']) => {
       removeAutomaticPanel();
       if (lastSignature === status) return;
+      // The worker may clear its count before this receipt arrives. A newer DOM
+      // revision must republish even identical findings, not dedupe against them.
+      lastSignature = undefined;
       await submitAutomaticStatus(generation!, status, lifetime.signal, () => valid() && revision === scanRevision);
       if (valid() && revision === scanRevision) { lastSignature = status; retries = 0; }
     };
