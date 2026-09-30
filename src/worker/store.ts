@@ -66,13 +66,25 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
         await chrome.storage.local.set({ reviewHistory });
       });
     },
-    readHistory(): Promise<FindingRecord[]> {
+    deleteFinding(id: unknown): Promise<void> {
+      return enqueue(async () => {
+        if (typeof id !== 'string' || !/^f_[a-f0-9]{64}$/.test(id)) throw new Error('Invalid finding ID');
+        const { state } = await loadReviewStoreState();
+        const reviewHistory = retained(state.reviewHistory, state.retentionPolicy, currentTime());
+        if (!reviewHistory.some((entry) => entry.id === id)) throw new Error('Finding not found');
+        await chrome.storage.local.set({ reviewHistory: reviewHistory.filter((entry) => entry.id !== id) });
+      });
+    },
+    readReviewSnapshot(): Promise<{ history: FindingRecord[]; retentionPolicy: RetentionPolicy }> {
       return enqueue(async () => {
         const { state } = await loadReviewStoreState();
         const history = retained(state.reviewHistory, state.retentionPolicy, currentTime());
         if (history.length !== state.reviewHistory.length) await chrome.storage.local.set({ reviewHistory: history });
-        return history.map((entry) => ({ ...entry }));
+        return { history: history.map((entry) => ({ ...entry })), retentionPolicy: state.retentionPolicy };
       });
+    },
+    async readHistory(): Promise<FindingRecord[]> {
+      return (await this.readReviewSnapshot()).history;
     },
     upsertFindings(request: unknown, origin: unknown, beforeCommit?: () => Promise<boolean>): Promise<{ ids: string[] }> {
       return enqueue(async () => {

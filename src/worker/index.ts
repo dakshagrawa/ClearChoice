@@ -1,4 +1,4 @@
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_STATUS, CLEARCHOICE_AUTO_SUBMIT, CLEARCHOICE_AUTO_START, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_STATUS, CLEARCHOICE_AUTO_SUBMIT, CLEARCHOICE_AUTO_START, CLEARCHOICE_REVIEW_LIST, CLEARCHOICE_REVIEW_MARK, CLEARCHOICE_REVIEW_DELETE, CLEARCHOICE_REVIEW_RETENTION, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
 import { canonicalOrigin } from '../shared/models';
 import { getDismissed, setDismissed, loadGrantState } from '../shared/storage';
 import { isCurrentActiveTab } from '../shared/tab-analysis';
@@ -167,6 +167,26 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       return { ok: true };
     }
     if (!popupSender(sender)) return { ok: false, error: 'request-failed' };
+    if (request.type === CLEARCHOICE_REVIEW_LIST) {
+      const { history, retentionPolicy } = await store.readReviewSnapshot();
+      history.sort((a, b) => b.latestSeen.localeCompare(a.latestSeen) || a.id.localeCompare(b.id));
+      const offset = request.offset as number;
+      const findings = history.slice(offset, offset + (request.limit as number)).map((item) => ({
+        id: item.id, origin: item.origin, kind: item.kind, reason: item.reason,
+        screenedExcerpt: item.screenedExcerpt, firstSeen: item.firstSeen,
+        latestSeen: item.latestSeen, status: item.status,
+      }));
+      return { type: CLEARCHOICE_REVIEW_LIST, version: 1, offset, total: history.length,
+        needsReviewCount: history.filter((item) => item.status === 'needs-review').length,
+        retentionPolicy, findings };
+    }
+    if (request.type === CLEARCHOICE_REVIEW_MARK || request.type === CLEARCHOICE_REVIEW_DELETE
+      || request.type === CLEARCHOICE_REVIEW_RETENTION) {
+      if (request.type === CLEARCHOICE_REVIEW_MARK) await store.markReviewed(request.id);
+      else if (request.type === CLEARCHOICE_REVIEW_DELETE) await store.deleteFinding(request.id);
+      else await store.setRetentionPolicy(request.policy);
+      return { ok: true };
+    }
     if (request.type === CLEARCHOICE_SITE_STATUS || request.type === CLEARCHOICE_SITE_ENABLE || request.type === CLEARCHOICE_SITE_REVOKE) {
       const origin = request.origin as string;
       const [active] = await chrome.tabs.query({ active: true, currentWindow: true });

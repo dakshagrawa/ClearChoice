@@ -35,6 +35,121 @@ async function boot() {
 async function dispatch(message: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
   return new Promise((resolve) => { const accepted = listeners[0](message, sender, resolve); if (!accepted) resolve(undefined); });
 }
+
+function seedHistory(count: number) {
+  const instant = new Date().toISOString();
+  state.version = 1;
+  state.subscriptions = [];
+  state.retentionPolicy = 'never';
+  state.reviewHistory = Array.from({ length: count }, (_, index) => {
+    const screenedExcerpt = `Monthly plan $10.00 item ${index}`;
+    return { id: `f_${index.toString(16).padStart(64, '0')}`, origin: 'https://merchant.test',
+      kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt,
+      opaqueFingerprint: createHash('sha256').update(`recurring-charge\0price-cadence\0${screenedExcerpt}`).digest('hex'),
+      ordinal: 1, firstSeen: instant, latestSeen: instant,
+      status: index % 2 ? 'reviewed' : 'needs-review' };
+  });
+}
+
+it.each([101, 500])('pages all %i retained records with stable identities and global count', async (count) => {
+  seedHistory(count);
+  await boot();
+  const collected: Array<{ id: string; status: string }> = [];
+  for (let offset = 0; offset < count; offset += 100) {
+    const response = await dispatch({ type: 'CLEARCHOICE_REVIEW_LIST', version: 1, offset, limit: 100 }, popup) as {
+      type: string; version: number; offset: number; total: number; needsReviewCount: number;
+      retentionPolicy: string; findings: Array<{ id: string; status: string }>;
+    };
+    expect(response).toMatchObject({ type: 'CLEARCHOICE_REVIEW_LIST', version: 1,
+      offset, total: count, needsReviewCount: Math.ceil(count / 2), retentionPolicy: 'never' });
+    expect(response.findings.length).toBe(Math.min(100, count - offset));
+    expect(JSON.stringify(response)).not.toContain('opaqueFingerprint');
+    collected.push(...response.findings);
+  }
+  expect(collected).toHaveLength(count);
+  expect(new Set(collected.map((item) => item.id)).size).toBe(count);
+  expect(collected[0].id).toBe(`f_${'0'.repeat(64)}`);
+  expect(collected[0].status).toBe('needs-review');
+  expect(await dispatch({ type: 'CLEARCHOICE_REVIEW_LIST', version: 1, offset: count, limit: 100 }, popup))
+    .toMatchObject({ findings: [], total: count });
+});
+
+it('limits history reads and mutations to exact popup sender and request shapes', async () => {
+  seedHistory(1);
+  await boot();
+  const id = (state.reviewHistory as Array<{ id: string }>)[0].id;
+  for (const request of [
+    { type: 'CLEARCHOICE_REVIEW_LIST', version: 1, offset: 0, limit: 100 },
+    { type: 'CLEARCHOICE_REVIEW_MARK', version: 1, id },
+    { type: 'CLEARCHOICE_REVIEW_DELETE', version: 1, id },
+    { type: 'CLEARCHOICE_REVIEW_RETENTION', version: 1, policy: 7 },
+  ]) {
+    expect(await dispatch(request, content)).toEqual({ ok: false, error: 'request-failed' });
+    expect(await dispatch(request, { ...popup, url: 'chrome-extension://extension/options.html' }))
+      .toEqual({ ok: false, error: 'request-failed' });
+    expect(await dispatch({ ...request, url: '/checkout' }, popup)).toEqual({ ok: false, error: 'request-failed' });
+  }
+  expect(set.mock.calls.filter(([value]) => 'reviewHistory' in value)).toHaveLength(0);
+});
+
+it('marks, deletes and changes retention only after queued storage commits', async () => {
+  seedHistory(2);
+  await boot();
+  const id = (state.reviewHistory as Array<{ id: string }>)[0].id;
+  let release!: () => void;
+  set.mockImplementationOnce(async (value: Record<string, unknown>) => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    Object.assign(state, value);
+  });
+  const pending = dispatch({ type: 'CLEARCHOICE_REVIEW_MARK', version: 1, id }, popup);
+  await vi.waitFor(() => expect(release).toBeDefined());
+  const queued = dispatch({ type: 'CLEARCHOICE_REVIEW_LIST', version: 1, offset: 0, limit: 10 }, popup);
+  release();
+  expect(await pending).toEqual({ ok: true });
+  expect(await queued).toMatchObject({ needsReviewCount: 0, findings: [expect.objectContaining({ id, status: 'reviewed' }), expect.anything()] });
+  expect(await dispatch({ type: 'CLEARCHOICE_REVIEW_DELETE', version: 1, id }, popup)).toEqual({ ok: true });
+  expect(await dispatch({ type: 'CLEARCHOICE_REVIEW_RETENTION', version: 1, policy: 7 }, popup)).toEqual({ ok: true });
+  expect(await dispatch({ type: 'CLEARCHOICE_REVIEW_LIST', version: 1, offset: 0, limit: 10 }, popup))
+    .toMatchObject({ total: 1, needsReviewCount: 0, retentionPolicy: 7 });
+  expect(await dispatch({ type: 'CLEARCHOICE_REVIEW_MARK', version: 1, id }, popup))
+    .toEqual({ ok: false, error: 'request-failed' });
+  set.mockRejectedValueOnce(new Error('quota'));
+  expect(await dispatch({ type: 'CLEARCHOICE_REVIEW_RETENTION', version: 1, policy: 90 }, popup))
+    .toEqual({ ok: false, error: 'request-failed' });
+  expect(state.retentionPolicy).toBe(7);
+});
+
+it('orders by latestSeen then ID and excludes expired records from count and pages', async () => {
+  seedHistory(3);
+  const history = state.reviewHistory as Array<{ id: string; latestSeen: string; status: string }>;
+  history[2].latestSeen = new Date(Date.now() - 31 * 86_400_000).toISOString();
+  history[0].latestSeen = new Date(Date.now() - 60_000).toISOString();
+  history[1].latestSeen = new Date(Date.now() - 60_000).toISOString();
+  // firstSeen may not exceed latestSeen in persisted records.
+  for (const entry of history) (entry as typeof entry & { firstSeen: string }).firstSeen = entry.latestSeen;
+  state.retentionPolicy = 30;
+  await boot();
+  const page = await dispatch({ type: 'CLEARCHOICE_REVIEW_LIST', version: 1, offset: 0, limit: 2 }, popup) as {
+    total: number; needsReviewCount: number; findings: Array<{ id: string }>;
+  };
+  expect(page).toMatchObject({ total: 2, needsReviewCount: 1 });
+  expect(page.findings.map((item) => item.id)).toEqual([history[0].id, history[1].id]);
+  expect(state.reviewHistory).toHaveLength(2);
+});
+
+it('does not acknowledge failed mark or deletion and leaves stored history unchanged', async () => {
+  seedHistory(1);
+  await boot();
+  const id = (state.reviewHistory as Array<{ id: string }>)[0].id;
+  set.mockRejectedValueOnce(new Error('quota'));
+  expect(await dispatch({ type: 'CLEARCHOICE_REVIEW_MARK', version: 1, id }, popup))
+    .toEqual({ ok: false, error: 'request-failed' });
+  expect((state.reviewHistory as Array<{ status: string }>)[0].status).toBe('needs-review');
+  set.mockRejectedValueOnce(new Error('quota'));
+  expect(await dispatch({ type: 'CLEARCHOICE_REVIEW_DELETE', version: 1, id }, popup))
+    .toEqual({ ok: false, error: 'request-failed' });
+  expect(state.reviewHistory).toHaveLength(1);
+});
 afterEach(() => { listeners.length = 0; permissionRemoved.length = 0; registeredScripts.length = 0; grantedOrigins.clear(); for (const key of Object.keys(state)) delete state[key]; for (const key of Object.keys(sessionState)) delete sessionState[key]; vi.clearAllMocks(); get.mockReset().mockImplementation(async () => ({ ...state })); sendMessage.mockReset().mockImplementation(async (_tab: number, message: { type: string }) => message.type === 'CLEARCHOICE_AUTO_START' ? { ok: true } : { ok: true, status: 'unsupported-context', findingCount: 0 }); query.mockReset().mockResolvedValue([{ id: 42 }]); tabGet.mockReset().mockResolvedValue({ id: 42, url: 'https://merchant.test/checkout' }); vi.resetModules(); vi.unstubAllGlobals(); });
 
 const autoBatch = (requestId = 'auto-1') => {

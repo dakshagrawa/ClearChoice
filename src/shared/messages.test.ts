@@ -120,14 +120,37 @@ it('validates a versioned exact-key batch without allowing page data in serializ
   expect(isFindingsBatchRequest({ ...batch, findings: Array.from({ length: 101 }, () => dto) })).toBe(false);
 });
 
-it('validates challenge and list response separately from the manual count response', () => {
+it('validates challenge independently of history responses', () => {
   const challenge = { type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId: 'req-1', nonce: 'opaque-1' };
-  const list = { type: 'CLEARCHOICE_REVIEW_LIST', version: 1, findings: [dto] };
   expect(isFindingsChallenge(challenge)).toBe(true);
-  expect(isReviewListResponse(list)).toBe(true);
-  expect(isAnalyzeResponse(list)).toBe(false);
-  expect(isAnalyzeResponse({ ok: true, status: 'supported', findingCount: 1, findings: [dto] })).toBe(false);
   expect(isFindingsChallenge({ ...challenge, nonce: 'https://example.test/path' })).toBe(false);
   expect(isFindingsChallenge({ ...challenge, selector: '#private' })).toBe(false);
-  expect(isReviewListResponse({ ...list, pageTitle: 'private' })).toBe(false);
+});
+
+it('validates versioned paginated history independently of scan DTOs', () => {
+  const entry = { id: `f_${'a'.repeat(64)}`, origin: 'https://example.test', kind: dto.kind,
+    reason: dto.reason, screenedExcerpt: dto.screenedExcerpt,
+    firstSeen: '2026-09-28T12:00:00.000Z', latestSeen: '2026-09-29T12:00:00.000Z', status: 'needs-review' };
+  const list = { type: 'CLEARCHOICE_REVIEW_LIST', version: 1, offset: 0, total: 101,
+    needsReviewCount: 101, retentionPolicy: 30, findings: Array.from({ length: 100 }, (_, index) => ({ ...entry, id: `f_${index.toString(16).padStart(64, '0')}` })) };
+  expect(isReviewListResponse(list)).toBe(true);
+  expect(isReviewListResponse({ ...list, findings: [...list.findings, entry] })).toBe(false);
+  expect(isReviewListResponse({ ...list, findings: [{ ...entry, url: '/checkout' }] })).toBe(false);
+  expect(isReviewListResponse({ ...list, findings: [{ ...entry, screenedExcerpt: '/checkout' }] })).toBe(false);
+  expect(isReviewListResponse({ ...list, needsReviewCount: 102 })).toBe(false);
+  expect(isReviewListResponse({ ...list, selector: '#private' })).toBe(false);
+  expect(isAnalyzeResponse(list)).toBe(false);
+  expect(isAnalyzeResponse({ ok: true, status: 'supported', findingCount: 1, findings: [dto] })).toBe(false);
+  const page = { type: 'CLEARCHOICE_REVIEW_LIST', version: 1, offset: 0, limit: 100 };
+  expect(isWorkerRequest(page)).toBe(true);
+  for (const invalid of [{ ...page, limit: 101 }, { ...page, offset: -1 }, { ...page, offset: 501 },
+    { ...page, version: 2 }, { ...page, url: '/checkout' }]) expect(isWorkerRequest(invalid)).toBe(false);
+  const control = { type: 'CLEARCHOICE_REVIEW_MARK', version: 1, id: entry.id };
+  expect(isWorkerRequest(control)).toBe(true);
+  expect(isWorkerRequest({ ...control, id: 'private-id' })).toBe(false);
+  expect(isWorkerRequest({ ...control, evidence: 'private' })).toBe(false);
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_REVIEW_DELETE', version: 1, id: entry.id })).toBe(true);
+  for (const policy of [7, 30, 90, 'never'])
+    expect(isWorkerRequest({ type: 'CLEARCHOICE_REVIEW_RETENTION', version: 1, policy })).toBe(true);
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_REVIEW_RETENTION', version: 1, policy: 31 })).toBe(false);
 });
