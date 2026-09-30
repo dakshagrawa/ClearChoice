@@ -26,6 +26,34 @@ function fakeStorage() {
   return { data, get, set };
 }
 
+it('checks confirmation provenance inside the shared queue after queued deletion', async () => {
+  const storage = fakeStorage();
+  const store = createWorkerStore({ now: () => new Date('2026-09-29T12:00:00.000Z') });
+  const { ids: [id] } = await store.upsertFindings(batch('queue-source'), 'https://example.com');
+  const fields = { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' };
+  let release!: () => void;
+  storage.set.mockImplementationOnce(async (items) => { await new Promise<void>(resolve => { release = resolve; }); Object.assign(storage.data, structuredClone(items)); });
+  const deletion = store.deleteFinding(id);
+  await vi.waitFor(() => expect(release).toBeDefined());
+  const confirmation = store.createSubscription(fields, id);
+  const rejected = expect(confirmation).rejects.toThrow('Retained finding');
+  release(); await deletion; await rejected;
+  expect(storage.data.subscriptions).toEqual([]); expect(storage.data.reviewHistory).toEqual([]);
+  await expect(store.createSubscription(fields)).resolves.toMatchObject(fields);
+});
+
+it('rejects a source at the exact retention boundary without pruning or writing history', async () => {
+  const storage = fakeStorage();
+  let instant = new Date('2026-09-22T12:00:00.000Z');
+  const store = createWorkerStore({ now: () => instant });
+  const { ids: [id] } = await store.upsertFindings(batch('expired-source'), 'https://example.com');
+  storage.data.retentionPolicy = 7;
+  instant = new Date('2026-09-29T12:00:00.000Z');
+  const snapshot = structuredClone(storage.data); const writes = storage.set.mock.calls.length;
+  await expect(store.createSubscription({ merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' }, id)).rejects.toThrow('Retained finding');
+  expect(storage.data).toEqual(snapshot); expect(storage.set).toHaveBeenCalledTimes(writes);
+});
+
 it('serializes manual creates with a queued list and persists only subscriptions', async () => {
   const storage = fakeStorage();
   Object.assign(storage.data, { version: 1, subscriptions: [], reviewHistory: [], receipts: [], retentionPolicy: 'never' });

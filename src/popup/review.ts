@@ -1,7 +1,7 @@
 import { CLEARCHOICE_REVIEW_LIST, CLEARCHOICE_REVIEW_MARK, CLEARCHOICE_REVIEW_DELETE, CLEARCHOICE_REVIEW_RETENTION, isReviewListResponse, isRestoreResponse } from '../shared/messages';
 import type { ReviewItem, ReviewListResponse } from '../shared/messages';
 
-export function mountReview(root: HTMLElement): { refresh: () => Promise<void> } {
+export function mountReview(root: HTMLElement, reviewAsSubscription?: (item: ReviewItem, control: HTMLButtonElement) => void, invalidateSuggestion?: () => void): { refresh: () => Promise<void> } {
   // Fixed extension-owned template; record content is assigned with textContent below.
   root.innerHTML = `<section aria-labelledby="review-heading">
     <h2 id="review-heading">Needs review</h2>
@@ -85,10 +85,16 @@ export function mountReview(root: HTMLElement): { refresh: () => Promise<void> }
         void mutate({ type: CLEARCHOICE_REVIEW_DELETE, version: 1, id: item.id });
       }
     });
-    row.append(mark, remove);
+    const confirm = document.createElement('button');
+    confirm.type = 'button'; confirm.dataset.action = 'review-as-subscription'; confirm.dataset.reviewMutation = '';
+    confirm.textContent = 'Review as subscription';
+    confirm.setAttribute('aria-label', `Review observation ${item.id} from ${item.origin} as subscription`);
+    confirm.addEventListener('click', () => { if (!mutating && row.isConnected) reviewAsSubscription?.(item, confirm); });
+    row.append(mark, remove, confirm);
     return row;
   }
   async function load(offset: number): Promise<void> {
+    invalidateSuggestion?.();
     const current = ++revision;
     snapshot = undefined;
     retention.selectedIndex = -1;

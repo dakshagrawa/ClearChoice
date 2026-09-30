@@ -1,5 +1,16 @@
 import * as messages from './messages';
 
+it('requires exact confirmation request keys and provenance in its acknowledgement', () => {
+  const fields = { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' };
+  const request = { type: messages.CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING, version: 1, id: 'f_source', fields };
+  expect(messages.isWorkerRequest(request)).toBe(true);
+  for (const changed of [{ id: undefined }, { fields: { ...fields, sourceFindingId: 'f_source' } }, { version: 2 }, { url: 'https://private.test' }, { type: 'CLEARCHOICE_SUBSCRIPTION_CREATE' }]) expect(messages.isWorkerRequest({ ...request, ...changed })).toBe(false);
+  const subscription = { ...fields, id: 's_1', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
+  const response = { type: request.type, version: 1, subscription };
+  expect(messages.isSubscriptionMutationResponse(response)).toBe(false);
+  expect(messages.isSubscriptionMutationResponse({ ...response, subscription: { ...subscription, sourceFindingId: request.id } })).toBe(true);
+});
+
 it('validates exact subscription mutation acknowledgements', () => {
   const guard = (messages as unknown as Record<string, (value: unknown) => boolean>).isSubscriptionMutationResponse;
   expect(guard).toBeTypeOf('function');

@@ -50,15 +50,20 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
     listSubscriptions(): Promise<Subscription[]> {
       return enqueue(async () => (await loadReviewStoreState()).state.subscriptions.map((entry) => ({ ...entry })));
     },
-    createSubscription(fields: unknown): Promise<Subscription> {
+    createSubscription(fields: unknown, sourceFindingId?: unknown): Promise<Subscription> {
       return enqueue(async () => {
         if (!isSubscriptionFields(fields)) throw new Error('Invalid subscription fields');
         const { state } = await loadReviewStoreState();
+        const time = currentTime();
+        if (sourceFindingId !== undefined && (!isRecordIdentifier(sourceFindingId)
+          || !retained(state.reviewHistory, state.retentionPolicy, time).some((entry) => entry.id === sourceFindingId))) throw new Error('Retained finding not found');
+        if (sourceFindingId !== undefined && state.subscriptions.some((entry) => entry.sourceFindingId === sourceFindingId)) throw new Error('Finding already confirmed; edit the saved subscription');
         if (state.subscriptions.length >= MAX_SUBSCRIPTIONS) throw new Error('Subscription capacity exceeded');
         const id = `s_${Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
         if (state.subscriptions.some((entry) => entry.id === id)) throw new Error('Subscription ID collision');
-        const timestamp = new Date(currentTime()).toISOString();
-        const subscription: Subscription = { ...fields, id, createdAt: timestamp, updatedAt: timestamp };
+        const timestamp = new Date(time).toISOString();
+        const subscription: Subscription = { ...fields, id, createdAt: timestamp, updatedAt: timestamp,
+          ...(typeof sourceFindingId === 'string' ? { sourceFindingId } : {}) };
         await chrome.storage.local.set({ subscriptions: [...state.subscriptions, subscription] });
         return { ...subscription };
       });

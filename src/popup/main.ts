@@ -28,10 +28,10 @@ app.innerHTML = `
 
 const reviewRoot = document.createElement('div');
 app.querySelector('main')!.append(reviewRoot);
-const review = mountReview(reviewRoot);
 const subscriptionsRoot = document.createElement('div');
 app.querySelector('main')!.append(subscriptionsRoot);
-mountSubscriptions(subscriptionsRoot);
+const subscriptions = mountSubscriptions(subscriptionsRoot);
+const review = mountReview(reviewRoot, (item, control) => subscriptions.reviewAsSubscription(item, control), subscriptions.invalidateSuggestion);
 
 const analyzeButton = app.querySelector<HTMLButtonElement>('[data-action="analyze"]');
 const restoreButton = app.querySelector<HTMLButtonElement>('[data-action="restore"]');

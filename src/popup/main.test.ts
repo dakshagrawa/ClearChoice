@@ -17,6 +17,25 @@ it('mounts manual subscriptions separately from history without an active site a
   expect(document.querySelector('[name="merchant"]')).not.toBeNull(); expect(request).not.toHaveBeenCalled();
 });
 
+it('opens suggestion confirmation after subscriptions mount and invalidates unsaved suggestion on history refresh', async () => {
+  vi.resetModules(); document.body.innerHTML = '<div id="app"></div>';
+  const item = { id: 'f_source', origin: 'https://merchant.test', kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt: 'Monthly plan $10.00', firstSeen: '2026-09-29T00:00:00.000Z', latestSeen: '2026-09-29T00:00:00.000Z', status: 'reviewed' };
+  const sendMessage = vi.fn(async (message: { type: string }) => message.type === 'CLEARCHOICE_SUBSCRIPTION_LIST'
+    ? { type: message.type, version: 1, subscriptions: [] }
+    : { type: message.type, version: 1, offset: 0, total: 1, needsReviewCount: 0, findings: [item], retentionPolicy: 'never' });
+  vi.stubGlobal('chrome', { runtime: { sendMessage }, tabs: { query: vi.fn().mockResolvedValue([]) } });
+  await import('./main');
+  await vi.waitFor(() => expect(document.querySelector('[data-action="review-as-subscription"]')).not.toBeNull());
+  document.querySelector<HTMLButtonElement>('[data-action="review-as-subscription"]')!.click();
+  const oldForm = document.querySelector('form')!;
+  expect(oldForm.querySelector('h3')!.textContent).toContain('Confirm observation');
+  expect(document.activeElement).toBe(oldForm.querySelector('[name="merchant"]'));
+  document.querySelector<HTMLButtonElement>('[data-action="review-refresh"]')!.click();
+  expect(document.querySelector('form')).toBeNull();
+  oldForm.dispatchEvent(new Event('submit', { cancelable: true }));
+  expect(sendMessage.mock.calls.some(([message]) => message.type === 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING')).toBe(false);
+});
+
 it('packages a popup stylesheet with visible keyboard focus and light/dark surfaces, without nested main landmarks', () => {
   const html = readFileSync('src/popup/index.html', 'utf8');
   expect(html).toContain('href="./popup.css"');

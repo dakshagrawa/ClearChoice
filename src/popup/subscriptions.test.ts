@@ -48,6 +48,58 @@ function submit(root: HTMLElement) { root.querySelector('form')!.dispatchEvent(n
 
 afterEach(() => { vi.unstubAllGlobals(); document.body.innerHTML = ''; });
 
+it('review observation and cancel never create; blank confirmation fields require explicit completion and Save persists provenance', async () => {
+  const { data, set, restart } = await install();
+  const item = { id: 'f_source', origin: 'https://merchant.test', kind: 'recurring-charge' as const, reason: 'price-cadence' as const, screenedExcerpt: 'Monthly plan $10.00', firstSeen: new Date().toISOString(), latestSeen: new Date().toISOString(), status: 'reviewed' as const };
+  data.reviewHistory = [{ ...item, opaqueFingerprint: 'a'.repeat(64), ordinal: 1 }];
+  const { root, view } = await mount();
+  const reviewRoot = document.createElement('div'); document.body.append(reviewRoot);
+  const { mountReview } = await import('./review');
+  mountReview(reviewRoot, (item, control) => view.reviewAsSubscription(item, control));
+  await vi.waitFor(() => expect(reviewRoot.querySelector('[data-action="review-as-subscription"]')).not.toBeNull());
+  expect(data.subscriptions).toEqual([]);
+  const control = reviewRoot.querySelector<HTMLButtonElement>('[data-action="review-as-subscription"]')!;
+  control.click();
+  for (const name of ['merchant', 'amount', 'currency', 'cadence']) expect((root.querySelector(`[name="${name}"]`) as HTMLInputElement).value).toBe('');
+  expect(root.textContent).toContain(item.origin); expect(root.textContent).toContain(item.kind); expect(root.textContent).toContain(item.screenedExcerpt);
+  submit(root); expect(root.textContent).toContain('Invalid subscription'); expect(set).not.toHaveBeenCalled();
+  click(root, 'cancel'); expect(data.subscriptions).toEqual([]); expect(document.activeElement).toBe(control);
+  control.click(); fill(root); submit(root);
+  await vi.waitFor(() => expect(root.textContent).toContain('Subscription saved locally.'));
+  expect(data.subscriptions).toEqual([expect.objectContaining({ merchant: 'Acme', sourceFindingId: item.id })]);
+  expect(data.reviewHistory).toEqual([{ ...item, opaqueFingerprint: 'a'.repeat(64), ordinal: 1 }]);
+  expect(set).toHaveBeenCalledTimes(1);
+  await restart(); expect((await mount()).root.textContent).toContain('Acme');
+});
+
+it('switches suggestion sources without saving a detached old form or carrying old fields', async () => {
+  await install(); const { root, view } = await mount();
+  const source = { id: 'f_first', origin: 'https://merchant.test', kind: 'recurring-charge' as const, reason: 'price-cadence' as const, screenedExcerpt: 'Monthly plan $10.00', firstSeen: new Date().toISOString(), latestSeen: new Date().toISOString(), status: 'needs-review' as const };
+  const control = document.createElement('button'); document.body.append(control);
+  view.reviewAsSubscription(source, control); fill(root); const oldForm = root.querySelector('form')!;
+  view.reviewAsSubscription({ ...source, id: 'f_second', screenedExcerpt: 'Annual plan $20.00' }, control);
+  expect(root.textContent).toContain('Annual plan $20.00'); expect(root.textContent).not.toContain('Monthly plan $10.00');
+  expect(root.querySelector<HTMLInputElement>('[name="merchant"]')!.value).toBe('');
+  oldForm.dispatchEvent(new Event('submit', { cancelable: true }));
+  expect(root.querySelector('form')).not.toBeNull();
+  view.invalidateSuggestion(); expect(root.querySelector('form')).toBeNull();
+});
+
+it('does not falsely confirm a missing source or a mismatched provenance acknowledgement', async () => {
+  const { data, sendMessage } = await install(); const { root, view } = await mount();
+  const source = { id: 'f_missing', origin: 'https://merchant.test', kind: 'recurring-charge' as const, reason: 'price-cadence' as const, screenedExcerpt: 'Monthly plan $10.00', firstSeen: new Date().toISOString(), latestSeen: new Date().toISOString(), status: 'reviewed' as const };
+  const control = document.createElement('button'); document.body.append(control);
+  view.reviewAsSubscription(source, control); fill(root); submit(root);
+  await vi.waitFor(() => expect(root.textContent).toContain('Could not save local subscription'));
+  expect(data.subscriptions).toEqual([]); expect(root.querySelector('form')).not.toBeNull();
+  const subscription = { id: 's_forged', merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly', notes: 'Family plan', nextBillingDate: '2026-10-01', createdAt: source.firstSeen, updatedAt: source.firstSeen, sourceFindingId: 'f_other' };
+  sendMessage.mockResolvedValueOnce({ type: 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING', version: 1, subscription });
+  submit(root);
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING' })));
+  await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>('[type="submit"]')!.disabled).toBe(false));
+  expect(root.textContent).not.toContain('Subscription saved locally.'); expect(data.subscriptions).toEqual([]);
+});
+
 it('requires delete confirmation, cancellation leaves storage intact, and confirmation persists deletion', async () => {
   const { data, set, restart } = await install();
   const { root } = await mount();

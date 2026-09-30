@@ -109,6 +109,52 @@ it('rejects forged manual fields and non-popup requests without changing local r
   expect(state).toEqual(snapshot);
 });
 
+it('confirms a retained reviewed observation only through explicit Save and preserves provenance after restart and edit', async () => {
+  seedHistory(2); await boot();
+  const history = structuredClone(state.reviewHistory);
+  expect(state.subscriptions).toEqual([]);
+  const id = (state.reviewHistory as Array<{ id: string }>)[1].id;
+  const fields = { merchant: 'User named merchant', amount: '12.00', currency: 'EUR', cadence: 'yearly' };
+  const result = await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING', version: 1, id, fields }, popup) as { subscription: import('../shared/models').Subscription };
+  expect(result).toMatchObject({ type: 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING', subscription: { ...fields, sourceFindingId: id } });
+  expect(state.reviewHistory).toEqual(history);
+  listeners.length = 0; vi.resetModules(); await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_LIST', version: 1 }, popup)).toMatchObject({ subscriptions: [result.subscription] });
+  expect(await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_UPDATE', version: 1, id: result.subscription.id, fields: { ...fields, merchant: 'Edited' } }, popup)).toMatchObject({ subscription: { sourceFindingId: id, merchant: 'Edited' } });
+});
+
+it('does not double-write when confirmation is retried for the same finding', async () => {
+  seedHistory(1); await boot();
+  const id = (state.reviewHistory as Array<{ id: string }>)[0].id;
+  const request = { type: 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING', version: 1, id, fields: { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' } };
+  await dispatch(request, popup);
+  const snapshot = structuredClone(state); const writes = set.mock.calls.length;
+  expect(await dispatch(request, popup)).toEqual({ ok: false, error: 'request-failed' });
+  expect(state).toEqual(snapshot); expect(set).toHaveBeenCalledTimes(writes);
+});
+
+it('rejects missing, expired, deleted, forged, surplus, unsafe and non-popup confirmation without mutation', async () => {
+  seedHistory(1); await boot();
+  const id = (state.reviewHistory as Array<{ id: string }>)[0].id;
+  const fields = { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' };
+  const request = { type: 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING', version: 1, id, fields };
+  const snapshot = structuredClone(state); const writes = set.mock.calls.length;
+  for (const invalid of [{ ...request, id: 'f_missing' }, { ...request, id: undefined }, { ...request, version: 2 }, { ...request, extra: true }, { ...request, fields: { ...fields, sourceFindingId: id } }, { ...request, fields: { ...fields, notes: 'https://private.test' } }, { ...request, fields: { ...fields, amount: '0.00' } }])
+    expect(await dispatch(invalid, popup)).toEqual({ ok: false, error: 'request-failed' });
+  for (const sender of [content, { ...popup, id: 'other' }, { ...popup, url: `${popup.url}?fake` }]) expect(await dispatch(request, sender)).toEqual({ ok: false, error: 'request-failed' });
+  expect(state).toEqual(snapshot); expect(set).toHaveBeenCalledTimes(writes);
+  state.retentionPolicy = 7;
+  (state.reviewHistory as Array<{ latestSeen: string; firstSeen: string }>)[0].latestSeen = '2020-01-01T00:00:00.000Z';
+  (state.reviewHistory as Array<{ latestSeen: string; firstSeen: string }>)[0].firstSeen = '2020-01-01T00:00:00.000Z';
+  const expired = structuredClone(state);
+  expect(await dispatch(request, popup)).toEqual({ ok: false, error: 'request-failed' }); expect(state).toEqual(expired);
+  state.reviewHistory = []; const deleted = structuredClone(state);
+  expect(await dispatch(request, popup)).toEqual({ ok: false, error: 'request-failed' }); expect(state).toEqual(deleted);
+  state.reviewHistory = snapshot.reviewHistory; state.retentionPolicy = 'never';
+  set.mockRejectedValueOnce(new Error('quota'));
+  expect(await dispatch(request, popup)).toEqual({ ok: false, error: 'request-failed' }); expect(state).toEqual(snapshot);
+});
+
 function seedHistory(count: number) {
   const instant = new Date().toISOString();
   state.version = 1;

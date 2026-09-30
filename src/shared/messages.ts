@@ -7,17 +7,19 @@ import type { FindingRecord, RetentionPolicy } from './models';
 import { isSubscriptionFields, isSubscriptionCollection, isSubscription } from './models';
 
 export type SubscriptionMutationResponse =
-  | { type: typeof CLEARCHOICE_SUBSCRIPTION_CREATE | typeof CLEARCHOICE_SUBSCRIPTION_UPDATE; version: 1; subscription: import('./models').Subscription }
+  | { type: typeof CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING | typeof CLEARCHOICE_SUBSCRIPTION_CREATE | typeof CLEARCHOICE_SUBSCRIPTION_UPDATE; version: 1; subscription: import('./models').Subscription }
   | { type: typeof CLEARCHOICE_SUBSCRIPTION_DELETE; version: 1; id: string };
 
 export function isSubscriptionMutationResponse(value: unknown): value is SubscriptionMutationResponse {
   return isRecord(value) && value.version === 1
     && ((hasExactKeys(value, ['type', 'version', 'subscription'])
-      && (value.type === CLEARCHOICE_SUBSCRIPTION_CREATE || value.type === CLEARCHOICE_SUBSCRIPTION_UPDATE) && isSubscription(value.subscription))
+      && (value.type === CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING || value.type === CLEARCHOICE_SUBSCRIPTION_CREATE || value.type === CLEARCHOICE_SUBSCRIPTION_UPDATE) && isSubscription(value.subscription)
+      && (value.type !== CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING || isRecordIdentifier(value.subscription.sourceFindingId)))
       || (hasExactKeys(value, ['type', 'version', 'id']) && value.type === CLEARCHOICE_SUBSCRIPTION_DELETE && isRecordIdentifier(value.id)));
 }
 
 export const CLEARCHOICE_SUBSCRIPTION_LIST = 'CLEARCHOICE_SUBSCRIPTION_LIST' as const;
+export const CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING = 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING' as const;
 export const CLEARCHOICE_SUBSCRIPTION_CREATE = 'CLEARCHOICE_SUBSCRIPTION_CREATE' as const;
 export const CLEARCHOICE_SUBSCRIPTION_UPDATE = 'CLEARCHOICE_SUBSCRIPTION_UPDATE' as const;
 export const CLEARCHOICE_SUBSCRIPTION_DELETE = 'CLEARCHOICE_SUBSCRIPTION_DELETE' as const;
@@ -192,7 +194,7 @@ export function isWorkerRequest(value: unknown): boolean {
   if (hasExactKeys(value, ['type', 'version']) && value.type === CLEARCHOICE_SUBSCRIPTION_LIST) return value.version === 1;
   if (hasExactKeys(value, ['type', 'version', 'fields']) && value.type === CLEARCHOICE_SUBSCRIPTION_CREATE)
     return value.version === 1 && isSubscriptionFields(value.fields);
-  if (hasExactKeys(value, ['type', 'version', 'id', 'fields']) && value.type === CLEARCHOICE_SUBSCRIPTION_UPDATE)
+  if (hasExactKeys(value, ['type', 'version', 'id', 'fields']) && (value.type === CLEARCHOICE_SUBSCRIPTION_UPDATE || value.type === CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING))
     return value.version === 1 && isRecordIdentifier(value.id) && isSubscriptionFields(value.fields);
   if (hasExactKeys(value, ['type', 'version', 'id']) && value.type === CLEARCHOICE_SUBSCRIPTION_DELETE)
     return value.version === 1 && isRecordIdentifier(value.id);

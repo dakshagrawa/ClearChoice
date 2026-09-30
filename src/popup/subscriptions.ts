@@ -1,4 +1,5 @@
-import { CLEARCHOICE_SUBSCRIPTION_LIST, CLEARCHOICE_SUBSCRIPTION_CREATE, CLEARCHOICE_SUBSCRIPTION_UPDATE, CLEARCHOICE_SUBSCRIPTION_DELETE, isSubscriptionListResponse, isSubscriptionMutationResponse } from '../shared/messages';
+import type { ReviewItem } from '../shared/messages';
+import { CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING, CLEARCHOICE_SUBSCRIPTION_LIST, CLEARCHOICE_SUBSCRIPTION_CREATE, CLEARCHOICE_SUBSCRIPTION_UPDATE, CLEARCHOICE_SUBSCRIPTION_DELETE, isSubscriptionListResponse, isSubscriptionMutationResponse } from '../shared/messages';
 import { isSubscriptionFields, normalizeMerchant, normalizeCurrency } from '../shared/models';
 import type { Subscription } from '../shared/models';
 
@@ -12,6 +13,12 @@ export function mountSubscriptions(root: HTMLElement) {
   let entries: Subscription[] = [];
   let revision = 0;
   let busy = false;
+  let suggestionOpen = false;
+  function invalidateSuggestion() {
+    if (busy || !suggestionOpen) return;
+    suggestionOpen = false; editor.replaceChildren();
+    status.textContent = 'Observation changed or refreshed. Review it again before saving a subscription.';
+  }
   function controls() {
     for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>('button, input, select, textarea')) control.disabled = busy;
   }
@@ -61,11 +68,21 @@ export function mountSubscriptions(root: HTMLElement) {
     return true;
     } catch { if (current === revision) status.textContent = 'Could not load local subscriptions. Try again.'; return false; }
   }
-  function form(entry?: Subscription) {
+  function form(entry?: Subscription, source?: ReviewItem, returnControl?: HTMLButtonElement) {
+    suggestionOpen = !!source;
     status.textContent = 'Save explicitly to confirm changes.';
     editor.innerHTML = '<form novalidate><h3>Add subscription</h3><label>Merchant<input name="merchant" maxlength="120" required></label><label>Amount (positive, two decimal places)<input name="amount" inputmode="decimal" required></label><label>Currency (ISO code)<input name="currency" maxlength="3" value="USD" required></label><label>Cadence<select name="cadence"><option>weekly</option><option selected>monthly</option><option>quarterly</option><option>yearly</option><option>custom</option></select></label><label>Custom cadence description<input name="customDescription" maxlength="120"></label><label>Next billing date (YYYY-MM-DD, optional)<input name="nextBillingDate"></label><label>Notes (optional)<textarea name="notes" maxlength="500"></textarea></label><button type="button" data-subscription-action="cancel">Cancel</button><button type="submit">Save subscription</button></form>';
     const element = editor.querySelector('form')!;
-    element.querySelector('[data-subscription-action="cancel"]')!.addEventListener('click', () => { editor.replaceChildren(); add.focus(); });
+    element.querySelector('[data-subscription-action="cancel"]')!.addEventListener('click', () => { if (busy) return; suggestionOpen = false; editor.replaceChildren(); status.textContent = 'Editor closed; no additional save requested.'; (returnControl?.isConnected ? returnControl : add).focus(); });
+    if (source) {
+      element.querySelector('h3')!.textContent = 'Confirm observation as subscription';
+      const provenance = document.createElement('p');
+      provenance.textContent = `Observation only — ${source.origin} · ${source.kind} · ${source.screenedExcerpt}. Complete the fields yourself; only Save subscription confirms.`;
+      element.querySelector('h3')!.after(provenance);
+      (element.elements.namedItem('currency') as HTMLInputElement).value = '';
+      const cadence = element.elements.namedItem('cadence') as HTMLSelectElement;
+      const blank = document.createElement('option'); blank.value = ''; blank.textContent = 'Choose cadence'; cadence.prepend(blank); cadence.value = '';
+    }
     if (entry) {
       element.querySelector('h3')!.textContent = 'Edit subscription';
       for (const name of ['merchant', 'amount', 'currency', 'cadence', 'customDescription', 'nextBillingDate', 'notes'] as const)
@@ -75,29 +92,31 @@ export function mountSubscriptions(root: HTMLElement) {
     element.querySelector<HTMLInputElement>('[name="merchant"]')!.focus();
     element.addEventListener('submit', (event) => {
       event.preventDefault();
+      if (busy || !element.isConnected) return;
       const fields = { merchant: normalizeMerchant(read('merchant')), amount: read('amount'), currency: normalizeCurrency(read('currency')), cadence: read('cadence'), ...(read('cadence') === 'custom' ? { customDescription: read('customDescription') } : {}), ...(read('nextBillingDate') ? { nextBillingDate: read('nextBillingDate') } : {}), ...(read('notes') ? { notes: read('notes') } : {}) };
-      if (!isSubscriptionFields(fields)) { status.textContent = 'Invalid subscription. Check merchant, positive amount with two decimal places, currency, cadence, date and safe notes.'; return; }
+      if (!isSubscriptionFields(fields)) { status.textContent = 'Invalid subscription. Check merchant, positive amount with two decimal places, currency, cadence, date and safe notes.'; status.tabIndex = -1; status.focus(); return; }
       const save = element.querySelector<HTMLButtonElement>('[type="submit"]')!;
       if (save.disabled) return;
       busy = true; revision++; controls();
       void (async () => {
         try {
-          const type = entry ? CLEARCHOICE_SUBSCRIPTION_UPDATE : CLEARCHOICE_SUBSCRIPTION_CREATE;
-          const response: unknown = await chrome.runtime.sendMessage({ type, version: 1, fields, ...(entry ? { id: entry.id } : {}) });
+          const type = source ? CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING : entry ? CLEARCHOICE_SUBSCRIPTION_UPDATE : CLEARCHOICE_SUBSCRIPTION_CREATE;
+          const response: unknown = await chrome.runtime.sendMessage({ type, version: 1, fields, ...(source ? { id: source.id } : entry ? { id: entry.id } : {}) });
           if (!isSubscriptionMutationResponse(response) || response.type !== type || !('subscription' in response)
             || (entry && response.subscription.id !== entry.id)
+            || (source && response.subscription.sourceFindingId !== source.id)
             || Object.entries(fields).some(([key, value]) => response.subscription[key as keyof Subscription] !== value)
             || ['customDescription', 'nextBillingDate', 'notes'].some((key) => !Object.hasOwn(fields, key) && Object.hasOwn(response.subscription, key))) throw new Error('Invalid save');
           if (!await refresh()) throw new Error('Save readback failed');
           if (!entries.some((saved) => Object.keys(saved).length === Object.keys(response.subscription).length
             && Object.entries(response.subscription).every(([key, value]) => saved[key as keyof Subscription] === value))) throw new Error('Save readback mismatch');
-          editor.replaceChildren(); status.textContent = 'Subscription saved locally.';
+          suggestionOpen = false; editor.replaceChildren(); status.textContent = 'Subscription saved locally.';
         } catch { status.textContent = 'Could not save local subscription. Check the list before retrying.'; } finally { busy = false; controls(); if (!editor.childElementCount) add.focus(); }
       })();
     });
   }
-  root.querySelector('[data-subscription-action="refresh"]')!.addEventListener('click', () => { if (!busy) void refresh(); });
+  root.querySelector('[data-subscription-action="refresh"]')!.addEventListener('click', () => { if (!busy) { invalidateSuggestion(); void refresh(); } });
   add.addEventListener('click', () => { if (!busy) form(); });
   void refresh();
-  return { refresh };
+  return { refresh, invalidateSuggestion, reviewAsSubscription: (item: ReviewItem, control: HTMLButtonElement) => { if (!busy) form(undefined, { ...item }, control); } };
 }
