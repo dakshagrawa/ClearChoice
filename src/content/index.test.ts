@@ -504,6 +504,103 @@ it('accepted count to overflow sends unavailable without claiming zero or a part
   await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(2));
 });
 
+it('retryable overflow status clears the accepted count on a fresh retry and republishes recovery', async () => {
+  const { sendMessage } = autoChrome();
+  const original = sendMessage.getMockImplementation() as (message: { type: string }) => Promise<unknown>;
+  const statuses: string[] = [];
+  let acceptedCount: number | undefined;
+  let finish!: (reply: unknown) => void;
+  sendMessage.mockImplementation(async (message) => {
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') acceptedCount = message.batch.findings.length;
+    if (message.type === 'CLEARCHOICE_AUTO_DOCUMENT_STATUS') {
+      statuses.push(message.requestId);
+      if (statuses.length === 1) return { ok: false, error: 'retryable-failure' };
+      const reply = await new Promise((resolve) => { finish = resolve; });
+      acceptedCount = undefined;
+      return reply;
+    }
+    return original(message);
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  expect(acceptedCount).toBe(1);
+  for (let i = 0; i < 100; i++) document.querySelector('main')!.insertAdjacentHTML('beforeend',
+    `<label><input type="checkbox" checked> Add protection for $${i + 1} per month</label>`);
+  await vi.waitFor(() => expect(statuses).toHaveLength(2));
+  expect(statuses[0]).not.toBe(statuses[1]);
+  expect(acceptedCount).toBe(1);
+  expect(ownedPanel()).toBeUndefined();
+  finish({ ok: true });
+  await vi.waitFor(() => expect(ownedPanel()?.shadowRoot?.textContent).toContain('could not be saved'));
+  expect(acceptedCount).toBeUndefined();
+  expect(automaticSubmits(sendMessage)).toHaveLength(1);
+  expect(ownedPanel()?.shadowRoot?.querySelectorAll('article')).toHaveLength(0);
+  document.querySelectorAll('label').forEach((label) => label.remove());
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(2));
+  await vi.waitFor(() => expect(ownedPanel()?.shadowRoot?.querySelectorAll('article')).toHaveLength(1));
+  expect(acceptedCount).toBe(1);
+});
+
+it.each([
+  [{ ok: false, error: 'retryable-failure' }, 2],
+  [{ ok: false, error: 'request-failed' }, 1],
+  [{ ok: true, extra: 'ambiguous' }, 1],
+])('overflow status %j fails closed after at most %i attempts', async (receipt, expectedAttempts) => {
+  const { sendMessage } = autoChrome();
+  const original = sendMessage.getMockImplementation() as (message: { type: string }) => Promise<unknown>;
+  let attempts = 0;
+  sendMessage.mockImplementation(async (message) => {
+    if (message.type === 'CLEARCHOICE_AUTO_DOCUMENT_STATUS') { attempts++; return receipt; }
+    return original(message);
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  // Fixed local fixtures only; no page-supplied HTML enters these tests.
+  for (let i = 0; i < 100; i++) document.querySelector('main')!.insertAdjacentHTML('beforeend',
+    `<label><input type="checkbox" checked> Add protection for $${i + 1} per month</label>`);
+  await vi.waitFor(() => expect(attempts).toBe(expectedAttempts));
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  expect(attempts).toBe(expectedAttempts);
+  expect(ownedPanel()).toBeUndefined();
+  document.querySelectorAll('label').forEach((label) => label.remove());
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  expect(automaticSubmits(sendMessage)).toHaveLength(1);
+  expect(ownedPanel()).toBeUndefined();
+});
+
+it.each(['disable', 'pagehide', 'generation revoked'])('pending retryable overflow status cannot retry after %s', async (lifecycle) => {
+  const { addListener, sendMessage } = autoChrome();
+  const original = sendMessage.getMockImplementation() as (message: { type: string }) => Promise<unknown>;
+  let attempts = 0;
+  let revoked = false;
+  let finish!: (reply: unknown) => void;
+  sendMessage.mockImplementation(async (message) => {
+    if (message.type === 'CLEARCHOICE_AUTO_DOCUMENT_STATUS') {
+      attempts++;
+      return new Promise((resolve) => { finish = resolve; });
+    }
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS' && revoked) return { ok: false, error: 'request-failed' };
+    return original(message);
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  for (let i = 0; i < 100; i++) document.querySelector('main')!.insertAdjacentHTML('beforeend',
+    `<label><input type="checkbox" checked> Add protection for $${i + 1} per month</label>`);
+  await vi.waitFor(() => expect(attempts).toBe(1));
+  if (lifecycle === 'disable') addListener.mock.calls[0][0]({ type: 'CLEARCHOICE_DISABLE' }, { id: 'extension' }, vi.fn());
+  else if (lifecycle === 'pagehide') window.dispatchEvent(new Event('pagehide'));
+  else revoked = true;
+  finish({ ok: false, error: 'retryable-failure' });
+  document.querySelectorAll('label').forEach((label) => label.remove());
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  expect(attempts).toBe(1);
+  expect(automaticSubmits(sendMessage)).toHaveLength(1);
+  expect(ownedPanel()).toBeUndefined();
+});
+
 it('overflow reports a non-success diagnostic without submitting or showing a partial panel', async () => {
   const { sendMessage } = autoChrome();
   document.body.innerHTML = '<main><aside>Order summary — Subtotal: $24</aside><button>Place order</button></main>';

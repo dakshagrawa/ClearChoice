@@ -215,7 +215,13 @@ function startAutomaticObserver(): { stop: () => void; currentGeneration: () => 
             && await automaticGeneration() === generation && valid() && revision === scanRevision) {
             autoPanel = renderAutomaticDiagnostic(() => { void setDismissed(true).catch(() => undefined); });
           }
-        } catch { stop(); }
+        } catch (statusError) {
+          if (statusError instanceof AutomaticObservationFailure && statusError.retryable && retries++ < 1 && valid()) {
+            queue();
+          } else {
+            stop();
+          }
+        }
       } else if (error instanceof AutomaticObservationFailure && error.retryable && retries++ < 1 && valid()) {
         queue();
       } else {
