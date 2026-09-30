@@ -1,3 +1,4 @@
+import { mountReview } from './review';
 import type { AnalyzeResponse, SiteResponse } from '../shared/messages';
 import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, isAnalyzeResponse, isRestoreResponse, isSiteResponse } from '../shared/messages';
 import { isGrantOrigin } from '../shared/storage';
@@ -16,13 +17,17 @@ app.innerHTML = `
     </div>
     <p aria-live="polite" role="status">Analyze this tab locally.</p>
     <section aria-label="Site detection">
-      <p>Optional site detection (automatic scanning is not available yet).</p>
+      <p>Optional detection on supported English checkout pages only. Observations stay local; panels appear only after findings are saved. Enabling a site does not confirm a completed scan.</p>
       <button type="button" data-action="site-enable" disabled>Enable detection for this site</button>
       <button type="button" data-action="site-disable" disabled>Disable detection for this site</button>
       <p data-site-status role="status" aria-live="polite">Checking this site…</p>
     </section>
   </main>
 `;
+
+const reviewRoot = document.createElement('div');
+app.querySelector('main')!.append(reviewRoot);
+const review = mountReview(reviewRoot);
 
 const analyzeButton = app.querySelector<HTMLButtonElement>('[data-action="analyze"]');
 const restoreButton = app.querySelector<HTMLButtonElement>('[data-action="restore"]');
@@ -92,7 +97,9 @@ void (async () => {
       catch { permitted = false; }
       if (revision !== 0 || !await sameSite(target)) { invalidateSite(); return; }
       controls();
-      siteStatus.textContent = permitted
+      siteStatus.textContent = response.error === 'revocation-unsafe'
+        ? `Detection state is unsafe for ${target.origin}. Remove site access in Chrome settings before restarting the browser.`
+        : permitted
         ? `Could not check detection for ${target.origin}, but browser site access remains. Use Disable below or remove access in Chrome settings.`
         : 'Could not check site detection. Reopen the popup; check Chrome settings if site access remains.';
       return;
@@ -101,7 +108,7 @@ void (async () => {
     permitted = response.permitted;
     controls();
     siteStatus.textContent = response.enabled
-      ? `Detection enabled for ${target.origin}; automatic scanning is not available yet.`
+      ? `Detection enabled for ${target.origin}; supported English checkout detection is enabled, not a completed scan.`
       : response.permitted ? `Detection off for ${target.origin}; browser site access remains. You can remove it below.`
         : `Detection off for ${target.origin}.`;
   } catch { siteStatus.textContent = 'Could not check this site. Reopen the popup.'; }
@@ -129,10 +136,11 @@ enableButton.addEventListener('click', () => {
         siteStatus.textContent = `Active tab changed after the enable request for ${target.origin}. Check this site's detection and access in Chrome settings.`;
         return;
       }
+      if (!response.ok && response.error === 'revocation-unsafe') { siteStatus.textContent = `Detection state is unsafe for ${target.origin}. Remove site access in Chrome settings before restarting the browser.`; return; }
       if (!response.ok || !response.enabled || !response.permitted) { siteStatus.textContent = `Could not enable detection for ${target.origin}. Browser site access may remain; use Disable below or Chrome settings.`; return; }
       enabled = true;
       permitted = response.permitted;
-      siteStatus.textContent = `Detection enabled for ${target.origin}; automatic scanning is not available yet.`;
+      siteStatus.textContent = `Detection enabled for ${target.origin}; supported English checkout detection is enabled, not a completed scan.`;
       controls();
     } catch { siteStatus.textContent = `Access request failed for ${target.origin}; detection remains off.`; }
     finally { busy = false; controls(); }
@@ -209,6 +217,7 @@ analyzeButton.addEventListener('click', async () => {
     status.textContent = analysisStatus(await analyzeActiveTab());
   } finally {
     analyzeButton.disabled = false;
+    void review.refresh();
   }
 });
 

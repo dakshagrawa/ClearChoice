@@ -1,4 +1,14 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, expect, it, vi } from 'vitest';
+
+it('packages a popup stylesheet with visible keyboard focus and light/dark surfaces, without nested main landmarks', () => {
+  const html = readFileSync('src/popup/index.html', 'utf8');
+  expect(html).toContain('href="./popup.css"');
+  expect(html).toContain('<div id="app"></div>');
+  const css = readFileSync('src/popup/popup.css', 'utf8');
+  expect(css).toContain(':focus-visible');
+  expect(css).toContain('prefers-color-scheme: dark');
+});
 
 function installChrome(response: unknown): { query: ReturnType<typeof vi.fn>; executeScript: ReturnType<typeof vi.fn>; sendMessage: ReturnType<typeof vi.fn> } {
   const query = vi.fn().mockResolvedValue([{ id: 42, active: true }]);
@@ -61,6 +71,9 @@ it('requests exact site permission synchronously on click, never on load or Anal
   expect(request).toHaveBeenCalledWith({ origins: ['https://a.test/*'] });
   await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://a.test' }));
   expect(document.querySelector('[data-site-status]')?.textContent).toContain('enabled');
+  expect(document.body.textContent).toContain('supported English checkout');
+  expect(document.body.textContent).not.toContain('automatic scanning is not available yet');
+  expect(document.querySelector('[data-site-status]')?.textContent).toContain('not a completed scan');
   expect(remove).not.toHaveBeenCalled();
 });
 
@@ -148,7 +161,8 @@ it('never requests access on a non-HTTPS active tab', async () => {
   await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).toContain('only on an HTTPS site'));
   document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')?.click();
   expect(request).not.toHaveBeenCalled();
-  expect(sendMessage).not.toHaveBeenCalled();
+  expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_REVIEW_LIST', version: 1, offset: 0, limit: 100 });
+  expect(sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_SITE_STATUS' }));
 });
 
 it('removes only the current site after worker revocation and reports removal failure honestly', async () => {
@@ -272,6 +286,29 @@ it('does not offer stale-site removal after a tab event while permission lookup 
   expect(disable.disabled).toBe(true);
   disable.click();
   expect(remove).not.toHaveBeenCalled();
+});
+
+it('reports revocation-unsafe enable errors with a Chrome settings before restart remedy', async () => {
+  vi.resetModules();
+  document.body.innerHTML = '<div id="app"></div>';
+  const sendMessage = vi.fn(async (message: { type: string }) => message.type === 'CLEARCHOICE_SITE_STATUS'
+    ? { ok: true, enabled: false, permitted: false } : { ok: false, error: 'revocation-unsafe' });
+  vi.stubGlobal('chrome', { tabs: { query: vi.fn().mockResolvedValue([{ id: 42 }]), get: vi.fn().mockResolvedValue({ url: 'https://a.test' }) }, permissions: { request: vi.fn().mockResolvedValue(true) }, runtime: { sendMessage } });
+  await import('./main');
+  const enable = document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')!;
+  await vi.waitFor(() => expect(enable.disabled).toBe(false));
+  enable.click();
+  await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).toContain('Chrome settings before restarting'));
+});
+
+it('directs unsafe initial site state to Chrome settings before restart without blocking history', async () => {
+  vi.resetModules();
+  document.body.innerHTML = '<div id="app"></div>';
+  vi.stubGlobal('chrome', { tabs: { query: vi.fn().mockResolvedValue([{ id: 42 }]), get: vi.fn().mockResolvedValue({ url: 'https://a.test' }) }, permissions: { contains: vi.fn().mockResolvedValue(true) }, runtime: { sendMessage: vi.fn().mockResolvedValue({ ok: false, error: 'revocation-unsafe' }) } });
+  await import('./main');
+  await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).toContain('Chrome settings before restarting'));
+  expect(document.querySelector<HTMLButtonElement>('[data-action="site-disable"]')?.disabled).toBe(false);
+  expect(document.querySelector('[data-review-status]')).not.toBeNull();
 });
 
 it('uses the exact local-only initial, working, and singular successful statuses', async () => {
