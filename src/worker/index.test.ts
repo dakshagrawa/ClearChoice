@@ -202,7 +202,7 @@ it('returns a generation only to a live top-frame document on a permitted regist
 
 const emptyStatus = (status = 'supported-zero', generation = 1) => ({ type: 'CLEARCHOICE_AUTO_DOCUMENT_STATUS', version: 1, generation, requestId: 'status-1', status });
 
-it.each(['supported-zero', 'unsupported-context'])('clears %s only with a current-frame and exact-document live challenge', async (status) => {
+it.each(['supported-zero', 'unsupported-context', 'unavailable-overflow'])('clears %s only with a current-frame and exact-document live challenge', async (status) => {
   await enabledAuto();
   await dispatch(autoRequest(), content);
   badgeText.mockClear();
@@ -217,14 +217,14 @@ it.each(['supported-zero', 'unsupported-context'])('clears %s only with a curren
   expect(sendMessage).toHaveBeenCalledWith(42, expect.objectContaining({ requestId: 'status-1' }), { documentId: 'doc-A' });
 });
 
-it.each(['status', 'submit'])('rejects an old same-origin document %s even if its exact target still replies', async (kind) => {
+it.each(['status', 'overflow', 'submit'])('rejects an old same-origin document %s even if its exact target still replies', async (kind) => {
   await enabledAuto();
   await dispatch(autoRequest(), content);
   badgeText.mockClear();
   sendMessage.mockImplementation(async (_tab: number, challenge: { nonce: string; requestId: string }, target: { frameId?: number }) => target.frameId === 0
     ? { ok: false, error: 'request-failed' }
     : { type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: challenge.requestId, nonce: challenge.nonce });
-  expect(await dispatch(kind === 'status' ? emptyStatus() : autoRequest(), content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(await dispatch(kind === 'overflow' ? emptyStatus('unavailable-overflow') : kind === 'status' ? emptyStatus() : autoRequest(), content)).toEqual({ ok: false, error: 'request-failed' });
   expect(badgeText).not.toHaveBeenCalled();
 });
 
@@ -233,10 +233,30 @@ it.each([
 ])('rejects an unauthorized status sender %#', async (sender) => {
   await enabledAuto();
   expect(await dispatch(emptyStatus(), sender as chrome.runtime.MessageSender)).toEqual({ ok: false, error: 'request-failed' });
+  expect(await dispatch(emptyStatus('unavailable-overflow'), sender as chrome.runtime.MessageSender)).toEqual({ ok: false, error: 'request-failed' });
   expect(badgeText).not.toHaveBeenCalled();
 });
 
-it.each(['revoke', 'permission'])('keeps a concurrent site B badge intact when A loses access by %s', async (operation) => {
+it.each([{ version: 2 }, { generation: 2 }, { findingCount: 0 }, { evidence: 'private' }, { requestId: '' }])('rejects malformed or stale overflow status %# without clearing an accepted badge', async (changed) => {
+  await enabledAuto();
+  expect(await dispatch(autoRequest(), content)).toEqual({ ok: true, findingCount: 1 });
+  badgeText.mockClear();
+  expect(await dispatch({ ...emptyStatus('unavailable-overflow'), ...changed }, content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(badgeText).not.toHaveBeenCalled();
+});
+
+it('rejects overflow status with a spoofed challenge nonce without clearing an accepted badge', async () => {
+  await enabledAuto();
+  await dispatch(autoRequest(), content);
+  badgeText.mockClear();
+  sendMessage.mockImplementation(async (_tab: number, challenge: { requestId: string }) => ({
+    type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: challenge.requestId, nonce: 'spoofed-nonce',
+  }));
+  expect(await dispatch(emptyStatus('unavailable-overflow'), content)).toEqual({ ok: false, error: 'request-failed' });
+  expect(badgeText).not.toHaveBeenCalled();
+});
+
+it.each(['overflow', 'revoke', 'permission'])('keeps a concurrent site B badge intact when A clears by %s', async (operation) => {
   await enabledAuto();
   const bOrigin = 'https://b.test';
   const bContent = { ...content, tab: { id: 7 }, documentId: 'doc-B', url: `${bOrigin}/checkout` } as chrome.runtime.MessageSender;
@@ -249,7 +269,11 @@ it.each(['revoke', 'permission'])('keeps a concurrent site B badge intact when A
   expect(await dispatch(autoRequest(), content)).toMatchObject({ ok: true });
   expect(await dispatch({ ...autoRequest(), batch: autoBatch('b-scan') }, bContent)).toMatchObject({ ok: true });
   badgeText.mockClear();
-  if (operation === 'permission') {
+  const historyBefore = structuredClone(state);
+  if (operation === 'overflow') {
+    expect(await dispatch(emptyStatus('unavailable-overflow'), content)).toEqual({ ok: true });
+    expect(state).toEqual(historyBefore);
+  } else if (operation === 'permission') {
     grantedOrigins.delete('https://merchant.test/*');
     permissionRemoved[0]({ origins: ['https://merchant.test/*'] });
   } else {
@@ -281,12 +305,12 @@ it('navigation clears immediately even while an automatic challenge is blocked',
   await vi.waitFor(() => expect(sessionRemove).toHaveBeenCalledWith('clearchoice.document.42'));
 });
 
-it.each(['status', 'submit'])('revocation rejects delayed old-generation %s and cannot restore its badge', async (kind) => {
+it.each(['status', 'overflow', 'submit'])('revocation rejects delayed old-generation %s and cannot restore its badge', async (kind) => {
   await enabledAuto();
   await dispatch(autoRequest(), content);
   let finish!: (reply: unknown) => void;
   sendMessage.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
-  const delayed = dispatch(kind === 'status' ? emptyStatus() : { ...autoRequest(), batch: autoBatch('delayed') }, content);
+  const delayed = dispatch(kind === 'overflow' ? emptyStatus('unavailable-overflow') : kind === 'status' ? emptyStatus() : { ...autoRequest(), batch: autoBatch('delayed') }, content);
   await vi.waitFor(() => expect(finish).toBeDefined());
   const challenge = sendMessage.mock.calls.at(-1)![1];
   expect(await dispatch({ type: 'CLEARCHOICE_SITE_REVOKE', origin: 'https://merchant.test' }, popup)).toMatchObject({ ok: true, enabled: false });

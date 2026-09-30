@@ -39,14 +39,14 @@ export interface AutomaticDocumentStatus {
   version: 1;
   generation: number;
   requestId: string;
-  status: 'supported-zero' | 'unsupported-context';
+  status: 'supported-zero' | 'unsupported-context' | 'unavailable-overflow';
 }
 export function isAutomaticDocumentStatus(value: unknown): value is AutomaticDocumentStatus {
   return isRecord(value) && hasExactKeys(value, ['type', 'version', 'generation', 'requestId', 'status'])
     && value.type === CLEARCHOICE_AUTO_DOCUMENT_STATUS && value.version === 1
     && Number.isSafeInteger(value.generation) && (value.generation as number) > 0
     && isValidRequestId(value.requestId)
-    && (value.status === 'supported-zero' || value.status === 'unsupported-context');
+    && (value.status === 'supported-zero' || value.status === 'unsupported-context' || value.status === 'unavailable-overflow');
 }
 
 export interface AutomaticObservation {

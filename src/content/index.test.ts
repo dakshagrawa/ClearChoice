@@ -27,6 +27,7 @@ afterEach(() => {
 function autoChrome() {
   const installed = installChrome();
   installed.sendMessage.mockImplementation(async (message: { type: string; batch?: { findings: unknown[] } }) => {
+    if (message.type === 'CLEARCHOICE_AUTO_DOCUMENT_STATUS') return { ok: true };
     if (message.type === 'CLEARCHOICE_AUTO_STATUS') return { ok: true, generation: 3 };
     if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return { ok: true, findingCount: message.batch?.findings.length };
     if (message.type === 'CLEARCHOICE_DISMISSED_GET') return { ok: true, dismissed: false };
@@ -471,6 +472,36 @@ it('dismissed overflow diagnostic stays hidden during subsequent DOM churn', asy
   await new Promise((resolve) => setTimeout(resolve, 170));
   expect(ownedPanel()).toBeUndefined();
   expect(automaticSubmits(sendMessage)).toHaveLength(0);
+});
+
+it('accepted count to overflow sends unavailable without claiming zero or a partial count', async () => {
+  const { addListener, sendMessage } = autoChrome();
+  const original = sendMessage.getMockImplementation() as (message: { type: string }) => Promise<unknown>;
+  sendMessage.mockImplementation(async (message) => {
+    if (message.type === 'CLEARCHOICE_AUTO_DOCUMENT_STATUS') {
+      const reply = vi.fn();
+      addListener.mock.calls[0][0]({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1,
+        requestId: message.requestId, nonce: 'overflow-nonce' }, { id: 'extension' }, reply);
+      await vi.waitFor(() => expect(reply).toHaveBeenCalledWith({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE',
+        version: 1, requestId: message.requestId, nonce: 'overflow-nonce' }));
+      return { ok: true };
+    }
+    return original(message);
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  expect(automaticSubmits(sendMessage)[0][0].batch.findings).toHaveLength(1);
+  for (let i = 0; i < 100; i++) document.querySelector('main')!.insertAdjacentHTML('beforeend',
+    `<label><input type="checkbox" checked> Add protection for $${i + 1} per month</label>`);
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_AUTO_DOCUMENT_STATUS',
+    version: 1, generation: 3, requestId: expect.any(String), status: 'unavailable-overflow' }));
+  await vi.waitFor(() => expect(ownedPanel()?.shadowRoot?.textContent).toContain('could not be saved'));
+  expect(automaticSubmits(sendMessage)).toHaveLength(1);
+  expect(ownedPanel()?.shadowRoot?.querySelectorAll('article')).toHaveLength(0);
+  // Returning to the previously accepted findings must republish that count.
+  document.querySelectorAll('label').forEach((label) => label.remove());
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(2));
 });
 
 it('overflow reports a non-success diagnostic without submitting or showing a partial panel', async () => {

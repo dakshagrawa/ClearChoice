@@ -136,6 +136,8 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
         return { ok: false, error: 'request-failed' };
       // Challenge outside both queues. A revoked generation is rechecked under
       // the history/grant queue immediately before the short UI side effect.
+      // Zero here is only the badge helper's blank sentinel, not a finding receipt.
+      // Unavailable/overflow must never write history or claim zero findings.
       const published = await store.enqueue(async () => await checkpoint()
         && await badges.publish(badge, sender.documentId!, message.generation, 0));
       return published ? { ok: true } : { ok: false, error: 'request-failed' };

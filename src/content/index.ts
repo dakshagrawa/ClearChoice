@@ -19,6 +19,7 @@ import {
 } from '../shared/messages';
 import type {
   AnalyzeResponse,
+  AutomaticDocumentStatus,
   FindingsBatchRequest,
   RestoreResponse,
 } from '../shared/messages';
@@ -31,7 +32,7 @@ const automaticRequestIds = new Map<string, symbol>();
 const automaticStatusIds = new Map<string, { live: () => boolean }>();
 const maxPendingAutomaticRequests = 2;
 
-export async function submitAutomaticStatus(generation: number, status: 'supported-zero' | 'unsupported-context', signal?: AbortSignal, live: () => boolean = () => true): Promise<void> {
+export async function submitAutomaticStatus(generation: number, status: AutomaticDocumentStatus['status'], signal?: AbortSignal, live: () => boolean = () => true): Promise<void> {
   const requestId = createScanRequestId();
   const request = { type: CLEARCHOICE_AUTO_DOCUMENT_STATUS, version: 1, generation, requestId, status };
   if (signal?.aborted || !live() || automaticStatusIds.size >= maxPendingAutomaticRequests || !isAutomaticDocumentStatus(request)) throw new Error('Automatic status unavailable');
@@ -167,7 +168,7 @@ function startAutomaticObserver(): { stop: () => void; currentGeneration: () => 
     dirty = false;
     firstChange = 0;
     const scanRevision = revision;
-    const reportEmpty = async (status: 'supported-zero' | 'unsupported-context') => {
+    const reportStatus = async (status: AutomaticDocumentStatus['status']) => {
       removeAutomaticPanel();
       if (lastSignature === status) return;
       await submitAutomaticStatus(generation!, status, lifetime.signal, () => valid() && revision === scanRevision);
@@ -177,14 +178,14 @@ function startAutomaticObserver(): { stop: () => void; currentGeneration: () => 
       const currentGeneration = await automaticGeneration();
       if (!valid() || currentGeneration !== generation) { stop(); return; }
       if (classifyCheckoutContext(document.documentElement) === 'unsupported') {
-        await reportEmpty('unsupported-context');
+        await reportStatus('unsupported-context');
         return;
       }
       const findings = analyzePage().findings;
-      if (!findings.length) { await reportEmpty('supported-zero'); return; }
+      if (!findings.length) { await reportStatus('supported-zero'); return; }
       const { batch, eligibleFindings } = await buildFindingBatchWithSources(findings, createScanRequestId());
       if (!valid() || revision !== scanRevision) return;
-      if (!batch.findings.length) { await reportEmpty('supported-zero'); return; }
+      if (!batch.findings.length) { await reportStatus('supported-zero'); return; }
       const signature = JSON.stringify(batch.findings.map(({ kind, reason, screenedExcerpt, opaqueFingerprint, ordinal }) =>
         [kind, reason, screenedExcerpt, opaqueFingerprint, ordinal]));
       if (signature === lastSignature) return;
@@ -208,7 +209,10 @@ function startAutomaticObserver(): { stop: () => void; currentGeneration: () => 
       removeAutomaticPanel();
       if (error instanceof Error && error.message === 'Finding batch exceeds 100 eligible items') {
         try {
-          if (valid() && !(await getDismissed()) && await automaticGeneration() === generation && valid()) {
+          if (!valid() || revision !== scanRevision) return;
+          await reportStatus('unavailable-overflow');
+          if (valid() && revision === scanRevision && !(await getDismissed())
+            && await automaticGeneration() === generation && valid() && revision === scanRevision) {
             autoPanel = renderAutomaticDiagnostic(() => { void setDismissed(true).catch(() => undefined); });
           }
         } catch { stop(); }
