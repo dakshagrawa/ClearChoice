@@ -26,6 +26,60 @@ function fakeStorage() {
   return { data, get, set };
 }
 
+it('serializes manual creates with a queued list and persists only subscriptions', async () => {
+  const storage = fakeStorage();
+  Object.assign(storage.data, { version: 1, subscriptions: [], reviewHistory: [], receipts: [], retentionPolicy: 'never' });
+  const store = createWorkerStore({ now: () => new Date('2026-09-29T12:00:00.000Z') });
+  const fields = { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' };
+  let release!: () => void;
+  storage.set.mockImplementationOnce(async (items) => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    Object.assign(storage.data, structuredClone(items));
+  });
+  const first = store.createSubscription(fields);
+  await vi.waitFor(() => expect(release).toBeDefined());
+  const second = store.createSubscription(fields);
+  const list = store.listSubscriptions();
+  expect(storage.get).toHaveBeenCalledTimes(1);
+  release();
+  const entries = await Promise.all([first, second]);
+  expect(await list).toEqual(entries);
+  expect(entries[0].id).not.toBe(entries[1].id);
+  expect(storage.set.mock.calls.every(([payload]) => Object.keys(payload).join() === 'subscriptions')).toBe(true);
+  expect(await createWorkerStore().listSubscriptions()).toEqual(entries);
+});
+
+it('failed manual writes never mutate persisted records and leave the queue usable', async () => {
+  const storage = fakeStorage();
+  Object.assign(storage.data, { version: 1, subscriptions: [], reviewHistory: [], receipts: [] });
+  const store = createWorkerStore();
+  const fields = { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' };
+  storage.set.mockRejectedValueOnce(new Error('quota'));
+  await expect(store.createSubscription(fields)).rejects.toThrow('quota');
+  expect(storage.data.subscriptions).toEqual([]);
+  const entry = await store.createSubscription(fields);
+  for (const operation of [() => store.updateSubscription(entry.id, { ...fields, amount: '20.00' }), () => store.deleteSubscription(entry.id)]) {
+    const snapshot = structuredClone(storage.data);
+    storage.set.mockRejectedValueOnce(new Error('quota'));
+    await expect(operation()).rejects.toThrow('quota');
+    expect(storage.data).toEqual(snapshot);
+  }
+  await expect(store.listSubscriptions()).resolves.toEqual([entry]);
+});
+
+it('rejects manual creation at capacity and clock rollback without partial replacement', async () => {
+  const storage = fakeStorage();
+  const instant = '2026-09-29T12:00:00.000Z';
+  const fields = { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' };
+  const subscriptions = Array.from({ length: 500 }, (_, index) => ({ ...fields, id: `s_${index}`, createdAt: instant, updatedAt: instant }));
+  Object.assign(storage.data, { version: 1, subscriptions, reviewHistory: [], receipts: [] });
+  const store = createWorkerStore({ now: () => new Date('2026-09-28T12:00:00.000Z') });
+  await expect(store.createSubscription(fields)).rejects.toThrow('capacity');
+  await expect(store.updateSubscription('s_0', fields)).rejects.toThrow('Clock');
+  expect(storage.set).not.toHaveBeenCalled();
+  expect(storage.data.subscriptions).toEqual(subscriptions);
+});
+
 it('rejects a changed excerpt under an existing fingerprint before reading or changing reviewed history', async () => {
   const storage = fakeStorage();
   const store = createWorkerStore();

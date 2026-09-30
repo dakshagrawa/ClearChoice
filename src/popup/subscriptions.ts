@@ -1,0 +1,103 @@
+import { CLEARCHOICE_SUBSCRIPTION_LIST, CLEARCHOICE_SUBSCRIPTION_CREATE, CLEARCHOICE_SUBSCRIPTION_UPDATE, CLEARCHOICE_SUBSCRIPTION_DELETE, isSubscriptionListResponse, isSubscriptionMutationResponse } from '../shared/messages';
+import { isSubscriptionFields, normalizeMerchant, normalizeCurrency } from '../shared/models';
+import type { Subscription } from '../shared/models';
+
+export function mountSubscriptions(root: HTMLElement) {
+  // All innerHTML templates are fixed extension-owned markup. User values use value/textContent only.
+  root.innerHTML = '<section aria-label="Subscriptions"><h2>Subscriptions</h2><p>Manually saved on this device. Do not enter payment or account details.</p><button type="button" data-subscription-action="add">Add subscription</button><button type="button" data-subscription-action="refresh">Refresh subscriptions</button><p role="status" aria-live="polite">Loading subscriptions…</p><div data-subscription-list></div><div data-subscription-editor></div></section>';
+  const status = root.querySelector<HTMLElement>('[role="status"]')!;
+  const list = root.querySelector<HTMLElement>('[data-subscription-list]')!;
+  const editor = root.querySelector<HTMLElement>('[data-subscription-editor]')!;
+  const add = root.querySelector<HTMLButtonElement>('[data-subscription-action="add"]')!;
+  let entries: Subscription[] = [];
+  let revision = 0;
+  let busy = false;
+  function controls() {
+    for (const control of root.querySelectorAll<HTMLInputElement | HTMLButtonElement | HTMLSelectElement | HTMLTextAreaElement>('button, input, select, textarea')) control.disabled = busy;
+  }
+  async function refresh() {
+    const current = ++revision;
+    try {
+      const response: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_SUBSCRIPTION_LIST, version: 1 });
+      if (current !== revision) return false;
+      if (!isSubscriptionListResponse(response)) throw new Error('Invalid list');
+      entries = response.subscriptions;
+      list.replaceChildren();
+      for (const entry of entries) {
+        const row = document.createElement('article');
+        const text = document.createElement('p');
+        text.textContent = `${entry.merchant} — ${entry.amount} ${entry.currency} · ${entry.cadence}${entry.customDescription ? `: ${entry.customDescription}` : ''}${entry.nextBillingDate ? ` · Next billing: ${entry.nextBillingDate}` : ''}${entry.notes ? ` · ${entry.notes}` : ''}`;
+        const edit = document.createElement('button');
+        edit.type = 'button'; edit.dataset.subscriptionAction = 'edit'; edit.textContent = 'Edit';
+        edit.setAttribute('aria-label', `Edit subscription ${entry.merchant}`);
+        edit.addEventListener('click', () => { if (!busy) form(entry); });
+        const remove = document.createElement('button');
+        remove.type = 'button'; remove.dataset.subscriptionAction = 'delete'; remove.textContent = 'Delete';
+        remove.setAttribute('aria-label', `Delete subscription ${entry.merchant}`);
+        remove.addEventListener('click', () => {
+          if (busy) return;
+          editor.innerHTML = '<div role="group" aria-label="Delete confirmation"><h3>Delete subscription?</h3><p></p><button type="button" data-subscription-action="cancel">Cancel</button><button type="button" data-subscription-action="confirm-delete">Delete subscription</button></div>';
+          editor.querySelector('p')!.textContent = entry.merchant;
+          const cancel = editor.querySelector<HTMLButtonElement>('[data-subscription-action="cancel"]')!;
+          cancel.focus();
+          cancel.addEventListener('click', () => { editor.replaceChildren(); remove.focus(); });
+          const confirm = editor.querySelector<HTMLButtonElement>('[data-subscription-action="confirm-delete"]')!;
+          confirm.addEventListener('click', () => {
+            if (busy) return;
+            busy = true; revision++; controls();
+            void (async () => {
+              try {
+                const response: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_SUBSCRIPTION_DELETE, version: 1, id: entry.id });
+                if (!isSubscriptionMutationResponse(response) || response.type !== CLEARCHOICE_SUBSCRIPTION_DELETE || response.id !== entry.id) throw new Error('Invalid delete');
+                if (!await refresh() || entries.some((saved) => saved.id === entry.id)) throw new Error('Delete readback mismatch');
+                editor.replaceChildren(); status.textContent = 'Subscription deleted locally.'; add.focus();
+              } catch { status.textContent = 'Could not delete local subscription. Check the list before retrying.'; } finally { busy = false; controls(); if (!editor.childElementCount) add.focus(); }
+            })();
+          });
+        });
+        row.append(text, edit, remove); list.append(row);
+      }
+      status.textContent = entries.length ? `${entries.length} subscriptions saved locally.` : 'No subscriptions saved.';
+    return true;
+    } catch { if (current === revision) status.textContent = 'Could not load local subscriptions. Try again.'; return false; }
+  }
+  function form(entry?: Subscription) {
+    status.textContent = 'Save explicitly to confirm changes.';
+    editor.innerHTML = '<form novalidate><h3>Add subscription</h3><label>Merchant<input name="merchant" maxlength="120" required></label><label>Amount (positive, two decimal places)<input name="amount" inputmode="decimal" required></label><label>Currency (ISO code)<input name="currency" maxlength="3" value="USD" required></label><label>Cadence<select name="cadence"><option>weekly</option><option selected>monthly</option><option>quarterly</option><option>yearly</option><option>custom</option></select></label><label>Custom cadence description<input name="customDescription" maxlength="120"></label><label>Next billing date (YYYY-MM-DD, optional)<input name="nextBillingDate"></label><label>Notes (optional)<textarea name="notes" maxlength="500"></textarea></label><button type="button" data-subscription-action="cancel">Cancel</button><button type="submit">Save subscription</button></form>';
+    const element = editor.querySelector('form')!;
+    element.querySelector('[data-subscription-action="cancel"]')!.addEventListener('click', () => { editor.replaceChildren(); add.focus(); });
+    if (entry) {
+      element.querySelector('h3')!.textContent = 'Edit subscription';
+      for (const name of ['merchant', 'amount', 'currency', 'cadence', 'customDescription', 'nextBillingDate', 'notes'] as const)
+        (element.elements.namedItem(name) as HTMLInputElement).value = entry[name] ?? '';
+    }
+    const read = (name: string) => (element.elements.namedItem(name) as HTMLInputElement).value;
+    element.querySelector<HTMLInputElement>('[name="merchant"]')!.focus();
+    element.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const fields = { merchant: normalizeMerchant(read('merchant')), amount: read('amount'), currency: normalizeCurrency(read('currency')), cadence: read('cadence'), ...(read('cadence') === 'custom' ? { customDescription: read('customDescription') } : {}), ...(read('nextBillingDate') ? { nextBillingDate: read('nextBillingDate') } : {}), ...(read('notes') ? { notes: read('notes') } : {}) };
+      if (!isSubscriptionFields(fields)) { status.textContent = 'Invalid subscription. Check merchant, positive amount with two decimal places, currency, cadence, date and safe notes.'; return; }
+      const save = element.querySelector<HTMLButtonElement>('[type="submit"]')!;
+      if (save.disabled) return;
+      busy = true; revision++; controls();
+      void (async () => {
+        try {
+          const type = entry ? CLEARCHOICE_SUBSCRIPTION_UPDATE : CLEARCHOICE_SUBSCRIPTION_CREATE;
+          const response: unknown = await chrome.runtime.sendMessage({ type, version: 1, fields, ...(entry ? { id: entry.id } : {}) });
+          if (!isSubscriptionMutationResponse(response) || response.type !== type || !('subscription' in response)
+            || (entry && response.subscription.id !== entry.id)
+            || Object.entries(fields).some(([key, value]) => response.subscription[key as keyof Subscription] !== value)
+            || ['customDescription', 'nextBillingDate', 'notes'].some((key) => !Object.hasOwn(fields, key) && Object.hasOwn(response.subscription, key))) throw new Error('Invalid save');
+          if (!await refresh()) throw new Error('Save readback failed');
+          if (!entries.some((saved) => Object.keys(saved).length === Object.keys(response.subscription).length
+            && Object.entries(response.subscription).every(([key, value]) => saved[key as keyof Subscription] === value))) throw new Error('Save readback mismatch');
+          editor.replaceChildren(); status.textContent = 'Subscription saved locally.';
+        } catch { status.textContent = 'Could not save local subscription. Check the list before retrying.'; } finally { busy = false; controls(); if (!editor.childElementCount) add.focus(); }
+      })();
+    });
+  }
+  root.querySelector('[data-subscription-action="refresh"]')!.addEventListener('click', () => { if (!busy) void refresh(); });
+  add.addEventListener('click', () => { if (!busy) form(); });
+  void refresh();
+  return { refresh };
+}

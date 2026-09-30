@@ -1,12 +1,30 @@
 import { readFileSync } from 'node:fs';
 import { afterEach, expect, it, vi } from 'vitest';
 
+it('mounts manual subscriptions separately from history without an active site and keeps Analyze/Restore first', async () => {
+  vi.resetModules(); document.body.innerHTML = '<div id="app"></div>';
+  const request = vi.fn();
+  const sendMessage = vi.fn(async (message: { type: string }) => message.type === 'CLEARCHOICE_SUBSCRIPTION_LIST'
+    ? { type: message.type, version: 1, subscriptions: [] }
+    : { type: message.type, version: 1, offset: 0, total: 0, needsReviewCount: 0, findings: [], retentionPolicy: 30 });
+  vi.stubGlobal('chrome', { runtime: { sendMessage }, tabs: { query: vi.fn().mockResolvedValue([]) }, permissions: { request } });
+  await import('./main');
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Subscriptions"]')?.textContent).toContain('No subscriptions saved.'));
+  expect(document.querySelector('#review-heading')).not.toBeNull();
+  const buttons = [...document.querySelectorAll('button')];
+  expect(buttons.slice(0, 2).map((button) => button.textContent)).toEqual(['Analyze', 'Restore']);
+  document.querySelector<HTMLButtonElement>('[data-subscription-action="add"]')!.click();
+  expect(document.querySelector('[name="merchant"]')).not.toBeNull(); expect(request).not.toHaveBeenCalled();
+});
+
 it('packages a popup stylesheet with visible keyboard focus and light/dark surfaces, without nested main landmarks', () => {
   const html = readFileSync('src/popup/index.html', 'utf8');
   expect(html).toContain('href="./popup.css"');
   expect(html).toContain('<div id="app"></div>');
   const css = readFileSync('src/popup/popup.css', 'utf8');
   expect(css).toContain(':focus-visible');
+  expect(css).toContain('input:focus-visible');
+  expect(css).toContain('textarea:focus-visible');
   expect(css).toContain('prefers-color-scheme: dark');
 });
 

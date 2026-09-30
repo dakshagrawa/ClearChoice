@@ -1,4 +1,5 @@
 import { mountReview } from './review';
+import { mountSubscriptions } from './subscriptions';
 import type { AnalyzeResponse, SiteResponse } from '../shared/messages';
 import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, isAnalyzeResponse, isRestoreResponse, isSiteResponse } from '../shared/messages';
 import { isGrantOrigin } from '../shared/storage';
@@ -28,6 +29,9 @@ app.innerHTML = `
 const reviewRoot = document.createElement('div');
 app.querySelector('main')!.append(reviewRoot);
 const review = mountReview(reviewRoot);
+const subscriptionsRoot = document.createElement('div');
+app.querySelector('main')!.append(subscriptionsRoot);
+mountSubscriptions(subscriptionsRoot);
 
 const analyzeButton = app.querySelector<HTMLButtonElement>('[data-action="analyze"]');
 const restoreButton = app.querySelector<HTMLButtonElement>('[data-action="restore"]');

@@ -39,6 +39,76 @@ async function dispatch(message: unknown, sender: chrome.runtime.MessageSender):
   return new Promise((resolve) => { const accepted = listeners[0](message, sender, resolve); if (!accepted) resolve(undefined); });
 }
 
+it('creates a manual subscription with worker identity and lists it after worker recreation', async () => {
+  seedHistory(1);
+  await boot();
+  const fields = { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly', notes: 'Family plan', nextBillingDate: '2026-10-01' };
+  const response = await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_CREATE', version: 1, fields }, popup) as { type: string; version: number; subscription: { id: string; createdAt: string; updatedAt: string } };
+  expect(response).toMatchObject({ type: 'CLEARCHOICE_SUBSCRIPTION_CREATE', version: 1, subscription: fields });
+  expect(response.subscription.id).toMatch(/^s_[a-f0-9]{32}$/);
+  expect(response.subscription.createdAt).toBe(response.subscription.updatedAt);
+  expect(response.subscription).not.toHaveProperty('sourceFindingId');
+  expect(state.reviewHistory).toHaveLength(1);
+  listeners.length = 0;
+  vi.resetModules();
+  await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_LIST', version: 1 }, popup)).toEqual({ type: 'CLEARCHOICE_SUBSCRIPTION_LIST', version: 1, subscriptions: [response.subscription] });
+  expect(executeScript).not.toHaveBeenCalled();
+});
+
+it('updates manual fields without replacing identity, creation time or other local state', async () => {
+  seedHistory(1);
+  await boot();
+  const fields = { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly', notes: 'Old note' };
+  const created = await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_CREATE', version: 1, fields }, popup) as { subscription: import('../shared/models').Subscription };
+  const before = structuredClone(state);
+  const updatedFields = { merchant: 'New merchant', amount: '20.00', currency: 'EUR', cadence: 'custom', customDescription: 'Every six weeks' };
+  const result = await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_UPDATE', version: 1, id: created.subscription.id, fields: updatedFields }, popup);
+  expect(result).toMatchObject({ type: 'CLEARCHOICE_SUBSCRIPTION_UPDATE', version: 1, subscription: { ...updatedFields, id: created.subscription.id, createdAt: created.subscription.createdAt } });
+  expect((state.subscriptions as object[])[0]).not.toHaveProperty('notes');
+  expect(state.reviewHistory).toEqual(before.reviewHistory);
+  expect(state.receipts).toEqual(before.receipts);
+  expect(state.retentionPolicy).toBe(before.retentionPolicy);
+});
+
+it('deletes only the explicitly selected subscription and rejects a second deletion', async () => {
+  seedHistory(1);
+  await boot();
+  const fields = { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' };
+  const created = await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_CREATE', version: 1, fields }, popup) as { subscription: { id: string } };
+  const other = await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_CREATE', version: 1, fields }, popup) as { subscription: object };
+  expect(await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_DELETE', version: 1, id: created.subscription.id }, popup)).toEqual({ type: 'CLEARCHOICE_SUBSCRIPTION_DELETE', version: 1, id: created.subscription.id });
+  expect(state.subscriptions).toEqual([other.subscription]);
+  expect(state.reviewHistory).toHaveLength(1);
+  expect(await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_DELETE', version: 1, id: created.subscription.id }, popup)).toEqual({ ok: false, error: 'request-failed' });
+});
+
+it('rejects forged manual fields and non-popup requests without changing local records', async () => {
+  seedHistory(1);
+  await boot();
+  const fields = { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' };
+  const created = await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_CREATE', version: 1, fields }, popup) as { subscription: { id: string } };
+  const snapshot = structuredClone(state);
+  for (const changed of [{ amount: '10' }, { amount: '0.00' }, { nextBillingDate: '2026-02-30' }, { currency: 'usd' }, { notes: 'account number 123456789' }, { notes: 'https://private.test' }, { createdAt: '2026-01-01T00:00:00.000Z' }, { sourceFindingId: 'f_1' }, { notes: undefined }, { cadence: 'custom' }]) {
+    for (const type of ['CLEARCHOICE_SUBSCRIPTION_CREATE', 'CLEARCHOICE_SUBSCRIPTION_UPDATE']) {
+      const request = { type, version: 1, fields: { ...fields, ...changed }, ...(type.endsWith('UPDATE') ? { id: created.subscription.id } : {}) };
+      expect(await dispatch(request, popup)).toEqual({ ok: false, error: 'request-failed' });
+    }
+  }
+  for (const request of [
+    { type: 'CLEARCHOICE_SUBSCRIPTION_LIST', version: 1 },
+    { type: 'CLEARCHOICE_SUBSCRIPTION_CREATE', version: 1, fields },
+    { type: 'CLEARCHOICE_SUBSCRIPTION_UPDATE', version: 1, id: created.subscription.id, fields },
+    { type: 'CLEARCHOICE_SUBSCRIPTION_DELETE', version: 1, id: created.subscription.id },
+  ]) {
+    for (const sender of [content, { ...popup, url: `${popup.url}?fake=1` }, { ...popup, id: 'other' }])
+      expect(await dispatch(request, sender)).toEqual({ ok: false, error: 'request-failed' });
+    expect(await dispatch({ ...request, version: 2 }, popup)).toEqual({ ok: false, error: 'request-failed' });
+    expect(await dispatch({ ...request, extra: 'private' }, popup)).toEqual({ ok: false, error: 'request-failed' });
+  }
+  expect(state).toEqual(snapshot);
+});
+
 function seedHistory(count: number) {
   const instant = new Date().toISOString();
   state.version = 1;

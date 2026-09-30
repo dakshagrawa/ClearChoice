@@ -6,7 +6,8 @@ const page = (findings = [item()], total = findings.length, offset = 0) => ({ ty
 async function setup(handler: (message: Record<string, unknown>) => unknown = () => page()) {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
-  const sendMessage = vi.fn(handler);
+  const sendMessage = vi.fn((message: Record<string, unknown>) => message.type === 'CLEARCHOICE_SUBSCRIPTION_LIST'
+    ? { type: message.type, version: 1, subscriptions: [] } : handler(message));
   vi.stubGlobal('chrome', { tabs: { query: vi.fn().mockRejectedValue(new Error('restricted')) }, runtime: { sendMessage } });
   await import('./main');
   return sendMessage;
@@ -57,7 +58,7 @@ it.each(['review-mark', 'review-delete'])('keeps records unchanged during %s fai
   expect(button('review-refresh').disabled).toBe(true);
   expect(document.querySelector('[data-review-id]')).not.toBeNull();
   button(action).click();
-  expect(send.mock.calls.filter(([message]) => message.type !== 'CLEARCHOICE_REVIEW_LIST')).toHaveLength(1);
+  expect(send.mock.calls.filter(([message]) => message.type !== 'CLEARCHOICE_REVIEW_LIST' && message.type !== 'CLEARCHOICE_SUBSCRIPTION_LIST')).toHaveLength(1);
   finish({ ok: false, error: 'request-failed' });
   await vi.waitFor(() => expect(document.querySelector('[data-review-status]')?.textContent).toContain('Could not save'));
   expect(document.querySelector('[data-review-id]')?.textContent).toContain('Needs review');
@@ -201,6 +202,6 @@ it('loads local review history independently of unavailable site detection and n
   expect(record?.textContent).toContain('2026-09-28T01:00:00.000Z');
   expect(record?.textContent).toContain('Needs review');
   expect(document.body.textContent).toContain('not confirmed subscriptions');
-  expect(send.mock.calls.every(([message]) => message.type === 'CLEARCHOICE_REVIEW_LIST')).toBe(true);
+  expect(send.mock.calls.every(([message]) => message.type === 'CLEARCHOICE_REVIEW_LIST' || message.type === 'CLEARCHOICE_SUBSCRIPTION_LIST')).toBe(true);
   expect(button('analyze')).toBe(document.querySelector('button'));
 });

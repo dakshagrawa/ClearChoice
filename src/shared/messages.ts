@@ -4,6 +4,29 @@ import { isGrantOrigin } from './storage';
 import { isFindingRecord, isRecordIdentifier, isRetentionPolicy, MAX_REVIEW_HISTORY } from './models';
 import type { FindingRecord, RetentionPolicy } from './models';
 
+import { isSubscriptionFields, isSubscriptionCollection, isSubscription } from './models';
+
+export type SubscriptionMutationResponse =
+  | { type: typeof CLEARCHOICE_SUBSCRIPTION_CREATE | typeof CLEARCHOICE_SUBSCRIPTION_UPDATE; version: 1; subscription: import('./models').Subscription }
+  | { type: typeof CLEARCHOICE_SUBSCRIPTION_DELETE; version: 1; id: string };
+
+export function isSubscriptionMutationResponse(value: unknown): value is SubscriptionMutationResponse {
+  return isRecord(value) && value.version === 1
+    && ((hasExactKeys(value, ['type', 'version', 'subscription'])
+      && (value.type === CLEARCHOICE_SUBSCRIPTION_CREATE || value.type === CLEARCHOICE_SUBSCRIPTION_UPDATE) && isSubscription(value.subscription))
+      || (hasExactKeys(value, ['type', 'version', 'id']) && value.type === CLEARCHOICE_SUBSCRIPTION_DELETE && isRecordIdentifier(value.id)));
+}
+
+export const CLEARCHOICE_SUBSCRIPTION_LIST = 'CLEARCHOICE_SUBSCRIPTION_LIST' as const;
+export const CLEARCHOICE_SUBSCRIPTION_CREATE = 'CLEARCHOICE_SUBSCRIPTION_CREATE' as const;
+export const CLEARCHOICE_SUBSCRIPTION_UPDATE = 'CLEARCHOICE_SUBSCRIPTION_UPDATE' as const;
+export const CLEARCHOICE_SUBSCRIPTION_DELETE = 'CLEARCHOICE_SUBSCRIPTION_DELETE' as const;
+
+export function isSubscriptionListResponse(value: unknown): value is { type: typeof CLEARCHOICE_SUBSCRIPTION_LIST; version: 1; subscriptions: import('./models').Subscription[] } {
+  return isRecord(value) && hasExactKeys(value, ['type', 'version', 'subscriptions'])
+    && value.type === CLEARCHOICE_SUBSCRIPTION_LIST && value.version === 1 && isSubscriptionCollection(value.subscriptions);
+}
+
 export const CLEARCHOICE_FINDINGS_BATCH = 'CLEARCHOICE_FINDINGS_BATCH' as const;
 export const CLEARCHOICE_FINDINGS_CHALLENGE = 'CLEARCHOICE_FINDINGS_CHALLENGE' as const;
 export const CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE = 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE' as const;
@@ -166,6 +189,13 @@ export function isContentRequest(value: unknown): value is ContentRequest {
 
 export function isWorkerRequest(value: unknown): boolean {
   if (!isRecord(value)) return false;
+  if (hasExactKeys(value, ['type', 'version']) && value.type === CLEARCHOICE_SUBSCRIPTION_LIST) return value.version === 1;
+  if (hasExactKeys(value, ['type', 'version', 'fields']) && value.type === CLEARCHOICE_SUBSCRIPTION_CREATE)
+    return value.version === 1 && isSubscriptionFields(value.fields);
+  if (hasExactKeys(value, ['type', 'version', 'id', 'fields']) && value.type === CLEARCHOICE_SUBSCRIPTION_UPDATE)
+    return value.version === 1 && isRecordIdentifier(value.id) && isSubscriptionFields(value.fields);
+  if (hasExactKeys(value, ['type', 'version', 'id']) && value.type === CLEARCHOICE_SUBSCRIPTION_DELETE)
+    return value.version === 1 && isRecordIdentifier(value.id);
   if (isAutomaticObservation(value) || isAutomaticDocumentStatus(value)) return true;
   if (hasExactKeys(value, ['type', 'version', 'offset', 'limit']) && value.type === CLEARCHOICE_REVIEW_LIST)
     return value.version === 1 && boundedOffset(value.offset) && pageLimit(value.limit);

@@ -26,6 +26,14 @@ export interface Subscription {
   sourceFindingId?: string;
 }
 
+export type SubscriptionFields = Pick<Subscription, 'merchant' | 'amount' | 'currency' | 'cadence' | 'customDescription' | 'nextBillingDate' | 'notes'>;
+
+/** Manual fields cannot carry worker identity, timestamps or finding provenance. */
+export function isSubscriptionFields(value: unknown): value is SubscriptionFields {
+  return record(value) && exact(value, ['merchant', 'amount', 'currency', 'cadence'], ['customDescription', 'nextBillingDate', 'notes'])
+    && isSubscription({ ...value, id: 'manual', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' });
+}
+
 export interface FindingRecord {
   id: string;
   origin: string;

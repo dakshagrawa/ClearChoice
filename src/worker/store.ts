@@ -1,3 +1,5 @@
+import { isSubscriptionFields, MAX_SUBSCRIPTIONS } from '../shared/models';
+import type { Subscription } from '../shared/models';
 import { isFindingsBatchRequest } from '../shared/messages';
 import { canonicalOrigin, isFindingHistory, isRecordIdentifier, isRetentionPolicy, MAX_REVIEW_HISTORY } from '../shared/models';
 import type { FindingRecord, RetentionPolicy } from '../shared/models';
@@ -45,6 +47,44 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
   return {
     /** Share the worker's only mutation queue with grant registration/state transitions. */
     enqueue,
+    listSubscriptions(): Promise<Subscription[]> {
+      return enqueue(async () => (await loadReviewStoreState()).state.subscriptions.map((entry) => ({ ...entry })));
+    },
+    createSubscription(fields: unknown): Promise<Subscription> {
+      return enqueue(async () => {
+        if (!isSubscriptionFields(fields)) throw new Error('Invalid subscription fields');
+        const { state } = await loadReviewStoreState();
+        if (state.subscriptions.length >= MAX_SUBSCRIPTIONS) throw new Error('Subscription capacity exceeded');
+        const id = `s_${Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+        if (state.subscriptions.some((entry) => entry.id === id)) throw new Error('Subscription ID collision');
+        const timestamp = new Date(currentTime()).toISOString();
+        const subscription: Subscription = { ...fields, id, createdAt: timestamp, updatedAt: timestamp };
+        await chrome.storage.local.set({ subscriptions: [...state.subscriptions, subscription] });
+        return { ...subscription };
+      });
+    },
+    updateSubscription(id: unknown, fields: unknown): Promise<Subscription> {
+      return enqueue(async () => {
+        if (!isRecordIdentifier(id) || !isSubscriptionFields(fields)) throw new Error('Invalid subscription fields');
+        const { state } = await loadReviewStoreState();
+        const prior = state.subscriptions.find((entry) => entry.id === id);
+        if (!prior) throw new Error('Subscription not found');
+        const timestamp = new Date(currentTime()).toISOString();
+        if (timestamp < prior.updatedAt) throw new Error('Clock precedes subscription');
+        const subscription: Subscription = { ...fields, id: prior.id, createdAt: prior.createdAt, updatedAt: timestamp,
+          ...(prior.sourceFindingId ? { sourceFindingId: prior.sourceFindingId } : {}) };
+        await chrome.storage.local.set({ subscriptions: state.subscriptions.map((entry) => entry.id === id ? subscription : entry) });
+        return { ...subscription };
+      });
+    },
+    deleteSubscription(id: unknown): Promise<void> {
+      return enqueue(async () => {
+        if (!isRecordIdentifier(id)) throw new Error('Invalid subscription ID');
+        const { state } = await loadReviewStoreState();
+        if (!state.subscriptions.some((entry) => entry.id === id)) throw new Error('Subscription not found');
+        await chrome.storage.local.set({ subscriptions: state.subscriptions.filter((entry) => entry.id !== id) });
+      });
+    },
     setRetentionPolicy(policy: unknown): Promise<void> {
       return enqueue(async () => {
         if (!isRetentionPolicy(policy)) throw new Error('Invalid retention policy');

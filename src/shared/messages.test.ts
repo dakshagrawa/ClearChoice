@@ -1,3 +1,21 @@
+import * as messages from './messages';
+
+it('validates exact subscription mutation acknowledgements', () => {
+  const guard = (messages as unknown as Record<string, (value: unknown) => boolean>).isSubscriptionMutationResponse;
+  expect(guard).toBeTypeOf('function');
+  const subscription = { id: 's_1', merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
+  for (const type of ['CLEARCHOICE_SUBSCRIPTION_CREATE', 'CLEARCHOICE_SUBSCRIPTION_UPDATE']) {
+    const response = { type, version: 1, subscription };
+    expect(guard(response)).toBe(true);
+    expect(guard({ ...response, version: 2 })).toBe(false);
+    expect(guard({ ...response, extra: 'private' })).toBe(false);
+    expect(guard({ ...response, subscription: { ...subscription, amount: '0.00' } })).toBe(false);
+  }
+  expect(guard({ type: 'CLEARCHOICE_SUBSCRIPTION_DELETE', version: 1, id: 's_1' })).toBe(true);
+  expect(guard({ type: 'CLEARCHOICE_SUBSCRIPTION_DELETE', version: 1, id: 's_1', extra: 1 })).toBe(false);
+  expect(guard({ ok: true })).toBe(false);
+});
+
 import { expect, it } from 'vitest';
 
 import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, isAnalyzeResponse, isContentRequest, isRestoreResponse, isFindingsBatchRequest, isFindingsChallenge, isReviewListResponse, isWorkerRequest, isSiteResponse } from './messages';
