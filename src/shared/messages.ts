@@ -1,7 +1,7 @@
 import { FINDING_WIRE_VERSION, isFindingDtoBatch, isValidRequestId } from './finding-dto';
 import type { FindingDto } from './finding-dto';
 import { isGrantOrigin } from './storage';
-import { isFindingRecord, isRetentionPolicy, MAX_REVIEW_HISTORY } from './models';
+import { isFindingRecord, isRecordIdentifier, isRetentionPolicy, MAX_REVIEW_HISTORY } from './models';
 import type { FindingRecord, RetentionPolicy } from './models';
 
 export const CLEARCHOICE_FINDINGS_BATCH = 'CLEARCHOICE_FINDINGS_BATCH' as const;
@@ -64,7 +64,7 @@ export interface ReviewListResponse {
 }
 
 export type ReviewItem = Pick<FindingRecord, 'id' | 'origin' | 'kind' | 'reason' | 'screenedExcerpt' | 'firstSeen' | 'latestSeen' | 'status'>;
-const reviewId = /^f_[a-f0-9]{64}$/;
+
 const boundedOffset = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= MAX_REVIEW_HISTORY;
 const pageLimit = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= MAX_REVIEW_PAGE;
 
@@ -154,7 +154,7 @@ export function isWorkerRequest(value: unknown): boolean {
   if (hasExactKeys(value, ['type', 'version', 'offset', 'limit']) && value.type === CLEARCHOICE_REVIEW_LIST)
     return value.version === 1 && boundedOffset(value.offset) && pageLimit(value.limit);
   if (hasExactKeys(value, ['type', 'version', 'id']) && (value.type === CLEARCHOICE_REVIEW_MARK || value.type === CLEARCHOICE_REVIEW_DELETE))
-    return value.version === 1 && typeof value.id === 'string' && reviewId.test(value.id);
+    return value.version === 1 && isRecordIdentifier(value.id);
   if (hasExactKeys(value, ['type', 'version', 'policy']) && value.type === CLEARCHOICE_REVIEW_RETENTION)
     return value.version === 1 && isRetentionPolicy(value.policy);
   return (hasExactKeys(value, ['type']) && (value.type === CLEARCHOICE_AUTO_STATUS || value.type === CLEARCHOICE_ANALYZE || value.type === CLEARCHOICE_RESTORE || value.type === CLEARCHOICE_DISMISSED_GET))

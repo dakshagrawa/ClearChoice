@@ -1,5 +1,5 @@
 import { isFindingsBatchRequest } from '../shared/messages';
-import { canonicalOrigin, isFindingHistory, isRetentionPolicy, MAX_REVIEW_HISTORY } from '../shared/models';
+import { canonicalOrigin, isFindingHistory, isRecordIdentifier, isRetentionPolicy, MAX_REVIEW_HISTORY } from '../shared/models';
 import type { FindingRecord, RetentionPolicy } from '../shared/models';
 import { loadReviewStoreState } from '../shared/storage';
 import type { BatchReceipt } from '../shared/storage';
@@ -55,7 +55,7 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
     },
     markReviewed(id: unknown): Promise<void> {
       return enqueue(async () => {
-        if (typeof id !== 'string' || !/^f_[a-f0-9]{64}$/.test(id)) throw new Error('Invalid finding ID');
+        if (!isRecordIdentifier(id)) throw new Error('Invalid finding ID');
         const { state } = await loadReviewStoreState();
         const reviewHistory = retained(state.reviewHistory, state.retentionPolicy, currentTime())
           .map((entry) => ({ ...entry }));
@@ -68,7 +68,7 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
     },
     deleteFinding(id: unknown): Promise<void> {
       return enqueue(async () => {
-        if (typeof id !== 'string' || !/^f_[a-f0-9]{64}$/.test(id)) throw new Error('Invalid finding ID');
+        if (!isRecordIdentifier(id)) throw new Error('Invalid finding ID');
         const { state } = await loadReviewStoreState();
         const reviewHistory = retained(state.reviewHistory, state.retentionPolicy, currentTime());
         if (!reviewHistory.some((entry) => entry.id === id)) throw new Error('Finding not found');

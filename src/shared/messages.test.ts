@@ -147,7 +147,12 @@ it('validates versioned paginated history independently of scan DTOs', () => {
     { ...page, version: 2 }, { ...page, url: '/checkout' }]) expect(isWorkerRequest(invalid)).toBe(false);
   const control = { type: 'CLEARCHOICE_REVIEW_MARK', version: 1, id: entry.id };
   expect(isWorkerRequest(control)).toBe(true);
-  expect(isWorkerRequest({ ...control, id: 'private-id' })).toBe(false);
+  expect(isWorkerRequest({ ...control, id: 'private-id' })).toBe(true);
+  // Every ID admitted by the persisted record schema must be actionable.
+  expect(isReviewListResponse({ ...list, findings: [{ ...entry, id: 'legacy' }] })).toBe(true);
+  expect(isWorkerRequest({ ...control, id: 'legacy' })).toBe(true);
+  expect(isWorkerRequest({ type: 'CLEARCHOICE_REVIEW_DELETE', version: 1, id: 'legacy' })).toBe(true);
+  expect(isWorkerRequest({ ...control, id: '../private' })).toBe(false);
   expect(isWorkerRequest({ ...control, evidence: 'private' })).toBe(false);
   expect(isWorkerRequest({ type: 'CLEARCHOICE_REVIEW_DELETE', version: 1, id: entry.id })).toBe(true);
   for (const policy of [7, 30, 90, 'never'])

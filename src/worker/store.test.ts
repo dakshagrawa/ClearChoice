@@ -143,6 +143,18 @@ it('a new scan advances latestSeen but preserves firstSeen and reviewed status',
   })]);
 });
 
+it('can review and delete an older persisted finding with a schema-valid nonhash ID', async () => {
+  const storage = fakeStorage();
+  const store = createWorkerStore();
+  await store.upsertFindings(batch('legacy-seed'), 'https://example.com');
+  (storage.data.reviewHistory as Array<{ id: string }>)[0].id = 'legacy';
+  await store.markReviewed('legacy');
+  expect((storage.data.reviewHistory as Array<{ status: string }>)[0].status).toBe('reviewed');
+  await store.deleteFinding('legacy');
+  expect(storage.data.reviewHistory).toEqual([]);
+  await expect(store.markReviewed('../private')).rejects.toThrow('Invalid finding ID');
+});
+
 it('replays an acknowledged write after worker recreation without touching timestamps or storage', async () => {
   const storage = fakeStorage();
   const first = await createWorkerStore({ now: () => new Date('2026-09-28T12:00:00.000Z') })
@@ -426,7 +438,7 @@ it('retention review status failure does not mark record or mutate receipt', asy
   storage.set.mockRejectedValueOnce(new Error('quota exceeded'));
   await expect(store.markReviewed(ids[0])).rejects.toThrow('quota exceeded');
   expect(storage.data).toEqual(snapshot);
-  await expect(store.markReviewed('bad-id')).rejects.toThrow('Invalid finding ID');
+  await expect(store.markReviewed('bad-id')).rejects.toThrow('Finding not found');
   await store.markReviewed(ids[0]);
   expect((storage.data.reviewHistory as Array<{ status: string }>)[0].status).toBe('reviewed');
 });

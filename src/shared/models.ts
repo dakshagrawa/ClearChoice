@@ -54,9 +54,10 @@ const DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const currencyCodes = new Set(Intl.supportedValuesOf('currency'));
 
-function identifier(value: unknown): value is string {
+export function isRecordIdentifier(value: unknown): value is string {
   return typeof value === 'string' && IDENTIFIER.test(value);
 }
+const identifier = isRecordIdentifier;
 
 function instant(value: unknown): value is string {
   return typeof value === 'string' && INSTANT.test(value)
