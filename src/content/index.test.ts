@@ -88,7 +88,7 @@ it('restarts during an old in-flight submit and keeps each challenge scoped to i
     listener({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId, nonce }, { id: senderId }, reply);
     return reply;
   };
-  expect(challenge(oldId, 'old-nonce')).toHaveBeenCalledWith({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: oldId, nonce: 'old-nonce' });
+  expect(challenge(oldId, 'old-nonce')).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
   expect(challenge(next.batch.requestId, 'new-nonce')).toHaveBeenCalledWith({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: next.batch.requestId, nonce: 'new-nonce' });
   expect(challenge('unrelated', 'wrong-nonce')).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
   expect(challenge(next.batch.requestId, 'wrong-sender', 'other')).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
@@ -99,6 +99,48 @@ it('restarts during an old in-flight submit and keeps each challenge scoped to i
   finish.get(5)!({ ok: true, findingCount: next.batch.findings.length });
   await vi.waitFor(() => expect(ownedPanel()?.shadowRoot?.querySelectorAll('article')).toHaveLength(1));
   expect(challenge(next.batch.requestId, 'late')).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+  expect(addListener).toHaveBeenCalledTimes(1);
+});
+
+it('retires revoked pending submissions so a third generation can submit and render', async () => {
+  const { addListener, sendMessage } = autoChrome();
+  let generation = 3;
+  const finish = new Map<number, (value: unknown) => void>();
+  sendMessage.mockImplementation((message: { type: string; generation?: number; batch?: { findings: unknown[] } }) => {
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS') return Promise.resolve({ ok: true, generation });
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return new Promise((resolve) => { finish.set(message.generation!, resolve); });
+    return Promise.resolve({ ok: true, dismissed: false });
+  });
+  document.body.innerHTML = betaCheckout;
+  await import('./index');
+  const listener = addListener.mock.calls[0][0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean;
+  const challenge = (requestId: string) => {
+    const reply = vi.fn();
+    listener({ type: 'CLEARCHOICE_FINDINGS_CHALLENGE', version: 1, requestId, nonce: 'nonce' }, { id: 'extension' }, reply);
+    return reply;
+  };
+  await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(1));
+  for (const nextGeneration of [5, 7]) {
+    generation = nextGeneration; // Both exact-document DISABLE messages were lost.
+    const started = vi.fn();
+    listener({ type: 'CLEARCHOICE_AUTO_START', version: 1, generation }, { id: 'extension' }, started);
+    await vi.waitFor(() => expect(started).toHaveBeenCalledWith({ ok: true }));
+    await vi.waitFor(() => expect(automaticSubmits(sendMessage)).toHaveLength(nextGeneration === 5 ? 2 : 3));
+  }
+  const [first, second, third] = automaticSubmits(sendMessage).map(([message]) => message);
+  expect(third.generation).toBe(7);
+  for (const old of [first, second]) {
+    expect(challenge(old.batch.requestId)).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+  }
+  const attested = { type: 'CLEARCHOICE_FINDINGS_CHALLENGE_RESPONSE', version: 1, requestId: third.batch.requestId, nonce: 'nonce' };
+  expect(challenge(third.batch.requestId)).toHaveBeenCalledWith(attested);
+  finish.get(3)!({ ok: true, findingCount: first.batch.findings.length });
+  finish.get(5)!({ ok: true, findingCount: second.batch.findings.length });
+  await vi.waitFor(() => expect(challenge(third.batch.requestId)).toHaveBeenCalledWith(attested));
+  expect(ownedPanel()).toBeUndefined();
+  finish.get(7)!({ ok: true, findingCount: third.batch.findings.length });
+  await vi.waitFor(() => expect(ownedPanel()?.shadowRoot?.querySelectorAll('article')).toHaveLength(1));
+  expect(challenge(third.batch.requestId)).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
   expect(addListener).toHaveBeenCalledTimes(1);
 });
 

@@ -24,8 +24,8 @@ import { buildFindingBatchWithSources, createScanRequestId } from './candidates'
 import { isOwnedPanelMutation, removePanel, renderAutomaticDiagnostic, renderPanel } from './panel';
 
 const contentSentinel = '__clearchoiceContentListenerInstalled__';
-// One active observer and at most one superseded observer awaiting its worker receipt.
-const automaticRequestIds = new Set<string>();
+// Retired observers cannot attest a pending worker challenge or occupy a slot.
+const automaticRequestIds = new Map<string, symbol>();
 const maxPendingAutomaticRequests = 2;
 
 export class AutomaticObservationFailure extends Error {
@@ -33,11 +33,14 @@ export class AutomaticObservationFailure extends Error {
 }
 
 /** Task 10 will call this only after its opt-in checkout observer screens a batch. */
-export async function submitAutomaticObservation(generation: number, batch: FindingsBatchRequest): Promise<{ ok: true; findingCount: number }> {
+export async function submitAutomaticObservation(generation: number, batch: FindingsBatchRequest, signal?: AbortSignal): Promise<{ ok: true; findingCount: number }> {
   const request = { type: CLEARCHOICE_AUTO_SUBMIT, version: 1, generation, batch };
-  if (automaticRequestIds.size >= maxPendingAutomaticRequests || automaticRequestIds.has(batch.requestId)
+  if (signal?.aborted || automaticRequestIds.size >= maxPendingAutomaticRequests || automaticRequestIds.has(batch.requestId)
     || !isAutomaticObservation(request)) throw new Error('Automatic observation unavailable');
-  automaticRequestIds.add(batch.requestId);
+  const token = Symbol();
+  automaticRequestIds.set(batch.requestId, token);
+  const retire = () => { if (automaticRequestIds.get(batch.requestId) === token) automaticRequestIds.delete(batch.requestId); };
+  signal?.addEventListener('abort', retire, { once: true });
   try {
     let reply: unknown;
     try { reply = await chrome.runtime.sendMessage(request); }
@@ -51,7 +54,7 @@ export async function submitAutomaticObservation(generation: number, batch: Find
       || !('ok' in reply) || reply.ok !== true || !('findingCount' in reply)
       || reply.findingCount !== batch.findings.length) throw new Error('Automatic observation refused');
     return { ok: true, findingCount: batch.findings.length };
-  } finally { automaticRequestIds.delete(batch.requestId); }
+  } finally { retire(); signal?.removeEventListener('abort', retire); }
 }
 
 async function getDismissed(): Promise<boolean> {
@@ -96,6 +99,7 @@ async function automaticGeneration(): Promise<number | undefined> {
 /** The worker grants this document a generation before any DOM observer is installed. */
 function startAutomaticObserver(): { stop: () => void; currentGeneration: () => number | undefined; ready: Promise<boolean> } {
   let active = true;
+  const lifetime = new AbortController();
   let observer: MutationObserver | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let dirty = false;
@@ -115,6 +119,7 @@ function startAutomaticObserver(): { stop: () => void; currentGeneration: () => 
   const stop = () => {
     if (!active) return;
     active = false;
+    lifetime.abort();
     observer?.disconnect();
     if (timer) clearTimeout(timer);
     window.removeEventListener('popstate', queue);
@@ -153,7 +158,7 @@ function startAutomaticObserver(): { stop: () => void; currentGeneration: () => 
       const signature = JSON.stringify(batch.findings.map(({ kind, reason, screenedExcerpt, opaqueFingerprint, ordinal }) =>
         [kind, reason, screenedExcerpt, opaqueFingerprint, ordinal]));
       if (signature === lastSignature) return;
-      await submitAutomaticObservation(generation!, batch);
+      await submitAutomaticObservation(generation!, batch, lifetime.signal);
       if (!valid() || revision !== scanRevision) return;
       if (await automaticGeneration() !== generation) { stop(); return; }
       if (!valid() || revision !== scanRevision || classifyCheckoutContext(document.documentElement) === 'unsupported') {
