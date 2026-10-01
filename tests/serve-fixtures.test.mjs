@@ -57,7 +57,8 @@ test('controlled checkout fixtures expose only the scenario matrix with exact fa
   const { child, getOutput, readyUrl } = await startFixtureServer();
 
   try {
-    expect(readyUrl).not.toContain(':4173');
+    // Compare the actual port; ephemeral ports such as 41737 share the prefix.
+    expect(new URL(readyUrl).port).not.toBe('4173');
 
     for (const [route, signals] of Object.entries(expectedSignals)) {
       const response = await globalThis.fetch(`${readyUrl}${route}`);
