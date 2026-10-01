@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { afterEach, expect, test, vi } from 'vitest';
+import * as artifacts from '../scripts/release-artifact.mjs';
 import {
   assertFixtureOrigin,
   captureIntegrityBaseline,
@@ -99,6 +100,24 @@ test('manual checkpoints gate dynamic and reopened Analyze behind Escape detach 
   expect(events.at(-1)).toBe('integrity:dynamic-fixture Restore/repeated Analyze/replacement');
 });
 
+test('manual runner loads the prepared archive extraction and cleans it after browser launch failure', async () => {
+  const extensionPath = resolve(tmpdir(), 'synthetic-unit-extracted-extension');
+  const cleanup = vi.fn();
+  const prepared = vi.spyOn(artifacts, 'prepareCandidateArchive').mockReturnValue({ extensionPath, cleanup });
+  const failure = new Error('intentional unit browser-launch stop; no human QA');
+  const launch = vi.spyOn(chromium, 'launchPersistentContext').mockRejectedValue(failure);
+  try {
+    await expect(runManualActiveTabQa([])).rejects.toBe(failure);
+    expect(prepared).toHaveBeenCalledExactlyOnceWith(root);
+    expect(launch).toHaveBeenCalledOnce();
+    expect(launch.mock.calls[0][1]).toEqual(reviewBrowserLaunchOptions(extensionPath));
+    expect(cleanup).toHaveBeenCalledOnce();
+  } finally {
+    launch.mockRestore();
+    prepared.mockRestore();
+  }
+});
+
 test('manual QA cleanup attempts every resource even when Chromium close rejects', async () => {
   const firstFailure = new Error('Chromium close failed');
   const closeTerminal = vi.fn();
@@ -180,9 +199,10 @@ test('retains digest and boolean predicates only, and detects a changed host fie
     await expect(integrityPassed(page)).resolves.toBe(false);
     await expect(page.evaluate(() => window.__clearchoiceManualIntegrityBaseline.predicates.integrity)).resolves.toBe(false);
 
-    const outputMarker = createManualActiveTabQaMarker({ commit: 'a'.repeat(40), manifestSha256: 'b'.repeat(64) });
+    const outputMarker = createManualActiveTabQaMarker({ commit: 'a'.repeat(40), manifestSha256: 'b'.repeat(64), archiveSha256: 'c'.repeat(64) });
     expect(Object.keys(outputMarker).sort()).toEqual([
       'accessibility',
+      'archiveSha256',
       'cleanFixtureIntegrity',
       'commit',
       'dynamicFixtureIntegrity',

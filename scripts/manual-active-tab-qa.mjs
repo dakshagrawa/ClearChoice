@@ -1,5 +1,4 @@
 /* global window, location, document */
-import { execFileSync } from 'node:child_process';
 import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -8,9 +7,9 @@ import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { LOCAL_HUMAN_ATTESTATION, sha256 } from './active-tab-qa.mjs';
+import { assertCleanCandidateCommit, prepareCandidateArchive } from './release-artifact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
-const extensionPath = resolve(root, 'dist');
 const fixturePaths = {
   clean: resolve(root, 'fixtures/clean-checkout.html'),
   dynamic: resolve(root, 'fixtures/beta-dynamic-checkout.html'),
@@ -185,22 +184,32 @@ export async function runManualCheckpoints({ cleanPage, getDynamicPage, instruct
   await check(dynamicPage, 'dynamic-fixture Restore/repeated Analyze/replacement');
 }
 
-export function createManualActiveTabQaMarker({ commit, manifestSha256 }) {
+export function createManualActiveTabQaMarker({ commit, manifestSha256, archiveSha256 }) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     outcome: 'passed',
     cleanFixtureIntegrity: 'passed',
     dynamicFixtureIntegrity: 'passed',
     accessibility: true,
     commit,
     manifestSha256,
+    archiveSha256,
     reviewer: LOCAL_HUMAN_ATTESTATION,
   };
 }
 
 export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
   parseArguments(argv);
-  await readFile(resolve(extensionPath, 'manifest.json'));
+  const candidate = prepareCandidateArchive(root);
+  try {
+    await reviewCandidate(candidate);
+  } finally {
+    candidate.cleanup();
+  }
+}
+
+async function reviewCandidate(candidate) {
+  const { extensionPath } = candidate;
   const fixtures = Object.fromEntries(await Promise.all(
     Object.entries(fixturePaths).map(async ([name, path]) => [name, await readFile(path)]),
   ));
@@ -265,10 +274,8 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
     const attestation = await terminal.question('Type ATTEST to evaluate final pass/fail predicates and emit the marker: ');
     if (attestation !== 'ATTEST') throw new Error('manual human attestation was not confirmed; marker was not emitted');
 
-    const marker = createManualActiveTabQaMarker({
-      commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
-      manifestSha256: sha256(await readFile(resolve(root, 'manifest.json'))),
-    });
+    if (assertCleanCandidateCommit(root) !== candidate.commit) throw new Error('candidate commit changed during human QA; marker was not emitted');
+    const marker = createManualActiveTabQaMarker(candidate);
     process.stdout.write('manual active-tab QA passed; save this local self-attestation outside the repository (for example ~/.local/state/clearchoice/active-tab-qa.json), then pass that path through CLEARCHOICE_ACTIVE_TAB_QA_MARKER:\n');
     process.stdout.write(`${JSON.stringify(marker, null, 2)}\n`);
   } finally {

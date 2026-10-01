@@ -16,7 +16,8 @@ const reviewer = 'local-human-attestation';
 
 function marker(overrides = {}) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    archiveSha256: 'c'.repeat(64),
     outcome: 'passed',
     cleanFixtureIntegrity: 'passed',
     dynamicFixtureIntegrity: 'passed',
@@ -28,8 +29,12 @@ function marker(overrides = {}) {
   };
 }
 
-test('accepts a deliberately supplied local human attestation marker for this commit and manifest', () => {
-  expect(validateManualActiveTabMarker(marker(), { commit, manifestSha256 })).toEqual({ ok: true });
+test('schema 3 binds the complete archive and rejects old or changed archive attestations', () => {
+  const archiveSha256 = 'c'.repeat(64);
+  const expected = { commit, manifestSha256, archiveSha256 };
+  expect(validateManualActiveTabMarker(marker({ schemaVersion: 3, archiveSha256 }), expected)).toEqual({ ok: true });
+  expect(validateManualActiveTabMarker(marker({ schemaVersion: 2 }), expected).ok).toBe(false);
+  expect(validateManualActiveTabMarker(marker({ schemaVersion: 3, archiveSha256: 'd'.repeat(64) }), expected).ok).toBe(false);
 });
 
 test.each([
@@ -42,7 +47,7 @@ test.each([
   ['a marker for another commit', marker({ commit: '0'.repeat(40) })],
   ['a marker for another manifest', marker({ manifestSha256: '0'.repeat(64) })],
 ])('rejects %s', (_label, value) => {
-  expect(validateManualActiveTabMarker(value, { commit, manifestSha256 }).ok).toBe(false);
+  expect(validateManualActiveTabMarker(value, { commit, manifestSha256, archiveSha256: 'c'.repeat(64) }).ok).toBe(false);
 });
 
 test.each([
@@ -54,20 +59,20 @@ test.each([
   ['form value', 'formValue', '4111 1111 1111 1111'],
   ['an unrelated key', 'unexpected', true],
 ])('rejects markers containing %s data', (_label, key, value) => {
-  const result = validateManualActiveTabMarker(marker({ [key]: value }), { commit, manifestSha256 });
+  const result = validateManualActiveTabMarker(marker({ [key]: value }), { commit, manifestSha256, archiveSha256: 'c'.repeat(64) });
   expect(result).toEqual({ ok: false, error: 'marker must contain exactly the required attestation fields' });
 });
 
 test('rejects required fields inherited through the prototype', () => {
   const inheritedMarker = Object.create(marker());
-  expect(validateManualActiveTabMarker(inheritedMarker, { commit, manifestSha256 })).toEqual({
+  expect(validateManualActiveTabMarker(inheritedMarker, { commit, manifestSha256, archiveSha256: 'c'.repeat(64) })).toEqual({
     ok: false,
     error: 'marker must be a JSON object',
   });
 });
 
 test.each([null, [], Object.assign(Object.create(null), marker())])('rejects malformed non-JSON marker objects', (value) => {
-  expect(validateManualActiveTabMarker(value, { commit, manifestSha256 })).toEqual({
+  expect(validateManualActiveTabMarker(value, { commit, manifestSha256, archiveSha256: 'c'.repeat(64) })).toEqual({
     ok: false,
     error: 'marker must be a JSON object',
   });
@@ -83,7 +88,7 @@ test.each([
   ['unexpected data', 'unexpected', true],
 ])('rejects %s inherited through the prototype', (_label, key, value) => {
   const inheritedMarker = Object.assign(Object.create({ [key]: value }), marker());
-  expect(validateManualActiveTabMarker(inheritedMarker, { commit, manifestSha256 })).toEqual({
+  expect(validateManualActiveTabMarker(inheritedMarker, { commit, manifestSha256, archiveSha256: 'c'.repeat(64) })).toEqual({
     ok: false,
     error: 'marker must be a JSON object',
   });
@@ -139,13 +144,7 @@ test('check:beta accepts a marker reached through an external parent-directory s
     await writeFile(resolve(targetDirectory, 'marker.json'), `${JSON.stringify(marker())}\n`);
     await symlink(targetDirectory, parentPath);
 
-    const result = spawnSync(process.execPath, ['scripts/check-beta.mjs', '--validate-marker-only'], {
-      cwd: root,
-      encoding: 'utf8',
-      env: { ...process.env, CLEARCHOICE_ACTIVE_TAB_QA_MARKER: resolve(parentPath, 'marker.json') },
-    });
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain('marker accepted');
+    expect(readManualActiveTabMarker(resolve(parentPath, 'marker.json'))).toEqual(marker());
   } finally {
     await rm(markerDirectory, { recursive: true, force: true });
   }

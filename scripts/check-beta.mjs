@@ -1,22 +1,14 @@
-import { execFileSync } from 'node:child_process';
 import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { sha256, validateManualActiveTabMarker } from './active-tab-qa.mjs';
-import { readCandidateVersionMapping, unpackedArchivePath } from './release-artifact.mjs';
+import { validateManualActiveTabMarker } from './active-tab-qa.mjs';
+import { prepareCandidateArchive } from './release-artifact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 
 function fail(message) {
   process.stderr.write(`check:beta failed: ${message}\n`);
   process.exit(1);
-}
-
-function expectedMarker() {
-  return {
-    commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
-    manifestSha256: sha256(readFileSync(resolve(root, 'manifest.json'))),
-  };
 }
 
 function isInsideRepository(path) {
@@ -72,30 +64,24 @@ function assertManualActiveTabMarker() {
     fail(`unable to read CLEARCHOICE_ACTIVE_TAB_QA_MARKER: ${error instanceof Error ? error.message : String(error)}`);
   }
 
-  const result = validateManualActiveTabMarker(marker, expectedMarker());
-  if (!result.ok) fail(result.error);
-  process.stdout.write('manual active-tab QA marker accepted\n');
-}
-
-function run(command, args) {
-  process.stdout.write(`\n$ ${command} ${args.join(' ')}\n`);
-  execFileSync(command, args, { cwd: root, stdio: 'inherit' });
+  const candidate = prepareCandidateArchive(root);
+  try {
+    const result = validateManualActiveTabMarker(marker, candidate);
+    if (!result.ok) throw new Error(result.error);
+    process.stdout.write('manual active-tab QA marker accepted; existing ZIP policy and exact bytes validated (no rebuild)\n');
+  } finally {
+    candidate.cleanup();
+  }
 }
 
 const argv = process.argv.slice(2);
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  readCandidateVersionMapping(root);
-  if (argv.length === 1 && argv[0] === '--validate-marker-only') {
-    assertManualActiveTabMarker();
-  } else if (argv.length === 0) {
-    assertManualActiveTabMarker();
-    run('npm', ['test', '--', '--run']);
-    run('npm', ['run', 'lint']);
-    run('npm', ['run', 'build']);
-    run('npm', ['run', 'e2e']);
-    run('npm', ['run', 'package:unpacked']);
-    run('node', ['scripts/verify-package.mjs', '--zip', unpackedArchivePath(root)]);
-  } else {
+  if (argv.length !== 0 && !(argv.length === 1 && argv[0] === '--validate-marker-only')) {
     fail('usage: node scripts/check-beta.mjs [--validate-marker-only]');
+  }
+  try {
+    assertManualActiveTabMarker();
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
   }
 }

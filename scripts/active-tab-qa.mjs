@@ -14,6 +14,7 @@ const REQUIRED_MARKER_FIELDS = new Set([
   'accessibility',
   'commit',
   'manifestSha256',
+  'archiveSha256',
   'reviewer',
 ]);
 
@@ -31,7 +32,11 @@ export function validateManualActiveTabMarker(marker, expected) {
     return { ok: false, error: 'marker must contain exactly the required attestation fields' };
   }
 
-  if (marker.schemaVersion !== 2) return { ok: false, error: 'marker schemaVersion must be 2' };
+  if (marker.schemaVersion !== 3) return { ok: false, error: 'marker schemaVersion must be 3' };
+  if (!/^[a-f0-9]{40}$/.test(marker.commit) || !/^[a-f0-9]{64}$/.test(marker.manifestSha256) || !/^[a-f0-9]{64}$/.test(marker.archiveSha256)) {
+    return { ok: false, error: 'marker commit and hashes must be fixed-format lowercase hex' };
+  }
+  if (marker.archiveSha256 !== expected.archiveSha256) return { ok: false, error: 'marker does not attest to the current archive' };
   if (marker.outcome !== 'passed') return { ok: false, error: 'marker outcome must be passed' };
   if (marker.cleanFixtureIntegrity !== 'passed') return { ok: false, error: 'marker must attest that clean fixture integrity passed' };
   if (marker.dynamicFixtureIntegrity !== 'passed') return { ok: false, error: 'marker must attest that dynamic fixture integrity passed' };
