@@ -100,6 +100,35 @@ it.each(['add', 'edit'])('history refresh preserves unrelated manual %s after a 
   expect(root.textContent).not.toContain('Observation changed or refreshed.');
 });
 
+it('does not leak suggestion invalidation through a failed deletion into a manual draft', async () => {
+  const { set } = await install(); const { root, view } = await mount();
+  click(root, 'add'); fill(root); submit(root);
+  await vi.waitFor(() => expect(root.textContent).toContain('Subscription saved locally.'));
+  const source = { id: 'f_source', origin: 'https://merchant.test', kind: 'recurring-charge' as const, reason: 'price-cadence' as const, screenedExcerpt: 'Monthly plan $10.00', firstSeen: new Date().toISOString(), latestSeen: new Date().toISOString(), status: 'needs-review' as const };
+  const control = document.createElement('button'); document.body.append(control);
+  view.reviewAsSubscription(source, control);
+  click(root, 'delete');
+  let failDelete!: (error: Error) => void;
+  set.mockImplementationOnce(() => new Promise((_, reject) => { failDelete = reject; }));
+  click(root, 'confirm-delete');
+  await vi.waitFor(() => expect(failDelete).toBeTypeOf('function'));
+  const reviewRoot = document.createElement('div'); document.body.append(reviewRoot);
+  const { mountReview } = await import('./review');
+  mountReview(reviewRoot, view.reviewAsSubscription, view.invalidateSuggestion);
+  reviewRoot.querySelector<HTMLButtonElement>('[data-action="review-refresh"]')!.click();
+  failDelete(new Error('quota'));
+  await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>('[data-subscription-action="add"]')!.disabled).toBe(false));
+  click(root, 'add'); fill(root);
+  const form = root.querySelector('form')!;
+  set.mockRejectedValueOnce(new Error('quota'));
+  submit(root);
+  await vi.waitFor(() => expect(root.querySelector<HTMLButtonElement>('[data-subscription-action="add"]')!.disabled).toBe(false));
+  expect(root.querySelector('form')).toBe(form);
+  expect(root.querySelector<HTMLInputElement>('[name="merchant"]')!.value).toBe('  Acme  ');
+  expect(root.textContent).toContain('Could not save local subscription.');
+  expect(root.textContent).not.toContain('Observation changed or refreshed.');
+});
+
 it('switches suggestion sources without saving a detached old form or carrying old fields', async () => {
   await install(); const { root, view } = await mount();
   const source = { id: 'f_first', origin: 'https://merchant.test', kind: 'recurring-charge' as const, reason: 'price-cadence' as const, screenedExcerpt: 'Monthly plan $10.00', firstSeen: new Date().toISOString(), latestSeen: new Date().toISOString(), status: 'needs-review' as const };

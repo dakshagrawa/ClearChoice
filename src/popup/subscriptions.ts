@@ -48,6 +48,8 @@ export function mountSubscriptions(root: HTMLElement) {
         remove.setAttribute('aria-label', `Delete subscription ${entry.merchant}`);
         remove.addEventListener('click', () => {
           if (busy) return;
+          suggestionOpen = false;
+          suggestionInvalidationPending = false;
           editor.innerHTML = '<div role="group" aria-label="Delete confirmation"><h3>Delete subscription?</h3><p></p><button type="button" data-subscription-action="cancel">Cancel</button><button type="button" data-subscription-action="confirm-delete">Delete subscription</button></div>';
           editor.querySelector('p')!.textContent = entry.merchant;
           const cancel = editor.querySelector<HTMLButtonElement>('[data-subscription-action="cancel"]')!;
@@ -75,6 +77,7 @@ export function mountSubscriptions(root: HTMLElement) {
   }
   function form(entry?: Subscription, source?: ReviewItem, returnControl?: HTMLButtonElement) {
     suggestionOpen = !!source;
+    suggestionInvalidationPending = false;
     status.textContent = 'Save explicitly to confirm changes.';
     editor.innerHTML = '<form novalidate><h3>Add subscription</h3><label>Merchant<input name="merchant" maxlength="120" required></label><label>Amount (positive, two decimal places)<input name="amount" inputmode="decimal" required></label><label>Currency (ISO code)<input name="currency" maxlength="3" value="USD" required></label><label>Cadence<select name="cadence"><option>weekly</option><option selected>monthly</option><option>quarterly</option><option>yearly</option><option>custom</option></select></label><label>Custom cadence description<input name="customDescription" maxlength="120"></label><label>Next billing date (YYYY-MM-DD, optional)<input name="nextBillingDate"></label><label>Notes (optional)<textarea name="notes" maxlength="500"></textarea></label><button type="button" data-subscription-action="cancel">Cancel</button><button type="submit">Save subscription</button></form>';
     const element = editor.querySelector('form')!;
@@ -118,9 +121,9 @@ export function mountSubscriptions(root: HTMLElement) {
           suggestionOpen = false; editor.replaceChildren(); status.textContent = 'Subscription saved locally.';
         } catch {
           status.textContent = 'Could not save local subscription. Check the list before retrying.';
-          if (suggestionInvalidationPending) status.textContent += ` ${invalidationMessage}`;
+          if (source && suggestionInvalidationPending) status.textContent += ` ${invalidationMessage}`;
         } finally {
-          if (suggestionInvalidationPending) {
+          if (source && suggestionInvalidationPending) {
             suggestionInvalidationPending = false;
             suggestionOpen = false;
             editor.replaceChildren();
