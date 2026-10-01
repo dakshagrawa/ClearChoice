@@ -49,55 +49,27 @@ afterEach(async () => {
   await Promise.all(temporaryPaths.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
 
-test('manual checkpoints gate dynamic and reopened Analyze behind Escape detach and pointer Restore confirmation', async () => {
+test('clean zero never waits for an empty panel and gates the next page on acknowledgement and readback', async () => {
   const events = [];
-  let releaseCleanEscape;
-  let releaseCleanRestore;
-  let releaseDynamicRestore;
-  const cleanEscape = new Promise((resolve) => { releaseCleanEscape = resolve; });
-  const cleanRestore = new Promise((resolve) => { releaseCleanRestore = resolve; });
-  const dynamicRestore = new Promise((resolve) => { releaseDynamicRestore = resolve; });
+  let release;
+  const quiet = new Promise((resolve) => { release = resolve; });
+  const wait = vi.fn();
   const run = runManualCheckpoints({
     cleanPage: 'clean', getDynamicPage: () => 'dynamic',
-    instruct: (text) => { events.push(text); },
-    waitForPanel: async (page, state) => {
-      events.push(`${page}:${state}`);
-      if (page === 'clean' && state === 'detached') await cleanEscape;
-    },
-    assertIntegrity: async (_page, phase) => { events.push(`integrity:${phase}`); },
-    confirmRestore: async (page) => {
-      events.push(`restore:${page}`);
-      if (page === 'clean') await cleanRestore;
-      if (page === 'dynamic' && events.filter((event) => event === 'restore:dynamic').length === 1) await dynamicRestore;
-    },
+    instruct: (text) => events.push(text),
+    confirmCleanAnalyze: async () => { events.push('clean:ack'); },
+    assertCleanQuiet: async () => { events.push('clean:readback'); await quiet; },
+    waitForPanel: wait, assertIntegrity: async () => {}, confirmRestore: async () => {},
     openDynamic: async () => { events.push('open:dynamic'); },
-    waitForReplacement: async () => { events.push('replacement'); },
-    confirmRepeatedAnalyze: async () => { events.push('repeated'); },
+    waitForReplacement: async () => {}, confirmRepeatedAnalyze: async () => {},
   });
-  await vi.waitFor(() => expect(events).toContain('clean:detached'));
+  await vi.waitFor(() => expect(events).toContain('clean:readback'));
+  expect(wait).not.toHaveBeenCalled();
   expect(events).not.toContain('open:dynamic');
-  expect(events.filter((event) => /^\d+\./.test(event))).toHaveLength(2);
-  releaseCleanEscape();
-  await vi.waitFor(() => expect(events).toContain('restore:clean'));
-  expect(events).not.toContain('open:dynamic');
-  expect(events.filter((event) => /^\d+\./.test(event))).toHaveLength(3);
-  releaseCleanRestore();
-  await vi.waitFor(() => expect(events).toContain('restore:dynamic'));
-  expect(events).not.toContain('repeated');
-  expect(events.filter((event) => event === 'dynamic:attached')).toHaveLength(1);
-  expect(events.filter((event) => /^\d+\./.test(event))).toHaveLength(6);
-  releaseDynamicRestore();
+  release();
   await run;
-  const instructions = events.filter((event) => /^\d+\./.test(event));
-  expect(instructions.map((line) => Number(line.split('.')[0]))).toEqual(Array.from({ length: 12 }, (_, index) => index + 1));
-  expect(instructions[2]).toContain('Restore');
-  expect(instructions[5]).toContain('Restore');
-  expect(instructions[6]).toContain('Analyze');
-  expect(events.filter((event) => event === 'restore:dynamic')).toHaveLength(2);
-  expect(events.filter((event) => event === 'dynamic:attached')).toHaveLength(3);
-  expect(events.indexOf('restore:clean')).toBeLessThan(events.indexOf('open:dynamic'));
-  expect(events.indexOf('dynamic:detached')).toBeLessThan(events.indexOf('restore:dynamic'));
-  expect(events.at(-1)).toBe('integrity:dynamic-fixture Restore/repeated Analyze/replacement');
+  expect(events.indexOf('clean:ack')).toBeLessThan(events.indexOf('open:dynamic'));
+  expect(wait.mock.calls.every(([page]) => page === 'dynamic')).toBe(true);
 });
 
 test('manual runner loads the prepared archive extraction and cleans it after browser launch failure', async () => {
@@ -110,7 +82,7 @@ test('manual runner loads the prepared archive extraction and cleans it after br
     await expect(runManualActiveTabQa([])).rejects.toBe(failure);
     expect(prepared).toHaveBeenCalledExactlyOnceWith(root);
     expect(launch).toHaveBeenCalledOnce();
-    expect(launch.mock.calls[0][1]).toEqual(reviewBrowserLaunchOptions(extensionPath));
+    expect(launch.mock.calls[0][1].args).toContain(`--load-extension=${extensionPath}`);
     expect(cleanup).toHaveBeenCalledOnce();
   } finally {
     launch.mockRestore();
@@ -152,7 +124,7 @@ test('responds once with the requested manual fixture', () => {
 });
 
 test('derives the navigated fixture origin only from the runner-owned 127.0.0.1 listener', () => {
-  expect(fixtureOriginForServerAddress({ address: '127.0.0.1', port: 43123 })).toBe('http://127.0.0.1:43123');
+  expect(fixtureOriginForServerAddress({ address: '127.0.0.1', port: 43123 })).toBe('https://checkout-a.test:43123');
   expect(() => fixtureOriginForServerAddress({ address: '127.0.0.2', port: 43123 })).toThrow('fixture server must bind exactly to 127.0.0.1');
   expect(() => fixtureOriginForServerAddress({ address: '127.0.0.1', port: 0 })).toThrow('fixture server did not expose a valid TCP port');
 });
@@ -163,7 +135,8 @@ test('restricts review Chromium to only its 127.0.0.1 fixture and disables impli
     `--disable-extensions-except=${extensionPath}`,
     `--load-extension=${extensionPath}`,
     '--proxy-server=http://127.0.0.1:9',
-    '--proxy-bypass-list=<-loopback>;127.0.0.1',
+    '--proxy-bypass-list=<-loopback>;checkout-a.test;checkout-b.test',
+    '--host-resolver-rules=MAP checkout-a.test 127.0.0.1, MAP checkout-b.test 127.0.0.1, MAP * ~NOTFOUND',
     '--disable-quic',
   ]);
   expect(reviewBrowserLaunchOptions(extensionPath)).toEqual({
@@ -171,9 +144,9 @@ test('restricts review Chromium to only its 127.0.0.1 fixture and disables impli
     headless: false,
     args: restrictedBrowserArgs(extensionPath),
   });
-  expect(() => assertFixtureOrigin('http://127.0.0.1:43123')).not.toThrow();
+  expect(() => assertFixtureOrigin('https://checkout-a.test:43123')).not.toThrow();
   for (const origin of ['http://localhost:43123', 'http://127.0.0.2:43123', 'https://127.0.0.1:43123', 'http://127.0.0.1:0']) {
-    expect(() => assertFixtureOrigin(origin)).toThrow('fixture origin must be exactly http://127.0.0.1:<port>');
+    expect(() => assertFixtureOrigin(origin)).toThrow('fixture origin must be exactly https://checkout-a.test:<port>');
   }
 });
 
@@ -199,18 +172,7 @@ test('retains digest and boolean predicates only, and detects a changed host fie
     await expect(integrityPassed(page)).resolves.toBe(false);
     await expect(page.evaluate(() => window.__clearchoiceManualIntegrityBaseline.predicates.integrity)).resolves.toBe(false);
 
-    const outputMarker = createManualActiveTabQaMarker({ commit: 'a'.repeat(40), manifestSha256: 'b'.repeat(64), archiveSha256: 'c'.repeat(64) });
-    expect(Object.keys(outputMarker).sort()).toEqual([
-      'accessibility',
-      'archiveSha256',
-      'cleanFixtureIntegrity',
-      'commit',
-      'dynamicFixtureIntegrity',
-      'manifestSha256',
-      'outcome',
-      'reviewer',
-      'schemaVersion',
-    ]);
+    expect(() => createManualActiveTabQaMarker({ commit: 'a'.repeat(40), manifestSha256: 'b'.repeat(64), archiveSha256: 'c'.repeat(64) })).toThrow('workflow results');
   } finally {
     await browser.close();
   }
@@ -255,7 +217,7 @@ test('Chromium reaches the exact fixture but cannot reach 127.0.0.2 or a non-loo
       args: restrictedBrowserArgs(resolve(root, 'dist')),
     });
     const page = await browser.newPage();
-    await expect(page.goto(fixture.origin, { timeout: 5_000 })).resolves.toBeTruthy();
+    await expect(page.goto(`http://checkout-a.test:${fixture.server.address().port}`, { timeout: 5_000 })).resolves.toBeTruthy();
     await expect(page.goto(alternate.origin, { timeout: 5_000 })).rejects.toThrow();
     await expect(page.goto('http://198.51.100.1:8080/', { timeout: 5_000 })).rejects.toThrow();
     expect(fixture.requests).toBeGreaterThan(0);

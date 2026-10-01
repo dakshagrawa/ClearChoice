@@ -5,7 +5,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unli
 import { resolve } from 'node:path';
 import { expect, test } from 'vitest';
 import * as artifacts from '../scripts/release-artifact.mjs';
-import { sha256 } from '../scripts/active-tab-qa.mjs';
+import { sha256, WORKFLOW_PREDICATES } from '../scripts/active-tab-qa.mjs';
 
 const scratch = '/home/daksh/.hermes/cache/scratch';
 function fixture(run) {
@@ -30,7 +30,7 @@ function fixture(run) {
     archiveSha256: sha256(readFileSync(archive)),
   };
   const marker = resolve(dir, 'synthetic-unit-marker.json');
-  writeFileSync(marker, JSON.stringify({ schemaVersion: 3, outcome: 'passed', cleanFixtureIntegrity: 'passed', dynamicFixtureIntegrity: 'passed', accessibility: true, reviewer: 'local-human-attestation', ...expected }));
+  writeFileSync(marker, JSON.stringify({ schemaVersion: 4, ...Object.fromEntries(WORKFLOW_PREDICATES.map((field) => [field, field === 'accessibility' ? true : 'passed'])), outcome: 'passed', cleanFixtureIntegrity: 'passed', dynamicFixtureIntegrity: 'passed', accessibility: true, reviewer: 'local-human-attestation', ...expected }));
   const bin = resolve(dir, 'bin');
   mkdirSync(bin);
   writeFileSync(resolve(bin, 'npm'), '#!/bin/sh\nprintf forbidden-npm-invocation >&2\nexit 99\n', { mode: 0o700 });
@@ -91,7 +91,7 @@ test('gate rejects stale commit and old schema synthetic markers', () => fixture
   writeFileSync(markerPath, JSON.stringify({ ...value, commit: '0'.repeat(40) }));
   expect(gate().stderr).toContain('current commit');
   writeFileSync(markerPath, JSON.stringify({ ...value, schemaVersion: 2 }));
-  expect(gate().stderr).toContain('schemaVersion must be 3');
+  expect(gate().stderr).toContain('schemaVersion must be 4');
 }));
 
 test('candidate rejects ZIP paths that alias the same extraction target', () => fixture(({ root, archive }) => {

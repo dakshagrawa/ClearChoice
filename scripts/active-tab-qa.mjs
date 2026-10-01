@@ -6,7 +6,14 @@ export function sha256(contents) {
 
 export const LOCAL_HUMAN_ATTESTATION = 'local-human-attestation';
 
+export const WORKFLOW_PREDICATES = Object.freeze([
+  'cleanFixtureIntegrity', 'dynamicFixtureIntegrity', 'accessibility',
+  'optInConsent', 'optInDenial', 'siteIsolation', 'automaticLifecycle',
+  'revocation', 'reviewHistory', 'subscriptions', 'retention', 'cancellationHelp',
+]);
+
 const REQUIRED_MARKER_FIELDS = new Set([
+  ...WORKFLOW_PREDICATES,
   'schemaVersion',
   'outcome',
   'cleanFixtureIntegrity',
@@ -32,7 +39,11 @@ export function validateManualActiveTabMarker(marker, expected) {
     return { ok: false, error: 'marker must contain exactly the required attestation fields' };
   }
 
-  if (marker.schemaVersion !== 3) return { ok: false, error: 'marker schemaVersion must be 3' };
+  if (marker.schemaVersion !== 4) return { ok: false, error: 'marker schemaVersion must be 4' };
+  for (const field of WORKFLOW_PREDICATES) {
+    const passed = field === 'accessibility' ? true : 'passed';
+    if (marker[field] !== passed) return { ok: false, error: `marker must attest that ${field} passed` };
+  }
   if (!/^[a-f0-9]{40}$/.test(marker.commit) || !/^[a-f0-9]{64}$/.test(marker.manifestSha256) || !/^[a-f0-9]{64}$/.test(marker.archiveSha256)) {
     return { ok: false, error: 'marker commit and hashes must be fixed-format lowercase hex' };
   }

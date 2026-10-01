@@ -16,7 +16,16 @@ const reviewer = 'local-human-attestation';
 
 function marker(overrides = {}) {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
+    optInConsent: 'passed',
+    optInDenial: 'passed',
+    siteIsolation: 'passed',
+    automaticLifecycle: 'passed',
+    revocation: 'passed',
+    reviewHistory: 'passed',
+    subscriptions: 'passed',
+    retention: 'passed',
+    cancellationHelp: 'passed',
     archiveSha256: 'c'.repeat(64),
     outcome: 'passed',
     cleanFixtureIntegrity: 'passed',
@@ -29,12 +38,24 @@ function marker(overrides = {}) {
   };
 }
 
-test('schema 3 binds the complete archive and rejects old or changed archive attestations', () => {
+test('schema 4 binds the complete archive and rejects old or changed archive attestations', () => {
   const archiveSha256 = 'c'.repeat(64);
   const expected = { commit, manifestSha256, archiveSha256 };
-  expect(validateManualActiveTabMarker(marker({ schemaVersion: 3, archiveSha256 }), expected)).toEqual({ ok: true });
-  expect(validateManualActiveTabMarker(marker({ schemaVersion: 2 }), expected).ok).toBe(false);
-  expect(validateManualActiveTabMarker(marker({ schemaVersion: 3, archiveSha256: 'd'.repeat(64) }), expected).ok).toBe(false);
+  expect(validateManualActiveTabMarker(marker(), expected)).toEqual({ ok: true });
+  for (const schemaVersion of [1, 2, 3]) {
+    expect(validateManualActiveTabMarker(marker({ schemaVersion }), expected).ok).toBe(false);
+  }
+  expect(validateManualActiveTabMarker(marker({ archiveSha256: 'd'.repeat(64) }), expected).ok).toBe(false);
+});
+
+test.each(['optInConsent', 'optInDenial', 'siteIsolation', 'automaticLifecycle', 'revocation', 'reviewHistory', 'subscriptions', 'retention', 'cancellationHelp'])('requires a concrete passed %s attestation', (field) => {
+  const expected = { commit, manifestSha256, archiveSha256: 'c'.repeat(64) };
+  for (const value of [false, true, 'failed', 'pending', null]) {
+    expect(validateManualActiveTabMarker(marker({ [field]: value }), expected).ok).toBe(false);
+  }
+  const missing = marker();
+  delete missing[field];
+  expect(validateManualActiveTabMarker(missing, expected).ok).toBe(false);
 });
 
 test.each([
