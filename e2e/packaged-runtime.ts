@@ -56,7 +56,7 @@ export class PackagedRuntime {
     await this.wakeWorker();
     this.page = await this.context.newPage();
   }
-  async start() {
+  async start({ pregrant = true }: { pregrant?: boolean } = {}) {
     this.root = await mkdtemp(join(tmpdir(), 'clearchoice-packaged-'));
     this.profile = join(this.root, 'profile');
     this.title = `ClearChoice-${this.root.split('/').at(-1)}`;
@@ -80,7 +80,7 @@ export class PackagedRuntime {
     }
     await this.launch(true);
     await this.context.close();
-    {
+    if (pregrant) {
       // ONLY isolated Chrome installation permission state. No application grant registry or records.
       const path = join(this.profile,'Default','Preferences');
       const preferences = JSON.parse(await readFile(path,'utf8'));

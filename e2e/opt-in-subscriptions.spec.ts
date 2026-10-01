@@ -2,6 +2,13 @@ import { expect, test } from 'playwright/test';
 import { readFile } from 'node:fs/promises';
 import { PackagedRuntime } from './packaged-runtime';
 
+async function badge(runtime: PackagedRuntime) {
+  return runtime.worker.evaluate(async () => {
+    const [tab] = await chrome.tabs.query({active:true,currentWindow:true});
+    return chrome.action.getBadgeText({tabId:tab.id});
+  });
+}
+
 // Reserved RFC2606 mock domains map only to loopback in isolated Chrome.
 // Only Chrome installation permissions are seeded, never the application registry.
 // This exercises production opt-in, NOT human toolbar/consent QA.
@@ -92,10 +99,12 @@ test('pre-granted reserved mock setup: native production opt-in, quiet zero, exp
     expect((await runtime.storage()).subscriptions).toEqual(subscriptions);
     await popup.close();
     await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(0);
+    expect(await badge(runtime)).toBe('');
     const revokedHistory = (await runtime.storage()).reviewHistory;
     await runtime.page.goto(runtime.a+'/checkout/identical');
     await runtime.page.waitForTimeout(500);
     expect((await runtime.storage()).reviewHistory).toEqual(revokedHistory);
+    expect(await badge(runtime)).toBe('');
     expect(await runtime.page.locator('[data-clearchoice-panel]').count()).toBe(0);
     expect(await runtime.inventory()).toEqual(before);
     const finalStorage = await runtime.storage();
@@ -154,6 +163,66 @@ test('native packaged popup: real manual CRUD, help fallback, focus and Axe, ret
     await popup.wait(`document.querySelector('[aria-label="Subscriptions"] > [role="status"]').textContent === 'Subscription deleted locally.'`);
     expect((await runtime.storage()).subscriptions).toEqual([]);
     expect(await popup.evaluate(`document.activeElement.dataset.subscriptionAction`)).toBe('add');
+    expect(await runtime.inventory()).toEqual(before);
+  } finally { await runtime.stop(); }
+});
+
+test('no-host native openPopup Analyze honestly denies without activeTab (NOT human toolbar QA)', async () => {
+  test.setTimeout(60_000);
+  const runtime = new PackagedRuntime();
+  try {
+    const before = await runtime.inventory();
+    await runtime.start({ pregrant: false });
+    expect((await runtime.permissions()).permissions.origins).toEqual([]);
+    expect((await runtime.permissions()).scripts).toEqual([]);
+    expect((await runtime.storage()).grantState ?? {version:1,sites:{}}).toEqual({version:1,sites:{}});
+    await runtime.page.goto(runtime.a+'/checkout/recurring');
+    const popup = await runtime.popup();
+    await popup.click('[data-action="analyze"]');
+    // openPopup() is real Chrome UI, but unlike a human toolbar invocation it does
+    // not acquire activeTab. Never seed a host grant to turn this denial into success.
+    await popup.wait(`document.querySelector('main > [role="status"]').textContent === 'Chrome does not allow ClearChoice to analyze this page.'`);
+    await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(0);
+    expect((await runtime.storage()).reviewHistory ?? []).toEqual([]);
+    expect(await badge(runtime)).toBe('');
+    expect((await runtime.permissions()).permissions.origins).toEqual([]);
+    expect((await runtime.permissions()).scripts).toEqual([]);
+    expect((await runtime.storage()).grantState ?? {version:1,sites:{}}).toEqual({version:1,sites:{}});
+    expect((await runtime.storage()).subscriptions ?? []).toEqual([]);
+    await popup.close();
+    expect(await runtime.inventory()).toEqual(before);
+  } finally { await runtime.stop(); }
+});
+
+test('pre-granted identical findings stay distinct; actual unsupported Analyze is quiet (NOT consent QA)', async () => {
+  test.setTimeout(60_000);
+  const runtime = new PackagedRuntime();
+  try {
+    const before = await runtime.inventory();
+    await runtime.start();
+    let popup = await runtime.popup();
+    await popup.click('[data-action="site-enable"]');
+    await popup.wait(`document.querySelector('[data-site-status]').textContent.startsWith('Detection enabled for')`);
+    await popup.close();
+    await runtime.page.goto(runtime.a+'/checkout/identical');
+    await expect(runtime.page.locator('[data-clearchoice-panel] article')).toHaveCount(2);
+    const records = (await runtime.storage()).reviewHistory as {id:string;ordinal:number;screenedExcerpt:string;opaqueFingerprint:string}[];
+    expect(records).toHaveLength(2);
+    expect(new Set(records.map(record=>record.id)).size).toBe(2);
+    expect(records.map(record=>record.ordinal).sort()).toEqual([1,2]);
+    expect(new Set(records.map(record=>record.screenedExcerpt)).size).toBe(1);
+    expect(new Set(records.map(record=>record.opaqueFingerprint)).size).toBe(1);
+    expect(await badge(runtime)).toBe('2');
+    expect((await runtime.storage()).subscriptions ?? []).toEqual([]);
+    await runtime.page.goto(runtime.a+'/outside');
+    popup = await runtime.popup();
+    await popup.click('[data-action="analyze"]');
+    await popup.wait(`document.querySelector('main > [role="status"]').textContent === 'This page does not look like a supported English checkout page.'`);
+    await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(0);
+    expect(await badge(runtime)).toBe('');
+    expect((await runtime.storage()).reviewHistory).toEqual(records);
+    expect((await runtime.storage()).subscriptions ?? []).toEqual([]);
+    await popup.close();
     expect(await runtime.inventory()).toEqual(before);
   } finally { await runtime.stop(); }
 });
