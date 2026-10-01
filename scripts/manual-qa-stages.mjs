@@ -1,3 +1,4 @@
+/* global setTimeout, crypto, TextEncoder */
 // Enclose acquisition as well as work: every registered closer is attempted,
 // and cleanup cannot replace the first operation failure (even a falsy throw).
 export async function runWithCleanup(operation, steps) {
@@ -22,6 +23,85 @@ export async function runHumanStage({ instruction, instruct, observe, acknowledg
   if (await observe() !== true) throw new Error('human stage observable predicate failed');
   if (await acknowledge() !== 'DONE') throw new Error('human stage acknowledgement missing');
   return true;
+}
+
+export async function waitForObservation(observe, { timeoutMs = 300_000, intervalMs = 200 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await observe() === true) return true;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error('human stage observation timed out; marker was not emitted');
+}
+
+// Serialized into the genuine worker. Raw mock records are transient; only hashes
+// and generation numbers survive a call. No writes, messages or permission grants.
+export async function observeSiteState(api, mode, origin, host = globalThis) {
+  if (!/^https:\/\/checkout-[ab]\.test:[1-9]\d{0,4}$/.test(origin) || new URL(origin).port > 65535) throw new Error('invalid mock origin');
+  const stored = await api.storage.local.get(null);
+  const history = stored.reviewHistory ?? [];
+  const subscriptions = stored.subscriptions ?? [];
+  const sites = stored.grantState?.sites ?? {};
+  if (!Array.isArray(history) || !Array.isArray(subscriptions) || !sites || Array.isArray(sites)
+    || typeof sites !== 'object') throw new Error('site storage unavailable');
+  const digest = async (value) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const historyDigest = await digest(history);
+  const subscriptionsDigest = await digest(subscriptions);
+  if (mode === 'baseline') {
+    host.__qaHistoryDigest = historyDigest;
+    host.__qaSubscriptionsDigest ??= subscriptionsDigest;
+    host.__qaHistoryCount ??= history.length;
+    const active = await api.tabs.query({ active: true, currentWindow: true });
+    if (active.length !== 1 || !Number.isInteger(active[0].id)) throw new Error('site tab baseline unavailable');
+    host.__qaTabId = active[0].id;
+    return { passed: true, historyCount: history.length, subscriptionCount: subscriptions.length };
+  }
+  const permissions = await api.permissions.getAll();
+  const scripts = await api.scripting.getRegisteredContentScripts();
+  const tabs = await api.tabs.query({ active: true, currentWindow: true });
+  if (mode === 'enabled' && tabs.length === 1 && Number.isInteger(tabs[0].id) && tabs[0].url === undefined) {
+    // Await the genuine toolbar/permission gesture; missing activeTab is not success.
+    return { passed: false, historyCount: history.length, subscriptionCount: subscriptions.length };
+  }
+  if (tabs.length !== 1 || !Number.isInteger(tabs[0].id)
+    || (tabs[0].url !== undefined && new URL(tabs[0].url).origin !== origin)
+    || (tabs[0].url === undefined && (!['quiet', 'revoked'].includes(mode) || tabs[0].id !== host.__qaTabId))) throw new Error('site tab readback unavailable');
+  if (!Array.isArray(permissions.origins) || !Array.isArray(scripts)) throw new Error('site browser readback unavailable');
+  const pattern = origin + '/*';
+  const permitted = await api.permissions.contains({ origins: [pattern] });
+  const id = 'clearchoice-site-' + await digestOrigin(origin);
+  async function digestOrigin(value) {
+    return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  }
+  const exactScripts = scripts.filter((script) => script.id === id || script.matches?.includes(pattern));
+  const registered = exactScripts.length === 1 && exactScripts[0].id === id
+    && exactScripts[0].matches?.length === 1 && exactScripts[0].matches[0] === pattern
+    && exactScripts[0].js?.length === 1 && exactScripts[0].js[0] === 'content.js'
+    && exactScripts[0].allFrames === false && exactScripts[0].persistAcrossSessions === true && exactScripts[0].world === 'ISOLATED';
+  const grant = sites[origin];
+  const enabled = permitted && permissions.origins.includes(pattern) && registered
+    && grant?.enabled === true && Number.isSafeInteger(grant.generation) && grant.generation > 0;
+  const badge = await api.action.getBadgeText({ tabId: tabs[0].id });
+  const subscriptionsUnchanged = subscriptionsDigest === host.__qaSubscriptionsDigest;
+  let passed = false;
+  if (mode === 'enabled') passed = enabled && subscriptionsUnchanged && historyDigest === host.__qaHistoryDigest && badge === '';
+  else if (mode === 'positive') passed = enabled && subscriptionsUnchanged && history.length >= host.__qaHistoryCount
+    && historyDigest !== host.__qaHistoryDigest
+    && history.some((item) => item.origin === origin && item.kind === 'recurring-charge') && badge === '1';
+  else if (mode === 'quiet') passed = !permitted && !permissions.origins.includes(pattern) && !grant
+    && exactScripts.length === 0 && !history.some((item) => item.origin === origin)
+    && historyDigest === host.__qaHistoryDigest && subscriptionsUnchanged && badge === '';
+  else if (mode === 'before-revoke') {
+    if (!enabled || !subscriptionsUnchanged) throw new Error('revoke baseline unavailable');
+    host.__qaRevokeHistoryDigest = historyDigest;
+    host.__qaRevokeGeneration = grant.generation;
+    host.__qaTabId = tabs[0].id;
+    passed = true;
+  } else if (mode === 'revoked') passed = !permitted && !permissions.origins.includes(pattern) && exactScripts.length === 0
+    && grant?.enabled === false && grant.generation === host.__qaRevokeGeneration + 1
+    && historyDigest === host.__qaRevokeHistoryDigest && subscriptionsUnchanged && badge === '';
+  else throw new Error('unknown site observation mode');
+  return { passed, historyCount: history.length, subscriptionCount: subscriptions.length };
 }
 
 // Pristine clean-stage schema only, not a general loader. Nonempty or corrupt

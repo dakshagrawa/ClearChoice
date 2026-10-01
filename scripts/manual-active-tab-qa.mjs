@@ -1,4 +1,4 @@
-/* global window, location, document */
+/* global window, location, document, setTimeout, AbortSignal */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:https';
 import { tmpdir } from 'node:os';
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createFixtureTls, mockCheckoutHtml } from './manual-qa-fixtures.mjs';
 import { LOCAL_HUMAN_ATTESTATION, WORKFLOW_PREDICATES, validateManualActiveTabMarker, sha256 } from './active-tab-qa.mjs';
-import { observeCleanState, runWithCleanup } from './manual-qa-stages.mjs';
+import { observeCleanState, observeSiteState, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
 import { prepareCandidateArchive } from './release-artifact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -171,6 +171,36 @@ export async function runManualCheckpoints({ cleanPage, getDynamicPage, instruct
   await check(dynamicPage, 'dynamic-fixture Restore/repeated Analyze/replacement');
 }
 
+// This slice deliberately returns no attestation predicates or marker.
+export async function runSiteCheckpoints({ instruct, acknowledge, navigate, read, quiet, positive, denied, integrity, mutate }) {
+  const stage = (instruction, observe) => runHumanStage({ instruction, instruct, observe, acknowledge });
+  await navigate('a', false);
+  await read('baseline', 'a');
+  await stage('13. A CLEAN: pointer-click toolbar, then Enable detection for this site. ALLOW the real Chrome permission prompt. Leave popup open; no simulated permission is accepted.', async () => await read('enabled', 'a') && await quiet('a'));
+  await integrity('a');
+  await navigate('a', true);
+  await stage('14. A POSITIVE: do not press Analyze or Save. Observe automatic recurring findings, panel and badge; acknowledge only after they appear.', async () => await read('positive', 'a') && await positive('a'));
+  await integrity('a');
+  await navigate('b', true);
+  await read('baseline', 'b');
+  if (!await read('quiet', 'b') || !await quiet('b')) throw new Error('unopted B isolation predicate failed');
+  await integrity('b');
+  await stage('15. B DENIAL: pointer-click toolbar, then Enable detection for this site. DENY the real Chrome permission prompt. Keep popup open with Access denied status. If Chrome offers no genuine prompt, abort; do not simulate it.', async () => await denied() && await read('quiet', 'b') && await quiet('b'));
+  await integrity('b');
+  await navigate('a', true);
+  if (!await read('positive', 'a') || !await positive('a')) throw new Error('automatic A revisit predicate failed');
+  await read('before-revoke', 'a');
+  await stage('16. A REVOKE: pointer-click toolbar, then Disable detection for this site. Wait for panel and badge to clear.', async () => await read('revoked', 'a') && await quiet('a'));
+  await integrity('a');
+  instruct('17. A REVOKED: pointer-click Replace fake order summary. Detection must remain off.');
+  await mutate();
+  if (!await read('revoked', 'a') || !await quiet('a')) throw new Error('revoked mutation predicate failed');
+  await integrity('a');
+  await navigate('a', true);
+  if (!await read('revoked', 'a') || !await quiet('a')) throw new Error('revoked revisit predicate failed');
+  await integrity('a');
+}
+
 export function createManualActiveTabQaMarker({ commit, manifestSha256, archiveSha256 }, results) {
   if (!results || Object.getPrototypeOf(results) !== Object.prototype
       || Reflect.ownKeys(results).length !== WORKFLOW_PREDICATES.length
@@ -290,7 +320,51 @@ export async function reviewCandidate(candidate, {
         await dynamicPage.waitForFunction(() => document.querySelector('#fake-order-summary')?.textContent?.includes('updated') === true, undefined, { timeout: 300_000 });
       },
     });
-    throw new Error('expanded opt-in, history, subscription, retention and cancellation-help stages are pending; no ATTEST or marker is available');
+    const pages = { a: dynamicPage };
+    const origins = { a: fixtureOrigin, b: fixtureOrigin.replace('checkout-a.test', 'checkout-b.test') };
+    const popupUrl = new URL('/popup/index.html', worker.url()).href;
+    const siteRead = async (mode, site) => {
+      if (new URL(pages[site].url()).origin !== origins[site]) throw new Error('mock page origin changed');
+      const observe = async () => (await worker.evaluate(`(${observeSiteState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins[site])})`)).passed;
+      if (['baseline', 'before-revoke'].includes(mode)) return observe();
+      await waitForObservation(observe);
+      if (['quiet', 'revoked'].includes(mode)) {
+        // Observe a bounded quiet interval, not merely a single early sample.
+        for (let sample = 0; sample < 5; sample++) {
+          await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+          if (!await observe()) throw new Error('quiet site changed during observation');
+        }
+      }
+      return true;
+    };
+    await runSiteCheckpoints({
+      instruct: (text) => process.stdout.write(`${text}\n`),
+      acknowledge: () => terminal.question('Type DONE only after the requested real human action and observation (anything else aborts): ', { signal: AbortSignal.timeout(300_000) }),
+      navigate: async (site, positive) => {
+        pages[site] ??= await context.newPage();
+        await pages[site].goto(`${origins[site]}/checkout/${positive ? 'dynamic-beta#checkout' : 'clean'}`);
+        await captureIntegrityBaseline(pages[site]);
+        await pages[site].bringToFront();
+      },
+      read: siteRead,
+      quiet: async (site) => await pages[site].locator('aside[data-clearchoice-panel]').count() === 0,
+      positive: async (site) => {
+        await waitForPanel(pages[site], 'attached');
+        return await pages[site].locator('aside[data-clearchoice-panel]').count() === 1;
+      },
+      denied: async () => {
+        // Exact production status, from the genuine action popup, precedes DONE.
+        const popup = context.pages().find((page) => page.url() === popupUrl)
+          ?? await context.waitForEvent('page', { predicate: (page) => page.url() === popupUrl, timeout: 300_000 });
+        await popup.locator('[data-site-status]').filter({ hasText: `Access denied for ${origins.b}; detection remains off.` }).waitFor({ timeout: 300_000 });
+        return await popup.locator('[data-site-status]').textContent() === `Access denied for ${origins.b}; detection remains off.`;
+      },
+      integrity: (site) => assertIntegrity(pages[site], 'site permission checkpoint'),
+      mutate: async () => {
+        await pages.a.waitForFunction(() => document.querySelector('#fake-order-summary')?.textContent?.includes('updated') === true, undefined, { timeout: 300_000 });
+      },
+    });
+    throw new Error('expanded history CRUD, subscription, retention, restart durability and cancellation-help stages are pending; no ATTEST or marker is available');
   }, [
     () => terminal?.close(),
     () => context?.close(),

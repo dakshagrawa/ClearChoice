@@ -23,6 +23,7 @@ import {
   reviewBrowserLaunchOptions,
   runManualActiveTabQa,
   runManualCheckpoints,
+  runSiteCheckpoints,
   runCleanupSteps,
   recheckCandidateBinding,
   reviewCandidate,
@@ -138,6 +139,27 @@ test('clean zero never waits for an empty panel and gates the next page on ackno
   await run;
   expect(events.indexOf('clean:ack')).toBeLessThan(events.indexOf('open:dynamic'));
   expect(wait.mock.calls.every(([page]) => page === 'dynamic')).toBe(true);
+});
+
+test('site workflow cannot treat quiet state as denial or advance before acknowledgement', async () => {
+  const events = [];
+  let denialObserved = false;
+  const options = {
+    instruct: () => {}, acknowledge: async () => { events.push('ack'); return 'DONE'; },
+    navigate: async (site, positive) => events.push(`visit:${site}:${positive}`),
+    read: async (mode, site) => { events.push(`${mode}:${site}`); return true; },
+    quiet: async () => true, positive: async () => true,
+    denied: async () => denialObserved,
+    integrity: async () => {}, mutate: async () => {},
+  };
+  await expect(runSiteCheckpoints(options)).rejects.toThrow('observable');
+  expect(events).not.toContain('before-revoke:a');
+  expect(events.filter((event) => event === 'ack')).toHaveLength(2);
+  denialObserved = true;
+  events.length = 0;
+  await runSiteCheckpoints(options);
+  expect(events.indexOf('quiet:b')).toBeLessThan(events.indexOf('before-revoke:a'));
+  expect(events.filter((event) => event === 'revoked:a')).toHaveLength(3);
 });
 
 test('manual runner loads the prepared archive extraction and cleans it after browser launch failure', async () => {

@@ -2,7 +2,7 @@
 import { expect, test } from 'vitest';
 import { WORKFLOW_PREDICATES } from '../scripts/active-tab-qa.mjs';
 import { createManualActiveTabQaMarker } from '../scripts/manual-active-tab-qa.mjs';
-import { runHumanStage, runWithCleanup, observeCleanState } from '../scripts/manual-qa-stages.mjs';
+import { runHumanStage, runWithCleanup, observeCleanState, observeSiteState, waitForObservation } from '../scripts/manual-qa-stages.mjs';
 
 test('exact clean readback rejects nested arrays and malformed storage rather than ignoring it', async () => {
   for (const state of [{ localState: { version: 1, reviewHistory: [{}], subscriptions: [] } },
@@ -72,6 +72,65 @@ test('cleanup preserves setup or workflow failure and attempts every closer exac
 test('cleanup-only failure is surfaced rather than silently discarded', async () => {
   const failure = new Error('candidate cleanup failed');
   await expect(runWithCleanup(async () => true, [async () => { throw failure; }])).rejects.toBe(failure);
+});
+
+test('site readback binds exact permission, grant and script; revoke preserves records without creating subscriptions', async () => {
+  const origin = 'https://checkout-a.test:123';
+  const state = { version: 1, reviewHistory: [], subscriptions: [{ id: 'fake-confirmed' }], grantState: { version: 1, sites: {} } };
+  const api = cleanApi(state);
+  const host = {};
+  await observeSiteState(api, 'baseline', origin, host);
+  api.tabs.query = async () => [{ id: 7 }];
+  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(false);
+  api.tabs.query = async () => [{ id: 7, url: origin + '/checkout/clean' }];
+  api.permissions.getAll = async () => ({ origins: [origin + '/*'] });
+  api.permissions.contains = async () => true;
+  state.grantState.sites[origin] = { enabled: true, generation: 1 };
+  const script = { id: 'clearchoice-site-b93005a526dc3134fdd360798aad3e73fbb20a3d50c16ebe605a4d4947098925', matches: [origin + '/*'], js: ['content.js'], allFrames: false, persistAcrossSessions: true, world: 'ISOLATED' };
+  api.scripting.getRegisteredContentScripts = async () => [script];
+  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(true);
+  state.grantState.sites[origin].generation = 0;
+  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(false);
+  state.grantState.sites[origin].generation = 1;
+  api.permissions.getAll = async () => ({ origins: ['https://checkout-b.test:123/*'] });
+  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(false);
+  api.permissions.getAll = async () => ({ origins: [origin + '/*'] });
+  state.subscriptions.push({ id: 'unwanted-auto-created' });
+  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(false);
+  state.subscriptions.pop();
+  script.world = 'MAIN';
+  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(false);
+  script.world = 'ISOLATED';
+  state.reviewHistory.push({ origin, kind: 'recurring-charge', id: 'fake-observation' });
+  api.action.getBadgeText = async () => '1';
+  expect((await observeSiteState(api, 'positive', origin, host)).passed).toBe(true);
+  await observeSiteState(api, 'before-revoke', origin, host);
+  expect((await observeSiteState(api, 'revoked', origin, host)).passed).toBe(false);
+  state.grantState.sites[origin] = { enabled: false, generation: 2 };
+  api.permissions.getAll = async () => ({ origins: [] });
+  api.permissions.contains = async () => false;
+  api.scripting.getRegisteredContentScripts = async () => [];
+  api.action.getBadgeText = async () => '';
+  expect((await observeSiteState(api, 'revoked', origin, host)).passed).toBe(true);
+  state.reviewHistory.push({ origin, kind: 'recurring-charge' });
+  expect((await observeSiteState(api, 'revoked', origin, host)).passed).toBe(false);
+  expect(state.subscriptions).toEqual([{ id: 'fake-confirmed' }]);
+  api.tabs.query = async () => [{ id: 7, url: 'https://wrong.test/' }];
+  await expect(observeSiteState(api, 'revoked', origin, host)).rejects.toThrow('tab');
+  expect(Object.values(host).every((value) => typeof value === 'string' ? /^[a-f0-9]{64}$/.test(value) : typeof value === 'number')).toBe(true);
+});
+
+test('missing permission cannot by itself prove human denial', async () => {
+  let ack = false;
+  await expect(runHumanStage({ instruction: 'Deny.', instruct: () => {}, observe: async () => false,
+    acknowledge: async () => { ack = true; return 'DONE'; } })).rejects.toThrow('observable');
+  expect(ack).toBe(false);
+});
+
+test('bounded observation retries pending state and fails truthfully on timeout', async () => {
+  let attempts = 0;
+  await expect(waitForObservation(async () => ++attempts === 2, { timeoutMs: 100, intervalMs: 1 })).resolves.toBe(true);
+  await expect(waitForObservation(async () => false, { timeoutMs: 5, intervalMs: 1 })).rejects.toThrow('timed out');
 });
 
 const candidate = { commit: 'a'.repeat(40), manifestSha256: 'b'.repeat(64), archiveSha256: 'c'.repeat(64) };
