@@ -1,4 +1,4 @@
-/* global window, location, document, chrome */
+/* global window, location, document */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:https';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createFixtureTls, mockCheckoutHtml } from './manual-qa-fixtures.mjs';
 import { LOCAL_HUMAN_ATTESTATION, WORKFLOW_PREDICATES, validateManualActiveTabMarker, sha256 } from './active-tab-qa.mjs';
+import { observeCleanState, runWithCleanup } from './manual-qa-stages.mjs';
 import { prepareCandidateArchive } from './release-artifact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -83,15 +84,7 @@ function closeServer(server) {
 }
 
 export async function runCleanupSteps(steps) {
-  let firstFailure;
-  for (const step of steps) {
-    try {
-      await step();
-    } catch (error) {
-      firstFailure ??= error;
-    }
-  }
-  if (firstFailure) throw firstFailure;
+  await runWithCleanup(async () => {}, steps);
 }
 
 async function integrityDigest(page) {
@@ -191,41 +184,65 @@ export function createManualActiveTabQaMarker({ commit, manifestSha256, archiveS
   return marker;
 }
 
-export async function runManualActiveTabQa(argv = process.argv.slice(2)) {
-  parseArguments(argv);
-  const candidate = prepareCandidateArchive(root);
-  try {
-    await reviewCandidate(candidate);
-  } finally {
-    candidate.cleanup();
-  }
+// Mandatory immediately before any future marker emission, after ALL human stages.
+// Revalidate the current complete ZIP and clean source via the same reviewed API;
+// never rebuild and never substitute this verification extraction for the reviewed one.
+export async function recheckCandidateBinding(repositoryRoot, initial) {
+  const current = prepareCandidateArchive(repositoryRoot);
+  return runWithCleanup(async () => {
+    if (['commit', 'manifestSha256', 'archiveSha256'].some((key) => current[key] !== initial[key])) {
+      throw new Error('candidate changed since initial review; marker was not emitted');
+    }
+    return true;
+  }, [() => current.cleanup()]);
 }
 
-async function reviewCandidate(candidate) {
+export async function runManualActiveTabQa(argv = process.argv.slice(2), { prepare = prepareCandidateArchive, review = reviewCandidate } = {}) {
+  parseArguments(argv);
+  const candidate = prepare(root);
+  await runWithCleanup(() => review(candidate), [() => candidate.cleanup()]);
+}
+
+export async function reviewCandidate(candidate, {
+  createTls = createFixtureTls, makeServer = createServer, createProfile = mkdtemp,
+  launchContext = (...args) => chromium.launchPersistentContext(...args), removeProfile = rm,
+} = {}) {
   const { extensionPath } = candidate;
-  const tls = await createFixtureTls();
-  const fixtures = { clean: mockCheckoutHtml(), dynamic: mockCheckoutHtml(true) };
-  const server = createServer({ key: tls.key, cert: tls.cert }, (request, response) => {
-    serveFixture(request.url, response, fixtures);
-  });
-  await new Promise((resolveListen, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolveListen);
-  });
+  let tls;
+  let server;
   let profile;
   let context;
   let terminal;
-  try {
+  await runWithCleanup(async () => {
+    tls = await createTls();
+    const fixtures = { clean: mockCheckoutHtml(), dynamic: mockCheckoutHtml(true) };
+    server = makeServer({ key: tls.key, cert: tls.cert }, (request, response) => {
+      serveFixture(request.url, response, fixtures);
+    });
+    await new Promise((resolveListen, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolveListen);
+    });
     const address = server.address();
     if (!address || typeof address === 'string') throw new Error('fixture server did not expose a TCP port');
     const fixtureOrigin = fixtureOriginForServerAddress(address);
 
-    profile = await mkdtemp(resolve(tmpdir(), 'clearchoice-manual-active-tab-'));
-    context = await chromium.launchPersistentContext(profile, reviewBrowserLaunchOptions(extensionPath, tls.pin));
+    profile = await createProfile(resolve(tmpdir(), 'clearchoice-manual-active-tab-'));
+    context = await launchContext(profile, reviewBrowserLaunchOptions(extensionPath, tls.pin));
     const cleanPage = await context.newPage();
     await cleanPage.goto(`${fixtureOrigin}/checkout/clean`);
     await captureIntegrityBaseline(cleanPage);
     await cleanPage.bringToFront();
+    const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
+    const cleanUrl = `${fixtureOrigin}/checkout/clean`;
+    const readClean = async (mode) => {
+      const predicates = await worker.evaluate(`(${observeCleanState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(cleanUrl)})`);
+      if (!predicates.storageValid || !predicates.unchanged || !predicates.badgeBlank
+        || ['historyCount', 'subscriptionCount', 'permissionCount', 'scriptCount', 'grantCount'].some((key) => predicates[key] !== 0)) {
+        throw new Error('clean zero storage, badge or detection-state predicate failed');
+      }
+    };
+    await readClean('capture');
 
     process.stdout.write('\nManual active-tab QA is waiting. In the runner-provided visible Chromium window:\n');
     process.stdout.write('That Chromium can access only the two HTTPS reserved .test fixtures mapped to 127.0.0.1 and the extension; its dead proxy blocks every other host including alternate loopback hosts, so it cannot validate real sites. This boundary applies only to Chromium launched by this runner, not other browser instances.\n');
@@ -239,17 +256,15 @@ async function reviewCandidate(candidate) {
       waitForPanel,
       assertIntegrity,
       confirmCleanAnalyze: async () => {
-        if (await terminal.question('Type DONE only after Analyze reports no findings: ') !== 'DONE') throw new Error('clean Analyze not acknowledged');
+        // Observe the genuine popup outcome; a quiet page alone cannot prove Analyze.
+        const isPopup = (page) => page.url().startsWith('chrome-extension://') && page.url().endsWith('/popup/index.html');
+        const popup = context.pages().find(isPopup) ?? await context.waitForEvent('page', { predicate: isPopup, timeout: 300_000 });
+        await popup.locator('main > p[role="status"]').filter({ hasText: /^No matching signals found on this page\.$/ }).waitFor({ timeout: 300_000 });
+        if (await terminal.question('Leave the popup open. Type DONE only after the real Analyze reports no findings: ') !== 'DONE') throw new Error('clean Analyze not acknowledged');
       },
       assertCleanQuiet: async (page) => {
         if (await page.locator('aside[data-clearchoice-panel]').count() !== 0) throw new Error('clean zero displayed a panel');
-        const worker = context.serviceWorkers()[0];
-        if (!worker) throw new Error('extension worker unavailable for quiet-state readback');
-        const quiet = await worker.evaluate(async () => {
-          const state = await chrome.storage.local.get(null);
-          return Object.values(state).every((value) => !Array.isArray(value) || value.length === 0);
-        });
-        if (!quiet) throw new Error('clean zero changed stored history or confirmations');
+        await readClean('compare');
       },
       confirmRestore: async () => {
         if (await terminal.question('Type RESTORED after both pointer clicks (anything else aborts): ') !== 'RESTORED') {
@@ -276,15 +291,13 @@ async function reviewCandidate(candidate) {
       },
     });
     throw new Error('expanded opt-in, history, subscription, retention and cancellation-help stages are pending; no ATTEST or marker is available');
-  } finally {
-    await runCleanupSteps([
-      () => terminal?.close(),
-      () => context?.close(),
-      () => closeServer(server),
-      () => profile && rm(profile, { recursive: true, force: true }),
-      () => tls.cleanup(),
-    ]);
-  }
+  }, [
+    () => terminal?.close(),
+    () => context?.close(),
+    () => server && closeServer(server),
+    () => profile && removeProfile(profile, { recursive: true, force: true }),
+    () => tls?.cleanup(),
+  ]);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

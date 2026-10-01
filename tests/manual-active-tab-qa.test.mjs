@@ -1,11 +1,16 @@
 // @vitest-environment node
 /* global window */
+import { execFileSync } from 'node:child_process';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
+import { createFixtureTls } from '../scripts/manual-qa-fixtures.mjs';
 import { lstat, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { afterEach, expect, test, vi } from 'vitest';
+import { observeCleanState } from '../scripts/manual-qa-stages.mjs';
 import * as artifacts from '../scripts/release-artifact.mjs';
 import {
   assertFixtureOrigin,
@@ -19,18 +24,81 @@ import {
   runManualActiveTabQa,
   runManualCheckpoints,
   runCleanupSteps,
+  recheckCandidateBinding,
+  reviewCandidate,
   serveFixture,
 } from '../scripts/manual-active-tab-qa.mjs';
 
 const root = resolve(process.cwd());
 const temporaryPaths = [];
 
-function listen(host, port, body) {
+// Same real build-manifest/ZIP builder as exact-archive-gate, with no human marker.
+async function archiveFixture(run) {
+  const dir = mkdtempSync(resolve(process.env.TMPDIR ?? '/home/daksh/.hermes/cache/scratch', 'manual-recheck-'));
+  const repo = resolve(dir, 'repo');
+  mkdirSync(repo);
+  cpSync(resolve('scripts'), resolve(repo, 'scripts'), { recursive: true });
+  for (const name of ['manifest.json', 'package.json']) cpSync(resolve(name), resolve(repo, name));
+  for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit', '-qm', 'fixture']]) execFileSync('git', args, { cwd: repo });
+  const assets = resolve(dir, 'assets');
+  mkdirSync(resolve(assets, 'popup'), { recursive: true });
+  execFileSync(process.execPath, ['scripts/build-manifest.mjs', '--release', '--output', resolve(assets, 'manifest.json')], { cwd: repo });
+  writeFileSync(resolve(assets, 'content.js'), 'void 0;');
+  writeFileSync(resolve(assets, 'worker.js'), 'void 0;');
+  writeFileSync(resolve(assets, 'popup/index.html'), '<html>fixture</html>');
+  const archive = artifacts.unpackedArchivePath(repo);
+  execFileSync('zip', ['-qr', archive, '.'], { cwd: assets });
+  const initial = artifacts.prepareCandidateArchive(repo);
+  try { await run({ repo, archive, assets, initial }); }
+  finally { initial.cleanup(); rmSync(dir, { recursive: true, force: true }); }
+}
+
+test('clean baseline observes a real extension worker using read-only browser APIs', () => archiveFixture(async ({ initial }) => {
+  const profile = await mkdtemp(resolve(tmpdir(), 'manual-readback-profile-'));
+  temporaryPaths.push(profile);
+  const browser = await chromium.launchPersistentContext(profile, {
+    channel: 'chromium', headless: true, args: restrictedBrowserArgs(initial.extensionPath),
+  });
+  try {
+    const page = await browser.newPage();
+    await page.bringToFront();
+    const worker = browser.serviceWorkers()[0] ?? await browser.waitForEvent('serviceworker');
+    const summary = await worker.evaluate(`(${observeCleanState.toString()})(chrome, 'capture', 'https://checkout-a.test:123/checkout/clean')`);
+    expect(summary).toEqual({ storageValid: true, historyCount: 0, subscriptionCount: 0, unchanged: true, permissionCount: 0, scriptCount: 0, grantCount: 0, badgeBlank: true });
+  } finally { await browser.close(); }
+}));
+
+test('final binding accepts unchanged exact ZIP without rebuilding or deleting review extraction', () => archiveFixture(async ({ repo, archive, initial }) => {
+  const before = readFileSync(archive);
+  await expect(recheckCandidateBinding(repo, initial)).resolves.toBe(true);
+  expect(readFileSync(archive)).toEqual(before);
+  expect(readFileSync(resolve(initial.extensionPath, 'content.js'), 'utf8')).toBe('void 0;');
+}));
+
+test('final binding vetoes mutated complete ZIP and dirty or changed source', async () => {
+  for (const mutation of ['zip', 'dirty', 'commit']) await archiveFixture(async ({ repo, archive, assets, initial }) => {
+    if (mutation === 'zip') {
+      writeFileSync(resolve(assets, 'content.js'), 'void 1;');
+      execFileSync('zip', ['-qr', archive, '.'], { cwd: assets });
+    } else {
+      writeFileSync(resolve(repo, 'manifest.json'), readFileSync(resolve(repo, 'manifest.json'), 'utf8') + '\n');
+      if (mutation === 'commit') {
+        execFileSync('git', ['add', '.'], { cwd: repo });
+        execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit', '-qm', 'change'], { cwd: repo });
+      }
+    }
+    await expect(recheckCandidateBinding(repo, initial)).rejects.toThrow(mutation === 'dirty' ? 'dirty tracked' : 'candidate changed');
+    expect(readFileSync(resolve(initial.extensionPath, 'content.js'), 'utf8')).toBe('void 0;');
+  });
+});
+
+function listen(host, port, body, tls) {
   let requests = 0;
-  const server = createServer((_request, response) => {
+  const handler = (_request, response) => {
     requests += 1;
     response.end(body);
-  });
+  };
+  const server = tls ? createHttpsServer({ key: tls.key, cert: tls.cert }, handler) : createServer(handler);
   return new Promise((resolveListen, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => resolveListen({
@@ -88,6 +156,68 @@ test('manual runner loads the prepared archive extraction and cleans it after br
     launch.mockRestore();
     prepared.mockRestore();
   }
+});
+
+test('runner preserves launch failure when candidate cleanup also fails', async () => {
+  const failure = new Error('launch primary');
+  const cleanup = vi.fn(() => { throw new Error('candidate cleanup'); });
+  const prepared = vi.spyOn(artifacts, 'prepareCandidateArchive').mockReturnValue({ extensionPath: root, cleanup });
+  const launch = vi.spyOn(chromium, 'launchPersistentContext').mockRejectedValue(failure);
+  try {
+    await expect(runManualActiveTabQa([])).rejects.toBe(failure);
+    expect(cleanup).toHaveBeenCalledOnce();
+  } finally { prepared.mockRestore(); launch.mockRestore(); }
+});
+
+test('TLS acquisition failure is preserved without creating later resources', async () => {
+  const primary = new Error('TLS setup');
+  const makeServer = vi.fn();
+  await expect(reviewCandidate({ extensionPath: root }, {
+    createTls: async () => { throw primary; }, makeServer,
+  })).rejects.toBe(primary);
+  expect(makeServer).not.toHaveBeenCalled();
+});
+
+test('listen setup failure attempts server and TLS cleanup exactly once without masking primary', async () => {
+  const primary = new Error('listen setup');
+  const tls = { cleanup: vi.fn(() => { throw new Error('TLS cleanup'); }) };
+  let fail;
+  const server = {
+    once: vi.fn((_event, callback) => { fail = callback; }),
+    listen: vi.fn(() => fail(primary)),
+    close: vi.fn((callback) => callback(new Error('server close'))),
+  };
+  await expect(reviewCandidate({ extensionPath: root }, {
+    createTls: async () => tls, makeServer: () => server,
+  })).rejects.toBe(primary);
+  expect(server.close).toHaveBeenCalledOnce();
+  expect(tls.cleanup).toHaveBeenCalledOnce();
+});
+
+test('midworkflow error survives browser close failure and every remaining resource closes once', async () => {
+  const primary = new Error('navigation primary');
+  const tls = { cleanup: vi.fn() };
+  const server = {
+    once: vi.fn(), listen: vi.fn((_port, _host, callback) => callback()),
+    address: () => ({ address: '127.0.0.1', port: 12345 }),
+    close: vi.fn((callback) => callback()),
+  };
+  const browser = { newPage: async () => ({ goto: async () => { throw primary; } }), close: vi.fn(async () => { throw new Error('browser close'); }) };
+  const removeProfile = vi.fn();
+  await expect(reviewCandidate({ extensionPath: root }, {
+    createTls: async () => tls, makeServer: () => server,
+    createProfile: async () => 'unit-profile', launchContext: async () => browser, removeProfile,
+  })).rejects.toBe(primary);
+  for (const closer of [browser.close, server.close, removeProfile, tls.cleanup]) expect(closer).toHaveBeenCalledOnce();
+});
+
+test('runner surfaces candidate cleanup-only failure without a human QA result', async () => {
+  const failure = new Error('candidate cleanup only');
+  const cleanup = vi.fn(() => { throw failure; });
+  await expect(runManualActiveTabQa([], {
+    prepare: () => ({ cleanup }), review: async () => undefined,
+  })).rejects.toBe(failure);
+  expect(cleanup).toHaveBeenCalledOnce();
 });
 
 test('manual QA cleanup attempts every resource even when Chromium close rejects', async () => {
@@ -204,8 +334,9 @@ test('manual runner never writes a caller-provided marker after its external par
   await expect(lstat(repositoryTarget)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
-test('Chromium reaches the exact fixture but cannot reach 127.0.0.2 or a non-loopback address', async () => {
-  const fixture = await listen('127.0.0.1', 0, 'fixture');
+test('Chromium reaches the pinned HTTPS fixture but cannot reach 127.0.0.2 or a non-loopback address', async () => {
+  const tls = await createFixtureTls();
+  const fixture = await listen('127.0.0.1', 0, 'fixture', tls);
   const alternate = await listen('127.0.0.2', fixture.server.address().port, 'alternate');
   const profile = await mkdtemp(resolve(tmpdir(), 'clearchoice-proxy-boundary-'));
   temporaryPaths.push(profile);
@@ -214,16 +345,16 @@ test('Chromium reaches the exact fixture but cannot reach 127.0.0.2 or a non-loo
     browser = await chromium.launch({
       channel: 'chromium',
       headless: true,
-      args: restrictedBrowserArgs(resolve(root, 'dist')),
+      args: reviewBrowserLaunchOptions(resolve(root, 'dist'), tls.pin).args,
     });
     const page = await browser.newPage();
-    await expect(page.goto(`http://checkout-a.test:${fixture.server.address().port}`, { timeout: 5_000 })).resolves.toBeTruthy();
+    await expect(page.goto(`https://checkout-a.test:${fixture.server.address().port}`, { timeout: 5_000 })).resolves.toBeTruthy();
     await expect(page.goto(alternate.origin, { timeout: 5_000 })).rejects.toThrow();
     await expect(page.goto('http://198.51.100.1:8080/', { timeout: 5_000 })).rejects.toThrow();
     expect(fixture.requests).toBeGreaterThan(0);
     expect(alternate.requests).toBe(0);
   } finally {
     await browser?.close();
-    await Promise.all([close(fixture.server), close(alternate.server)]);
+    await runCleanupSteps([() => close(fixture.server), () => close(alternate.server), () => tls.cleanup()]);
   }
 });
