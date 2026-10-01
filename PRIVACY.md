@@ -1,21 +1,33 @@
-# ClearChoice 0.3.0-beta.1 private-beta privacy notice
+# ClearChoice 0.4.0-beta.1 privacy notice
 
-ClearChoice's production-ready target is a **private opt-in beta** as `0.3.0-beta.1`, not a public service or Chrome Web Store release. Readiness remains pending required checklist and gate completion; the final human activeTab QA marker remains required, and `npm run check:beta` must pass before readiness can be claimed.
+This is the unreleased `0.4.0-beta.1` private opt-in beta candidate, not release-ready or published. Notices are advisory-only; false positives and false negatives remain possible. ClearChoice makes no legal, compliance, safety, or deceptive-site conclusion and does not automate purchases, payments, account actions, cancellations, refunds, or form submission. Chrome Web Store review and submission are future separate work, not complete.
 
-## Access and data handling
+## Permission choices
 
-The user clicks **Analyze this tab** locally. That action grants temporary `activeTab` access to the active tab. ClearChoice has no persistent host access, no static content scripts, and no automatic page scanning.
+Manual **Analyze this tab** uses temporary `activeTab` access and needs no automatic-scanning opt-in. Required permissions are `activeTab`, `scripting`, and `storage`; `host_permissions` is empty by default. Optional `https://*/*` declares the ability to request access, not broad granted access. **Enable on this site** requests one exact HTTPS origin through Chrome on your click. That revocable grant permits automatic observation on supported English consumer checkout pages at that origin. Account, login, payment-sensitive, restricted, and unsupported pages are skipped. No static content scripts run by default; the worker registers exact-origin scripts after permission checks.
 
-All page data stays local. There is no telemetry, accounts, or uploads; ClearChoice has no backend and does not transmit page data. Analysis briefly evaluates visible evidence in the injected page context. It excludes typed `input`, `textarea`, `select`, and `contenteditable` values. Static page text can be transiently inspected to evaluate a candidate, but a sensitive-looking static context or finding candidate containing an email, payment card/PAN or masked-card pattern, account/bank/routing number, CVV, or security-code text is discarded whole rather than redacted or retained. The popup receives only a typed status and integer finding count.
+## Data retained locally
 
-A dismissed findings-panel state may be stored in `chrome.storage.local`. It is not used for tracking, analytics, synchronization, advertising, or profiling. The separate human manual-QA marker is voluntary local self-attestation outside the repository; it is not feedback collection by the extension and is not cryptographic proof of a gesture.
+All page data stays local. There is no telemetry, accounts, or uploads, backend, sync, remote configuration, or cloud guide service. Analysis excludes typed input, textarea, select, and contenteditable values. A sensitive-looking static context or finding candidate is discarded whole, not redacted and retained. Screening rejects email, payment-card/PAN/masked-card, account/bank/routing-number, CVV, and security-code patterns. Only privacy-screened transport and screen DTOs (data transfer objects) leave the page: a safe excerpt, canonical origin, finding type/reason, first/latest-seen timestamps, and review status. There are no raw URL paths, queries, selectors, HTML, or form values in those messages or local records.
 
-## What ClearChoice does not do
+The worker stores at most 500 retained observations in `chrome.storage.local`. Retention choices are 7/30/90/Never days, with 30 days by default. Expiry uses the UTC cutoff and `latestSeen`; Never disables age expiry, not the cap. Confirmed subscriptions stay until you delete them, independently of observation expiry. Settings, grants, dismissal state, and bounded duplicate receipts also stay local.
 
-- It does not have persistent access to any host.
-- It does not read typed form or `contenteditable` values.
-- It does not automate or initiate purchases, payments, accounts, cancellations, refunds, subscriptions, or form submission.
-- It does not modify checkout choices, controls, prices, or forms.
-- It provides advisory-only notices and does not make a legal, compliance, safety, or deceptive-site conclusion.
+## Confirmed subscriptions
 
-See [the threat model](docs/threat-model.md), [beta test protocol](docs/beta-test-protocol.md), and [beta release checklist](docs/beta-release-checklist.md) for boundaries and testing requirements. Chrome Web Store policy review and submission are future separate work, not complete.
+Automatic observations enter **Needs review**; ClearChoice never automatically confirms a subscription. Explicit finding confirmation is separate from saving a subscription. You can create, read, edit, and delete local confirmed subscriptions manually. Review opens a draft from your own source finding ID; ambiguous values remain blank. Choose **Save** explicitly. Duplicate source-finding protection and refresh invalidation prevent stale review submissions. Merchant, amount, currency, cadence, and optional notes are normalized and screened user-entered fields, not account or payment details. Do not enter identifying, account, or payment information. If a manual Create acknowledgement is lost, inspect the list before retrying: a retry can create a duplicate.
+
+## Cancellation Help navigation
+
+**Cancellation Help** runs only when you click it and only from a retained, unexpired source observation's canonical origin. The bundled catalog contains four exact Netflix/Spotify origins with official guides; a known-origin fallback can show the source origin instead. A manually entered merchant name never selects a provider. Expired or deleted source observations supply no link. A second HTTPS anchor click makes the browser navigate to the provider article or known source origin; this user-initiated browser navigation is not an extension service upload. The extension does not cancel anything. Deleting a local subscription does not cancel billing.
+
+Catalog metadata was reviewed September 29, 2026; official articles were rechecked September 30 in Task 14. Provider instructions can change. The catalog is bundled, not fetched from a server.
+
+## Limits and pending review
+
+Browser permission, focus, revocation, registration, and storage checks are not atomic with the final write. A switch or revocation after the last check can remain a race. Revocation invalidates the generation and independently unregisters the script, with best-effort badge/panel cleanup. If storage and unregister both fail, durable cleanup cannot be guaranteed across worker/browser restart. Remove the site's extension access in Chrome Settings before restarting; in-memory denial alone is not durable. Corrupt grant storage triggers best-effort cleanup of ClearChoice-owned scripts, but browser failures can block it.
+
+Identical findings reordered on a page can change ordinal-based identity. Sensitive-text screening is conservative, not proof that all sensitive content is detectable. The emitted-asset network policy is a static check, not runtime network proof. Explicit provider anchors are a narrow user-navigation exception, not permission for extension uploads or remote executable code. A hostile page controls its own DOM; the extension owns only its panel.
+
+Task 16A serialization work at `18de837` was quality-approved in the recovered review transcript `deleg_db6fb112`. Task 16B expanded human protocol and native workflow remain pending. The existing manual runner/protocol must not be treated as completed coverage for opt-in, revoke, retention, subscription CRUD, and guides. Task 15 actual-Chrome opt-in permission-request diagnosis is not passing; full E2E success is not claimed. Final human QA, full negative audit, passing beta gate, and actual final-tag CI proof are not complete.
+
+The extension does not collect feedback. See [the release checklist](docs/beta-release-checklist.md).

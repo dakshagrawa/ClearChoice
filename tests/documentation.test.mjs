@@ -14,59 +14,41 @@ const officialChromeReferences = [
   'https://developer.chrome.com/docs/webstore/program-policies',
 ];
 
-test('beta documentation states the private opt-in scope and local data boundary', () => {
-  const readme = read('README.md');
-  const privacy = read('PRIVACY.md');
-  const threatModel = read('docs/threat-model.md');
-  const checklist = read('docs/beta-release-checklist.md');
-
-  for (const document of [readme, privacy, threatModel, checklist]) {
-    expect(document).toContain('private opt-in beta');
-    expect(document).toContain('0.3.0-beta.1');
-    expect(document).toMatch(/temporary.*activeTab.*access/i);
-    expect(document).toMatch(/no persistent host access/i);
-    expect(document).toMatch(/all page data (stays )?local/i);
+test('current beta documents exact opt-in permissions and screened local persistence', () => {
+  for (const path of ['README.md', 'PRIVACY.md', 'docs/architecture.md', 'docs/beta-scope.md', 'docs/threat-model.md', 'docs/beta-release-checklist.md']) {
+    const document = read(path);
+    for (const term of ['0.4.0-beta.1', 'https://*/*', 'activeTab', 'Needs review', '30']) expect(document).toContain(term);
+    expect(document).toMatch(/exact HTTPS origin/i);
     expect(document).toMatch(/no telemetry, accounts, or uploads/i);
-    expect(document).toMatch(/advisory[- ]only/i);
-    expect(document).not.toMatch(/is a production-ready.*private opt-in beta/i);
-    expect(document).toMatch(/production-ready.*target|target.*production-ready/i);
-    expect(document).toMatch(/readiness remains pending|required.*checklist.*gate.*completion/i);
+    expect(document).toMatch(/never automatically confirms/i);
+    expect(document).toMatch(/unreleased.*private opt-in beta.*not release-ready/i);
+    expect(document).toMatch(/advisory-only/);
+    expect(document).toMatch(/false positives and false negatives/);
+    expect(document).not.toMatch(/does not automatically scan pages|popup receives only typed status|no automatic page scanning/i);
   }
+});
 
-  expect(readme).toMatch(/check:beta.*real external human activeTab QA marker/i);
-  expect(checklist).toMatch(/readiness is pending.*deliberate human activeTab QA marker.*passing `npm run check:beta`/i);
-  for (const document of [privacy, threatModel]) {
-    expect(document).toMatch(/final human activeTab QA marker remains required/i);
-    expect(document).toMatch(/check:beta.*must pass before readiness can be claimed/i);
-  }
-  expect(readme).toMatch(/Chrome Web Store.*future separate work.*not complete/i);
+test('privacy documents retention, subscriptions and user-initiated guide navigation', () => {
+  const privacy = read('PRIVACY.md');
+  for (const term of ['500', '7/30/90/Never', 'latestSeen', 'UTC', 'confirmed subscriptions', 'until you delete', 'safe excerpt', 'canonical origin', 'merchant', 'currency', 'cadence', 'notes', 'second HTTPS anchor click', 'Netflix', 'Spotify']) expect(privacy).toContain(term);
   expect(privacy).toMatch(/sensitive-looking static.*discarded whole/i);
-  expect(threatModel).toMatch(/sensitive-looking static.*discarded whole/i);
+  expect(privacy).toMatch(/no raw URL paths, queries, selectors, HTML, or form values/i);
+  expect(privacy).toMatch(/deleting.*local.*does not cancel billing/i);
 });
 
-test('changelog qualifies beta readiness as pending the human marker and beta gate', () => {
-  const changelog = read('CHANGELOG.md');
-
-  expect(changelog).not.toMatch(/Documented the production-ready private opt-in beta boundary/i);
-  expect(changelog).toMatch(/production-ready private opt-in beta target/i);
-  expect(changelog).toMatch(/pending.*deliberate human activeTab QA marker.*passing `npm run check:beta`/i);
-});
-
-test('evidence separates the historical v0.2.0 artifact from the untagged beta candidate', () => {
-  const historicalEvidence = read('docs/test-evidence.md');
-  const candidateEvidence = read('docs/beta-candidate-test-evidence.md');
+test('candidate evidence and checklist separate current blocked gate from historical release', () => {
+  expect(read('docs/test-evidence.md')).toMatch(/v0\.2\.0.*historical/i);
+  const evidence = read('docs/beta-candidate-test-evidence.md');
   const checklist = read('docs/beta-release-checklist.md');
-
-  expect(historicalEvidence).toMatch(/v0\.2\.0.*historical/i);
-  expect(candidateEvidence).toMatch(/0\.3\.0-beta\.1/);
-  expect(candidateEvidence).toMatch(/untagged.*QA candidate/i);
-  expect(candidateEvidence).toMatch(/awaiting.*real human.*toolbar-click.*popup/i);
-  expect(candidateEvidence).toMatch(/Chrome.*numeric.*`0\.3\.0`/i);
-  expect(candidateEvidence).toMatch(/version_name.*`0\.3\.0-beta\.1`/i);
-  expect(checklist).toMatch(/Chrome.*numeric.*`0\.3\.0`/i);
-  expect(checklist).toMatch(/version_name.*`0\.3\.0-beta\.1`/i);
-  expect(candidateEvidence).not.toMatch(/check:beta.*passed/i);
-  expect(checklist).toMatch(/untagged.*QA candidate.*awaiting.*real human/i);
+  for (const document of [evidence, checklist]) {
+    for (const term of ['0.4.0-beta.1', '`0.4.0`', 'actual marker schema', 'packaged manifest SHA-256', 'complete ZIP SHA-256']) expect(document).toContain(term);
+    expect(document).toMatch(/existing archive.*no rebuild/i);
+    expect(document).toMatch(/Task 16B.*pending/i);
+    expect(document).toMatch(/Task 15.*not passing/i);
+  }
+  expect(evidence).toContain('9ff1b37a3ca8f1508d9cc4eb47e20669fcf65434');
+  expect(evidence).toMatch(/0\.3\.0-beta\.1.*historical/i);
+  expect(read('CHANGELOG.md')).toMatch(/0\.4\.0-beta\.1.*unreleased/i);
 });
 
 test('rule catalog documents supported use and heuristic limitations', () => {

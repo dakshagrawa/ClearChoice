@@ -1,42 +1,51 @@
-# ClearChoice 0.3.0-beta.1 private opt-in beta
+# ClearChoice 0.4.0-beta.1 private opt-in beta
 
-ClearChoice's production-ready target is a **private opt-in beta** as `0.3.0-beta.1`. Readiness remains pending required checklist and gate completion, including a final human activeTab QA marker and a passing `npm run check:beta`. It is distributed only for invited testing from this private repository; it is not a Chrome Web Store release or a public store listing.
+This is the unreleased `0.4.0-beta.1` private opt-in beta candidate, not release-ready or published. Notices are advisory-only; false positives and false negatives remain possible. ClearChoice makes no legal, compliance, safety, or deceptive-site conclusion and does not automate purchases, payments, account actions, cancellations, refunds, or form submission. Chrome Web Store review and submission are future separate work, not complete.
 
-## What the beta does
+## Analyze and opt in
 
-A user clicks **Analyze this tab** locally. That deliberate action gives ClearChoice temporary `activeTab` access to the current tab only. The extension has no persistent host access, does not automatically scan pages, and does not inject a static content script.
+Manual **Analyze this tab** uses temporary `activeTab` access and needs no automatic-scanning opt-in. Required permissions are `activeTab`, `scripting`, and `storage`; `host_permissions` is empty by default. Optional `https://*/*` declares the ability to request access, not broad granted access. **Enable on this site** requests one exact HTTPS origin through Chrome on your click. That revocable grant permits automatic observation on supported English consumer checkout pages at that origin. Account, login, payment-sensitive, restricted, and unsupported pages are skipped. No static content scripts run by default; the worker registers exact-origin scripts after permission checks.
 
-ClearChoice supports English consumer checkout-like pages. It gives advisory-only notices from visible evidence; it does not conclude that a site is deceptive, legal, illegal, compliant, safe, or unsafe. Heuristic results can have false positives and false negatives; read the notice against the visible page text before relying on it.
+Automatic panels appear only after an accepted worker acknowledgement for a positive finding. Zero findings and unsupported pages stay quiet on-page; badge/popup status carries the outcome. Manual zero-findings analysis also leaves no empty findings panel or Cancellation Help footer. Analyze and Restore do not change checkout controls or submit forms.
 
-All page data stays local. There is no telemetry, accounts, or uploads, and no page data is sent to a service. The analysis excludes typed `input`, `textarea`, `select`, and `contenteditable` values. It can transiently inspect static visible text to evaluate candidates, but discards an entire static context or finding candidate that looks like it displays an email, payment card/PAN or masked card, account/bank/routing number, CVV, or security code; it does not redact or retain that candidate. The popup receives only typed status and an integer finding count.
+## Review and subscriptions
 
-ClearChoice does not automate purchases, payments, account actions, cancellations, refunds, subscriptions, or form submission. It does not alter checkout controls, selections, prices, forms, or page content.
+Automatic observations enter **Needs review**; ClearChoice never automatically confirms a subscription. Explicit finding confirmation is separate from saving a subscription. You can create, read, edit, and delete local confirmed subscriptions manually. Review opens a draft from your own source finding ID; ambiguous values remain blank. Choose **Save** explicitly. Duplicate source-finding protection and refresh invalidation prevent stale review submissions. Merchant, amount, currency, cadence, and optional notes are normalized and screened user-entered fields, not account or payment details. Do not enter identifying, account, or payment information. If a manual Create acknowledgement is lost, inspect the list before retrying: a retry can create a duplicate.
 
-## Testing the beta
+## Local data and Cancellation Help
 
-Read [the beta test protocol](docs/beta-test-protocol.md) before using the beta, and use [the feedback template](docs/beta-feedback-template.md) for optional external feedback. The extension does not collect feedback.
+All page data stays local. There is no telemetry, accounts, or uploads, backend, sync, remote configuration, or cloud guide service. Analysis excludes typed input, textarea, select, and contenteditable values. A sensitive-looking static context or finding candidate is discarded whole, not redacted and retained. Screening rejects email, payment-card/PAN/masked-card, account/bank/routing-number, CVV, and security-code patterns. Only privacy-screened transport and screen DTOs (data transfer objects) leave the page: a safe excerpt, canonical origin, finding type/reason, first/latest-seen timestamps, and review status. There are no raw URL paths, queries, selectors, HTML, or form values in those messages or local records.
 
-Contributors need Node **24** (currently verified: **Node 24.21.0**); `.nvmrc` pins the same major. From a clean checkout:
+The worker stores at most 500 retained observations in `chrome.storage.local`. Retention choices are 7/30/90/Never days, with 30 days by default. Expiry uses the UTC cutoff and `latestSeen`; Never disables age expiry, not the cap. Confirmed subscriptions stay until you delete them, independently of observation expiry. Settings, grants, dismissal state, and bounded duplicate receipts also stay local.
+
+**Cancellation Help** runs only when you click it and only from a retained, unexpired source observation's canonical origin. The bundled catalog contains four exact Netflix/Spotify origins with official guides; a known-origin fallback can show the source origin instead. A manually entered merchant name never selects a provider. Expired or deleted source observations supply no link. A second HTTPS anchor click makes the browser navigate to the provider article or known source origin; this user-initiated browser navigation is not an extension service upload. The extension does not cancel anything. Deleting a local subscription does not cancel billing.
+
+Catalog metadata was reviewed September 29, 2026; official articles were rechecked September 30 in Task 14. Provider instructions can change. The catalog is bundled, not fetched from a server.
+
+## Contributor checks
+
+Contributors need Node **24** (currently verified: **Node 24.21.0**); `.nvmrc` pins the same major.
 
 ```sh
 npm ci
-npm test -- --run
+npm test -- --run --maxWorkers=2
 npm run lint
 npm run build
-npm run e2e
+npm run e2e -- --workers=1
 npm run package:unpacked
 npm run verify:archive
 npm audit --omit=dev
 ```
 
-`npm run check:beta` additionally requires a real external human activeTab QA marker. Do not create or forge one for automation. Without that marker, it must fail closed:
+Run bounded unit and native browser tests before packaging the final candidate. Commands are instructions, not a claim that every check passed. `npm run package:unpacked` rebuilds: do not run it after human attestation. `npm run check:beta` then validates the existing archive and marker, not a rebuilt artifact.
 
-```sh
-npm run check:beta
-# check:beta failed: CLEARCHOICE_ACTIVE_TAB_QA_MARKER must point to a deliberate local manual-QA marker
-```
+Loopback mock fixtures cannot use **Enable on this site**: `isGrantOrigin` rejects IP addresses and localhost. Reserved `.test` browser harness origins map locally with pregranted Chrome permissions. They are automated setup, not genuine human consent. Do not use live account or payment checkouts to work around fixtures.
 
-The manual marker protocol is Linux Chromium-only because it verifies an opened marker descriptor through `/proc/self/fd`; macOS and Windows fail closed. See [the beta release checklist](docs/beta-release-checklist.md) for the exact gate and [the threat model](docs/threat-model.md) for residual risks.
+Task 16A serialization work at `18de837` was quality-approved in the recovered review transcript `deleg_db6fb112`. Task 16B expanded human protocol and native workflow remain pending. The existing manual runner/protocol must not be treated as completed coverage for opt-in, revoke, retention, subscription CRUD, and guides. Task 15 actual-Chrome opt-in permission-request diagnosis is not passing; full E2E success is not claimed. Final human QA, full negative audit, passing beta gate, and actual final-tag CI proof are not complete.
+
+The exact-artifact marker requires local human self-attestation bound to the exact commit, packaged manifest SHA-256, and complete ZIP SHA-256, with every required predicate passing. Verify the actual marker schema against the latest runner and validator at integration; Task 16B expands the schema and remains pending review. The Linux-only marker must be a regular external file; terminal symlinks are rejected with `O_NOFOLLOW`, and `/proc/self/fd` binds the opened descriptor outside the repository. It is not cryptographic proof of a gesture. `npm run check:beta` validates the existing archive only, with no rebuild after attestation. It does not run the whole test/lint/build pipeline. Do not forge a marker; a missing marker fails closed. Expanded human coverage remains blocked on Task 16B, even if the existing marker schema validates.
+
+Read [privacy](PRIVACY.md), [architecture](docs/architecture.md), and [release gates](docs/beta-release-checklist.md). The [existing manual protocol](docs/beta-test-protocol.md) still needs the Task 16B expansion. Feedback is optional and external; use [the sanitized template](docs/beta-feedback-template.md).
 
 ## Historical prototypes
 
