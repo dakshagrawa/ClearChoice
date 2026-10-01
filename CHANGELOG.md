@@ -3,7 +3,7 @@
 ## 0.4.0-beta.1 (unreleased private opt-in beta candidate)
 
 - Added revocable exact-origin automatic checkout observation and privacy-screened local review history. Manual activeTab Analyze remains independent of opt-in.
-- Added explicit finding confirmation, manual subscription CRUD, retention, and bundled source-origin Cancellation Help. Observations never confirm subscriptions automatically; deleting locally does not cancel billing.
+- Added explicit observation confirmation through Save subscription, manual subscription CRUD, retention, and bundled source-origin Cancellation Help. Observations never confirm subscriptions automatically; deleting locally does not cancel billing.
 - Updated architecture, privacy, and candidate documentation. Task 15/16A/16B and human/release gates remain pending; this is not a new published release.
 
 ## 0.3.0-beta.1 (private opt-in beta target)

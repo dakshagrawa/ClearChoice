@@ -8,7 +8,7 @@ Chrome numeric `version` is `0.4.0`; `version_name` is `0.4.0-beta.1`. Archive: 
 
 At source commit `4eb37bcc6591a753f527cab82476c31c2b7021e2`, the coordinating review recorded passing full units, lint, TypeScript, build/package checks and a focused native subscription CRUD E2E. Those results predate this documentation edit and are not final-candidate proof. They do not establish full E2E, genuine Chrome consent, human QA, a release gate, or final-tag CI. Moving test counts are intentionally omitted.
 
-Task 16A serialization work at `18de837` was quality-approved in the recovered review transcript `deleg_db6fb112`. Task 16B expanded human protocol and native workflow remain pending. The existing manual runner/protocol must not be treated as completed coverage for opt-in, revoke, retention, subscription CRUD, and guides. Task 15 actual-Chrome opt-in permission-request diagnosis is not passing; full E2E success is not claimed. Final human QA, full negative audit, passing beta gate, and actual final-tag CI proof are not complete.
+Task 16A serialization work at `18de837` was quality-approved in the recovered review transcript `deleg_db6fb112`. Task 16B expanded human protocol and native workflow remain pending. The existing manual runner/protocol must not be treated as completed coverage for opt-in, revoke, retention, subscription CRUD, and guides. Integrated native browser checks remain unfinished. The permission hang was resolved with the exact mock-port seed; browser-restart loss remains under investigation. Full E2E success is not claimed. Final human QA, full negative audit, passing beta gate, and actual final-tag CI proof are not complete.
 
 ## Candidate checks to repeat
 
@@ -25,7 +25,7 @@ npm audit --omit=dev
 
 Run bounded unit and native browser tests before packaging the final candidate. Commands are instructions, not a claim that every check passed. `npm run package:unpacked` rebuilds: do not run it after human attestation. `npm run check:beta` then validates the existing archive and marker, not a rebuilt artifact.
 
-Loopback mock fixtures cannot use **Enable on this site**: `isGrantOrigin` rejects IP addresses and localhost. Reserved `.test` browser harness origins map locally with pregranted Chrome permissions. They are automated setup, not genuine human consent. Do not use live account or payment checkouts to work around fixtures.
+Loopback mock fixtures cannot use **Enable detection for this site**: `isGrantOrigin` rejects IP addresses and localhost. Reserved `.test` browser harness origins map locally with pregranted Chrome permissions. They are automated setup, not genuine human consent. Do not use live account or payment checkouts to work around fixtures.
 
 ## Human gate
 

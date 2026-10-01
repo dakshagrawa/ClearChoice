@@ -7,6 +7,8 @@ import { expect, test } from 'vitest';
 const root = resolve(import.meta.dirname, '..');
 const read = (path) => readFileSync(resolve(root, path), 'utf8');
 
+const currentBetaDocuments = ['README.md', 'PRIVACY.md', 'docs/architecture.md', 'docs/beta-scope.md', 'docs/threat-model.md', 'docs/beta-release-checklist.md'];
+
 const officialChromeReferences = [
   'https://developer.chrome.com/docs/extensions/develop/concepts/activeTab',
   'https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts',
@@ -15,7 +17,7 @@ const officialChromeReferences = [
 ];
 
 test('current beta documents exact opt-in permissions and screened local persistence', () => {
-  for (const path of ['README.md', 'PRIVACY.md', 'docs/architecture.md', 'docs/beta-scope.md', 'docs/threat-model.md', 'docs/beta-release-checklist.md']) {
+  for (const path of currentBetaDocuments) {
     const document = read(path);
     for (const term of ['0.4.0-beta.1', 'https://*/*', 'activeTab', 'Needs review', '30']) expect(document).toContain(term);
     expect(document).toMatch(/exact HTTPS origin/i);
@@ -28,9 +30,45 @@ test('current beta documents exact opt-in permissions and screened local persist
   }
 });
 
+test('transport, worker-owned records and popup DTOs have distinct responsibilities', () => {
+  for (const path of currentBetaDocuments) {
+    const document = read(path);
+    expect(document).toMatch(/transport[^.]*screened excerpt[^.]*kind[^.]*reason[^.]*opaque fingerprint[^.]*occurrence ordinal/i);
+    expect(document).toMatch(/version[^.]*request[^.]*authorization metadata/i);
+    expect(document).toMatch(/worker derives[^.]*canonical origin[^.]*validated sender context/i);
+    expect(document).toMatch(/worker owns[^.]*IDs[^.]*timestamps[^.]*review status/i);
+    expect(document).toMatch(/popup[^.]*screened record fields[^.]*without[^.]*fingerprint[^.]*ordinal/i);
+    expect(document).toMatch(/no raw URL paths, queries, selectors, HTML, or form values/i);
+    expect(document).toMatch(/excludes typed input, textarea, select, and contenteditable values/i);
+    expect(document).not.toMatch(/Only privacy-screened transport and screen DTOs.*leave the page/i);
+  }
+});
+
+test('automatic and manual authorization differ and receipts replay without another write', () => {
+  for (const path of ['docs/architecture.md', 'docs/threat-model.md']) {
+    const document = read(path);
+    expect(document).toMatch(/automatic submissions[^.]*grant generation[^.]*live optional permission[^.]*document challenge/i);
+    expect(document).toMatch(/manual submissions[^.]*nonce[^.]*document[^.]*origin[^.]*active-tab authorization/i);
+    expect(document).toMatch(/matching[^.]*same `requestId`[^.]*replays[^.]*prior outcome[^.]*without[^.]*write[^.]*timestamp update/i);
+    expect(document).toMatch(/mismatched payload[^.]*collision[^.]*reject/i);
+    expect(document).not.toMatch(/Receipt idempotency rejects duplicate submissions/i);
+  }
+});
+
+test('current control labels and explicit subscription confirmation match the popup', () => {
+  for (const path of currentBetaDocuments) {
+    const document = read(path);
+    for (const label of ['**Analyze**', '**Enable detection for this site**', '**Review as subscription**', '**Save subscription**', '**Mark reviewed**']) expect(document).toContain(label);
+    expect(document).toMatch(/Review as subscription\*\* opens a draft/i);
+    expect(document).toMatch(/Save subscription\*\* explicitly confirms[^.]*creates[^.]*local subscription/i);
+    expect(document).toMatch(/automatic observation[^.]*Mark reviewed[^.]*do not confirm[^.]*subscription/i);
+    expect(document).not.toMatch(/confirmation is separate from saving|\*\*Analyze this tab\*\*|\*\*Enable on this site\*\*|\*\*Save\*\*/i);
+  }
+});
+
 test('privacy documents retention, subscriptions and user-initiated guide navigation', () => {
   const privacy = read('PRIVACY.md');
-  for (const term of ['500', '7/30/90/Never', 'latestSeen', 'UTC', 'confirmed subscriptions', 'until you delete', 'safe excerpt', 'canonical origin', 'merchant', 'currency', 'cadence', 'notes', 'second HTTPS anchor click', 'Netflix', 'Spotify']) expect(privacy).toContain(term);
+  for (const term of ['500', '7/30/90/Never', 'latestSeen', 'UTC', 'confirmed subscriptions', 'until you delete', 'screened excerpt', 'canonical origin', 'merchant', 'currency', 'cadence', 'notes', 'second HTTPS anchor click', 'Netflix', 'Spotify']) expect(privacy).toContain(term);
   expect(privacy).toMatch(/sensitive-looking static.*discarded whole/i);
   expect(privacy).toMatch(/no raw URL paths, queries, selectors, HTML, or form values/i);
   expect(privacy).toMatch(/deleting.*local.*does not cancel billing/i);
@@ -44,7 +82,10 @@ test('candidate evidence and checklist separate current blocked gate from histor
     for (const term of ['0.4.0-beta.1', '`0.4.0`', 'actual marker schema', 'packaged manifest SHA-256', 'complete ZIP SHA-256']) expect(document).toContain(term);
     expect(document).toMatch(/existing archive.*no rebuild/i);
     expect(document).toMatch(/Task 16B.*pending/i);
-    expect(document).toMatch(/Task 15.*not passing/i);
+    expect(document).toContain('Integrated native browser checks remain unfinished.');
+    expect(document).toMatch(/permission hang[^.]*resolved[^.]*exact mock-port seed/i);
+    expect(document).toMatch(/browser-restart loss[^.]*under investigation/i);
+    expect(document).not.toMatch(/permission-request diagnosis is not passing/i);
   }
   expect(evidence).toContain('9ff1b37a3ca8f1508d9cc4eb47e20669fcf65434');
   expect(evidence).toMatch(/0\.3\.0-beta\.1.*historical/i);
@@ -66,14 +107,13 @@ test('tester protocol limits voluntary sanitized external feedback', () => {
   const protocol = read('docs/beta-test-protocol.md');
   const template = read('docs/beta-feedback-template.md');
 
-  expect(protocol).toMatch(/own Chromium profile/i);
-  expect(protocol).toMatch(/independently selected page/i);
-  expect(protocol).toMatch(/do not make purchases/i);
-  expect(protocol).toMatch(/do not submit or enter payment/i);
-  expect(protocol).toMatch(/restricted\/unsupported pages/i);
-  expect(protocol).toMatch(/visible text/i);
-  expect(protocol).toMatch(/voluntary/i);
-  expect(protocol).toMatch(/no feedback collection by the extension/i);
+  expect(protocol).toMatch(/mock-only human QA protocol/i);
+  expect(protocol).toMatch(/only the disposable Chromium profile and mock pages/i);
+  expect(protocol).toMatch(/Never use your personal profile, real checkout, purchase, payment, cancellation or account page/i);
+  expect(protocol).toMatch(/no human QA has been performed/i);
+  expect(protocol).toMatch(/must not.*seed permissions to imitate consent/i);
+  expect(template).toMatch(/voluntary and external/i);
+  expect(template).toMatch(/no feedback collection by the extension/i);
 
   for (const prohibitedItem of ['URLs', 'screenshots', 'personal', 'address', 'card', 'order', 'receipt', 'page content']) {
     expect(template).toContain(prohibitedItem);
