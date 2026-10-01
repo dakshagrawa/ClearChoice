@@ -11,6 +11,100 @@ async function badge(runtime: PackagedRuntime) {
   });
 }
 
+// Read-only debugger observations of the packaged code; no API wrapping or receipts.
+// Fail closed if the built statements change: positions and lexical names are checked.
+async function capacityRejectionProof(runtime: PackagedRuntime) {
+  const browser = await runtime.context.browser()!.newBrowserCDPSession();
+  const page = await runtime.context.newCDPSession(runtime.page);
+  const target = (await browser.send('Target.getTargets')).targetInfos.find(t => t.url === runtime.worker.url());
+  if (!target) throw Error('Capacity worker target missing');
+  const { sessionId } = await browser.send('Target.attachToTarget', { targetId: target.targetId, flatten: false });
+  let sequence = 0;
+  const pending = new Map<number, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }>();
+  type Pause = { callFrames: { callFrameId: string }[]; hitBreakpoints: string[] };
+  let workerPause: (event: Pause) => void = () => undefined;
+  browser.on('Target.receivedMessageFromTarget', event => {
+    if (event.sessionId !== sessionId) return;
+    const message = JSON.parse(event.message);
+    if (message.id) {
+      const callback = pending.get(message.id);
+      pending.delete(message.id);
+      if (message.error) callback?.reject(Error(JSON.stringify(message.error)));
+      else callback?.resolve(message.result);
+    } else if (message.method === 'Debugger.paused') workerPause(message.params);
+  });
+  const send = async (method: string, params: Record<string, unknown> = {}) => {
+    const id = ++sequence;
+    const result = new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timer = setTimeout(() => { pending.delete(id); reject(Error('Capacity CDP timeout: ' + method)); }, 5000);
+      pending.set(id, { resolve: value => { clearTimeout(timer); resolve(value); }, reject: error => { clearTimeout(timer); reject(error); } });
+    });
+    await browser.send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id, method, params }) });
+    return result;
+  };
+  const position = (source: string, statement: string) => {
+    const offset = source.indexOf(statement);
+    if (offset < 0 || source.indexOf(statement, offset + 1) !== -1) throw Error('Capacity diagnostic statement changed');
+    const prefix = source.slice(0, offset).split('\n');
+    return { lineNumber: prefix.length - 1, columnNumber: prefix.at(-1)!.length };
+  };
+  const workerSource = await readFile(runtime.extension + '/worker.js', 'utf8');
+  const contentSource = await readFile(runtime.extension + '/content.js', 'utf8');
+  await send('Debugger.enable');
+  await page.send('Debugger.enable');
+  const branch = await send('Debugger.setBreakpointByUrl', {
+    url: runtime.worker.url(), ...position(workerSource, 'throw new q("Review history capacity exceeded")'),
+  });
+  const settlement = await page.send('Debugger.setBreakpointByUrl', {
+    url: `chrome-extension://${runtime.extensionId}/content.js`,
+    ...position(contentSource, 'if(typeof i=="object"&&i!==null&&Object.keys(i).length===2'),
+    condition: 'r.type === "CLEARCHOICE_AUTO_SUBMIT" && i?.ok === false',
+  });
+  type Identity = { requestId: string; origin: string; generation?: number; findings: { opaqueFingerprint: string; ordinal: number }[] };
+  const bounded = <T>(label: string, install: (resolve: (value: T) => void, reject: (error: Error) => void) => void) => new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(Error('Capacity proof missing: ' + label)), 15000);
+    install(value => { clearTimeout(timer); resolve(value); }, error => { clearTimeout(timer); reject(error); });
+  });
+  const rejected = bounded<Identity & { candidateCount: number }>('production capacity throw', (resolve, reject) => {
+    workerPause = event => { void (async () => {
+      try {
+        if (!event.hitBreakpoints.includes(branch.breakpointId as string)) throw Error('Unexpected worker pause');
+        const result = await send('Debugger.evaluateOnCallFrame', { callFrameId: event.callFrames[0].callFrameId,
+          expression: '({requestId:n.requestId,origin:o,candidateCount:l.length,findings:n.findings.map(f=>({opaqueFingerprint:f.opaqueFingerprint,ordinal:f.ordinal}))})', returnByValue: true, throwOnSideEffect: true });
+        if (result.exceptionDetails) throw Error('Capacity branch locals unavailable');
+        await send('Debugger.resume');
+        resolve((result.result as { value: Identity & { candidateCount: number } }).value);
+      } catch (error) {
+        await send('Debugger.resume').catch(() => undefined);
+        reject(error as Error);
+      }
+    })(); };
+  });
+  const completed = bounded<Identity & { reply: unknown; pending: boolean; aborted: boolean }>('original content response settlement', (resolve, reject) => {
+    page.on('Debugger.paused', event => { void (async () => {
+      try {
+        if (!event.hitBreakpoints?.includes(settlement.breakpointId)) throw Error('Unexpected content pause');
+        const result = await page.send('Debugger.evaluateOnCallFrame', { callFrameId: event.callFrames[0].callFrameId,
+          expression: '({requestId:t.requestId,origin:location.origin,generation:r.generation,findings:t.findings.map(f=>({opaqueFingerprint:f.opaqueFingerprint,ordinal:f.ordinal})),reply:i,pending:S.has(t.requestId),aborted:!!n?.aborted})', returnByValue: true, throwOnSideEffect: true });
+        if (result.exceptionDetails) throw Error('Content settlement locals unavailable');
+        await page.send('Debugger.resume');
+        resolve(result.result.value);
+      } catch (error) {
+        await page.send('Debugger.resume').catch(() => undefined);
+        reject(error as Error);
+      }
+    })(); });
+  });
+  // Attach rejection handlers before navigation so a missing observation fails cleanly.
+  const proof = Promise.all([rejected, completed]);
+  void proof.catch(() => undefined);
+  return { proof, close: async () => {
+    await Promise.all([send('Debugger.disable'), page.send('Debugger.disable')]);
+    await page.detach();
+    await browser.detach();
+  } };
+}
+
 // Reserved RFC2606 mock domains map only to loopback in isolated Chrome.
 // Only Chrome installation permissions are seeded, never the application registry.
 // This exercises production opt-in, NOT human toolbar/consent QA.
@@ -308,16 +402,34 @@ test('pre-granted packaged synthetic 500-record capacity rejects real distinct o
     // Passive real-message observation only: do not replace sendMessage/listeners
     // or synthesize a batch/acknowledgement. Production worker validates fingerprints.
     await runtime.worker.evaluate(() => {
-      const state = globalThis as typeof globalThis & {capacityObserved?:boolean};
-      state.capacityObserved = false;
+      const state = globalThis as typeof globalThis & {capacityObserved?: unknown[]};
+      state.capacityObserved = [];
       chrome.runtime.onMessage.addListener((message, sender) => {
-        if (sender.tab && message.type === 'CLEARCHOICE_AUTO_SUBMIT' && message.batch?.findings?.some((finding: {ordinal:number}) => finding.ordinal === 2)) state.capacityObserved = true;
+        if (sender.tab && message.type === 'CLEARCHOICE_AUTO_SUBMIT' && message.batch?.findings?.some((finding: {ordinal:number}) => finding.ordinal === 2)) state.capacityObserved!.push({
+          requestId: message.batch.requestId, generation: message.generation,
+          tabId: sender.tab.id, documentId: sender.documentId, frameId: sender.frameId,
+          origin: sender.origin, url: sender.url,
+        });
         return false;
       });
     });
-    await runtime.page.goto(runtime.a+'/checkout/identical');
-    await expect.poll(() => runtime.worker.evaluate(() => (globalThis as typeof globalThis & {capacityObserved?:boolean}).capacityObserved)).toBe(true);
-    await runtime.page.waitForTimeout(700);
+    const diagnostic = await capacityRejectionProof(runtime);
+    let rejection;
+    let completion;
+    try {
+      await runtime.page.goto(runtime.a+'/checkout/identical');
+      [rejection, completion] = await diagnostic.proof;
+      expect(rejection.candidateCount).toBe(501);
+      expect(rejection.origin).toBe(runtime.a);
+      expect(rejection.findings).toEqual([1,2].map(ordinal => ({opaqueFingerprint:seed.opaqueFingerprint,ordinal})));
+      expect(completion).toEqual({requestId:rejection.requestId,origin:runtime.a,generation:1,findings:rejection.findings,reply:{ok:false,error:'request-failed'},pending:true,aborted:false});
+      const observed = await runtime.worker.evaluate(() => (globalThis as typeof globalThis & {capacityObserved?: unknown[]}).capacityObserved);
+      expect(observed).toEqual([{requestId:rejection.requestId,generation:completion.generation,tabId:expect.any(Number),documentId:expect.any(String),frameId:0,origin:runtime.a,url:runtime.a+'/checkout/identical'}]);
+      const tabId = await runtime.worker.evaluate(async () => (await chrome.tabs.query({active:true,currentWindow:true}))[0].id);
+      expect((observed![0] as {tabId:number}).tabId).toBe(tabId);
+      expect((observed![0] as {documentId:string}).documentId).not.toBe('');
+      expect(runtime.page.url()).toBe(runtime.a+'/checkout/identical');
+    } finally { await diagnostic.close(); }
     await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(0);
     expect(await badge(runtime)).toBe('');
     expect(await runtime.storage()).toEqual(full);
@@ -342,7 +454,7 @@ test('pre-granted packaged synthetic 500-record capacity rejects real distinct o
     expect(recovered.retentionPolicy).toBe('never');
     expect(await runtime.permissions()).toEqual(api);
     expect(await runtime.inventory()).toEqual(before);
-    await test.info().attach('synthetic-capacity-real-api-readback',{body:JSON.stringify({scope:'499 derived schema-valid records plus one authentic seed; NOT 500 production observations or consent QA',preloadedCount:500,distinctObservationSeen:true,rejectedStateUnchanged:true,rejectedPanelCount:0,rejectedBadge:'',recoveredIds:records.map(record=>record.id),recoveredCount:2}),contentType:'application/json'});
+    await test.info().attach('synthetic-capacity-real-api-readback',{body:JSON.stringify({scope:'499 derived schema-valid records plus one authentic seed; NOT 500 production observations or consent QA',preloadedCount:500,capacityBranch:{requestId:rejection!.requestId,candidateCount:rejection!.candidateCount,origin:rejection!.origin,findings:rejection!.findings},originalResponse:{requestId:completion!.requestId,generation:completion!.generation,reply:completion!.reply,aborted:completion!.aborted},distinctObservationSeen:true,rejectedStateUnchanged:true,rejectedPanelCount:0,rejectedBadge:'',recoveredIds:records.map(record=>record.id),recoveredCount:2}),contentType:'application/json'});
   } finally { await runtime.stop(); }
 });
 
