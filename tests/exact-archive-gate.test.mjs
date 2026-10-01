@@ -18,7 +18,7 @@ function fixture(run) {
   for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit', '-qm', 'test fixture']]) execFileSync('git', args, { cwd: root });
   const assets = resolve(dir, 'assets');
   mkdirSync(resolve(assets, 'popup'), { recursive: true });
-  cpSync(resolve(root, 'manifest.json'), resolve(assets, 'manifest.json'));
+  execFileSync(process.execPath, ['scripts/build-manifest.mjs', '--release', '--output', resolve(assets, 'manifest.json')], { cwd: root });
   writeFileSync(resolve(assets, 'content.js'), 'void 0;');
   writeFileSync(resolve(assets, 'worker.js'), 'void 0;');
   writeFileSync(resolve(assets, 'popup/index.html'), '<html>fixture</html>');
@@ -37,6 +37,16 @@ function fixture(run) {
   const gate = (args = []) => spawnSync(process.execPath, ['scripts/check-beta.mjs', ...args], { cwd: root, encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CLEARCHOICE_ACTIVE_TAB_QA_MARKER: marker } });
   try { run({ dir, root, assets, archive, expected, gate }); } finally { rmSync(dir, { recursive: true, force: true }); }
 }
+
+test('candidate accepts approved generated manifest bytes and hashes those packaged bytes', () => fixture(({ root, assets, expected }) => {
+  const source = readFileSync(resolve(root, 'manifest.json'), 'utf8');
+  const generated = readFileSync(resolve(assets, 'manifest.json'), 'utf8');
+  expect(JSON.parse(generated)).toEqual(JSON.parse(source));
+  expect(generated).not.toBe(source);
+  const candidate = artifacts.prepareCandidateArchive(root);
+  try { expect(candidate.manifestSha256).toBe(expected.manifestSha256); }
+  finally { candidate.cleanup(); }
+}));
 
 test('default gate validates an existing exact archive without rebuilding or npm', () => fixture(({ archive, gate }) => {
   const before = readFileSync(archive);
@@ -62,7 +72,7 @@ test('gate rejects dirty tracked source and a changed current commit', () => fix
   expect(gate().stderr).toContain('dirty tracked files');
   execFileSync('git', ['add', '.'], { cwd: root });
   execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit', '-qm', 'change'], { cwd: root });
-  expect(gate().stderr).toContain('packaged manifest');
+  expect(gate().stderr).toContain('current commit');
 }));
 
 test('gate verifies packaged policy even when the synthetic marker matches archive bytes', () => fixture(({ dir, assets, archive, gate }) => {

@@ -7,6 +7,10 @@ import { resolve } from 'node:path';
 
 const chromeVersionPattern = /^\d+(?:\.\d+){0,3}$/;
 
+export function serializeReleaseManifest(manifest) {
+  return `${JSON.stringify(manifest, null, 2)}\n`;
+}
+
 export function readCandidateVersionMapping(repositoryRoot) {
   const packageJson = JSON.parse(readFileSync(resolve(repositoryRoot, 'package.json'), 'utf8'));
   const manifest = JSON.parse(readFileSync(resolve(repositoryRoot, 'manifest.json'), 'utf8'));
@@ -88,7 +92,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
 `, snapshot, extensionPath], { stdio: 'pipe' });
     execFileSync(process.execPath, [resolve(repositoryRoot, 'scripts/verify-package.mjs'), '--zip', snapshot], { stdio: 'pipe' });
     const manifestSha256 = sha256(readFileSync(resolve(extensionPath, 'manifest.json')));
-    if (manifestSha256 !== sha256(readFileSync(resolve(repositoryRoot, 'manifest.json')))) throw new Error('packaged manifest does not match the current source manifest');
+    const sourceManifest = JSON.parse(readFileSync(resolve(repositoryRoot, 'manifest.json'), 'utf8'));
+    if (manifestSha256 !== sha256(serializeReleaseManifest(sourceManifest))) throw new Error('packaged manifest does not match the approved generated source manifest');
     if (assertCleanCandidateCommit(repositoryRoot) !== commit) throw new Error('candidate commit changed during archive preparation');
     return { commit, manifestSha256, archiveSha256: sha256(bytes), extensionPath, cleanup };
   } catch (error) {
