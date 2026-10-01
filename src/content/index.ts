@@ -328,7 +328,8 @@ if (!pageWindow[contentSentinel]) {
           || !('ok' in receipt) || receipt.ok !== true || !('findingCount' in receipt)
           || receipt.findingCount !== batch.findings.length) throw new Error('Batch receipt refused');
       }
-      if (!(await getDismissed())) {
+      if (!displayResult.findings.length) removePanel();
+      if (!(await getDismissed()) && displayResult.findings.length > 0) {
         renderPanel(displayResult, () => {
           void setDismissed(true).catch(() => undefined);
         });

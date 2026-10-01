@@ -788,7 +788,7 @@ it('marks a worker messaging interruption as retryable', async () => {
 
 it('disable removes the current owned panel without scanning or changing dismissal and rejects extra fields', async () => {
   const { addListener, sendMessage } = installChrome();
-  setSupportedCheckoutContext();
+  document.body.innerHTML = betaCheckout;
   await import('./index');
   const listener = addListener.mock.calls[0]?.[0] as (message: unknown, sender: unknown, reply: (value: unknown) => void) => boolean | undefined;
   const reply = vi.fn();
@@ -845,13 +845,12 @@ it('reports only persisted eligible findings when checkout evidence is screened 
   expect(submission?.batch.findings).toHaveLength(0);
   expect(reply).toHaveBeenCalledWith({ ok: true, status: 'supported', findingCount: 0 });
   const panel = document.querySelector<HTMLElement>('[data-clearchoice-panel]');
-  expect(panel?.shadowRoot?.querySelectorAll('article')).toHaveLength(0);
-  expect(panel?.shadowRoot?.textContent).not.toContain('example.com/checkout');
+  expect(panel).toBeNull();
 });
 
 it('registers one listener and renders one panel when the payload is injected repeatedly', async () => {
   const { addListener } = installChrome();
-  setSupportedCheckoutContext();
+  document.body.innerHTML = betaCheckout;
 
   await import('./index');
   await import('./index');
@@ -864,7 +863,7 @@ it('registers one listener and renders one panel when the payload is injected re
   ) => boolean;
   const sendResponse = vi.fn();
   expect(listener({ type: 'CLEARCHOICE_ANALYZE' }, {}, sendResponse)).toBe(true);
-  await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({ ok: true, status: 'supported', findingCount: 0 }));
+  await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith({ ok: true, status: 'supported', findingCount: 1 }));
   expect(document.querySelectorAll('[data-clearchoice-panel]')).toHaveLength(1);
 });
 
@@ -896,7 +895,7 @@ it('preserves host panel markup through Analyze and Restore', async () => {
 
 it('removes only its own panel and returns a count-only unsupported response without reading private form values', async () => {
   const { addListener } = installChrome();
-  setSupportedCheckoutContext();
+  document.body.innerHTML = betaCheckout;
   await import('./index');
   const listener = addListener.mock.calls[0]?.[0] as (
     message: unknown,
@@ -965,8 +964,8 @@ it('content-payload/JSDOM integration: a sensitive static candidate never reache
 
   const panel = document.querySelector<HTMLElement>('[data-clearchoice-panel]');
   const content = panel?.shadowRoot ?? panel;
-  expect(content?.querySelectorAll('.evidence')).toHaveLength(0);
-  expect(content?.textContent).not.toContain(maskedCard);
+  expect(panel).toBeNull();
+  expect(content?.textContent ?? '').not.toContain(maskedCard);
 });
 
 it.each([
@@ -995,8 +994,8 @@ it.each([
 
   const panel = document.querySelector<HTMLElement>('[data-clearchoice-panel]');
   const content = panel?.shadowRoot ?? panel;
-  expect(content?.querySelectorAll('.evidence')).toHaveLength(0);
-  expect(content?.textContent).not.toContain(maskedCard);
+  expect(panel).toBeNull();
+  expect(content?.textContent ?? '').not.toContain(maskedCard);
 });
 
 it('content-payload/JSDOM integration preserves every host checkout integrity predicate through Analyze, Dismiss, Restore, repeated Analyze, and summary replacement', async () => {
