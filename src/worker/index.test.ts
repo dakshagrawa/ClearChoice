@@ -39,6 +39,34 @@ async function dispatch(message: unknown, sender: chrome.runtime.MessageSender):
   return new Promise((resolve) => { const accepted = listeners[0](message, sender, resolve); if (!accepted) resolve(undefined); });
 }
 
+it('resolves help only from the exact retained source across all 500 records', async () => {
+  seedHistory(500);
+  const history = state.reviewHistory as Array<{ id: string; origin: string }>;
+  history[499].origin = 'https://netflix.com';
+  await boot();
+  const fields = { merchant: 'Unrelated label', amount: '10.00', currency: 'USD', cadence: 'monthly' };
+  const created = await dispatch({ type: 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING', version: 1, id: history[499].id, fields }, popup) as { subscription: { id: string } };
+  const request = { type: 'CLEARCHOICE_SUBSCRIPTION_HELP', version: 1, id: created.subscription.id };
+  expect(await dispatch(request, popup)).toMatchObject({ ...request, help: { kind: 'guide', destination: 'https://help.netflix.com/en/node/407', lastReviewed: '2026-09-29' } });
+  expect(executeScript).not.toHaveBeenCalled(); expect(sendMessage).not.toHaveBeenCalled();
+});
+
+it.each(['deleted', 'expired', 'manual', 'missing-subscription', 'wrong-sender'])('help fails closed for %s provenance without borrowing another finding', async (mode) => {
+  seedHistory(2);
+  const history = state.reviewHistory as Array<{ id: string; origin: string; latestSeen: string; firstSeen: string }>;
+  history[0].origin = 'https://spotify.com'; history[1].origin = 'https://netflix.com';
+  await boot();
+  const fields = { merchant: 'Netflix', amount: '10.00', currency: 'USD', cadence: 'monthly' };
+  const created = await dispatch({ type: mode === 'manual' ? 'CLEARCHOICE_SUBSCRIPTION_CREATE' : 'CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING', version: 1, ...(mode === 'manual' ? {} : { id: history[0].id }), fields }, popup) as { subscription: { id: string } };
+  if (mode === 'deleted') state.reviewHistory = [history[1]];
+  if (mode === 'expired') { history[0].firstSeen = history[0].latestSeen = '2020-01-01T00:00:00.000Z'; state.retentionPolicy = 30; }
+  if (mode === 'missing-subscription') state.subscriptions = [];
+  const request = { type: 'CLEARCHOICE_SUBSCRIPTION_HELP', version: 1, id: created.subscription.id };
+  expect(await dispatch(request, mode === 'wrong-sender' ? content : popup)).toEqual(mode === 'missing-subscription' || mode === 'wrong-sender' ? { ok: false, error: 'request-failed' } : { ...request, help: { kind: 'none' } });
+  expect(executeScript).not.toHaveBeenCalled(); expect(sendMessage).not.toHaveBeenCalled();
+  for (const change of [{ id: undefined }, { id: 'not found' }, { version: 2 }, { origin: 'https://netflix.com' }]) expect(await dispatch({ ...request, ...change }, popup)).toEqual({ ok: false, error: 'request-failed' });
+});
+
 it('creates a manual subscription with worker identity and lists it after worker recreation', async () => {
   seedHistory(1);
   await boot();

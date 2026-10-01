@@ -47,6 +47,17 @@ export function createWorkerStore(options: WorkerStoreOptions = {}) {
   return {
     /** Share the worker's only mutation queue with grant registration/state transitions. */
     enqueue,
+    readSubscriptionHelpOrigin(id: unknown): Promise<string | undefined> {
+      return enqueue(async () => {
+        if (!isRecordIdentifier(id)) throw new Error('Invalid subscription ID');
+        const { state } = await loadReviewStoreState();
+        const subscription = state.subscriptions.find((entry) => entry.id === id);
+        if (!subscription) throw new Error('Subscription not found');
+        const history = retained(state.reviewHistory, state.retentionPolicy, currentTime());
+        if (history.length !== state.reviewHistory.length) await chrome.storage.local.set({ reviewHistory: history });
+        return history.find((entry) => entry.id === subscription.sourceFindingId)?.origin;
+      });
+    },
     listSubscriptions(): Promise<Subscription[]> {
       return enqueue(async () => (await loadReviewStoreState()).state.subscriptions.map((entry) => ({ ...entry })));
     },

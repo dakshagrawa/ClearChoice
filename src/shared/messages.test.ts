@@ -1,4 +1,22 @@
 import * as messages from './messages';
+import { resolveCancellationGuide } from './guide-catalog';
+
+it('accepts exact id-only help requests and revalidates all help metadata', () => {
+  const request = { type: 'CLEARCHOICE_SUBSCRIPTION_HELP', version: 1, id: 's_1' };
+  expect(messages.isWorkerRequest(request)).toBe(true);
+  for (const change of [{ id: undefined }, { version: 2 }, { origin: 'https://netflix.com' }, { url: 'https://private.test' }]) expect(messages.isWorkerRequest({ ...request, ...change })).toBe(false);
+  const guard = (messages as unknown as Record<string, (value: unknown) => boolean>).isSubscriptionHelpResponse;
+  expect(guard).toBeTypeOf('function');
+  for (const origin of ['https://netflix.com', 'https://spotify.com', 'https://netflix.com.evil.test', undefined]) {
+    const help = resolveCancellationGuide(origin);
+    const response = { ...request, help };
+    expect(guard(response)).toBe(true);
+    expect(guard({ ...response, extra: 'raw' })).toBe(false);
+    expect(guard({ ...response, help: { ...help, extra: 'raw' } })).toBe(false);
+    if (help.kind === 'guide') for (const change of [{ destination: 'https://evil.test' }, { sourceURL: 'https://evil.test' }, { title: '<img>' }, { lastReviewed: '2026-09-30' }, { caveat: 'Canceled' }]) expect(guard({ ...response, help: { ...help, ...change } })).toBe(false);
+  }
+  for (const originURL of ['https://merchant.test/path', 'https://merchant.test?private', 'http://merchant.test', 'https://Merchant.test', 'https://netflix.com']) expect(guard({ ...request, help: { kind: 'site', label: 'Visit site', originURL } })).toBe(false);
+});
 
 it('requires exact confirmation request keys and provenance in its acknowledgement', () => {
   const fields = { merchant: 'Acme', amount: '10.00', currency: 'USD', cadence: 'monthly' };

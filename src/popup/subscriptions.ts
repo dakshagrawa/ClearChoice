@@ -1,11 +1,11 @@
 import type { ReviewItem } from '../shared/messages';
-import { CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING, CLEARCHOICE_SUBSCRIPTION_LIST, CLEARCHOICE_SUBSCRIPTION_CREATE, CLEARCHOICE_SUBSCRIPTION_UPDATE, CLEARCHOICE_SUBSCRIPTION_DELETE, isSubscriptionListResponse, isSubscriptionMutationResponse } from '../shared/messages';
+import { CLEARCHOICE_SUBSCRIPTION_HELP, isSubscriptionHelpResponse, CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING, CLEARCHOICE_SUBSCRIPTION_LIST, CLEARCHOICE_SUBSCRIPTION_CREATE, CLEARCHOICE_SUBSCRIPTION_UPDATE, CLEARCHOICE_SUBSCRIPTION_DELETE, isSubscriptionListResponse, isSubscriptionMutationResponse } from '../shared/messages';
 import { isSubscriptionFields, normalizeMerchant, normalizeCurrency } from '../shared/models';
 import type { Subscription } from '../shared/models';
 
 export function mountSubscriptions(root: HTMLElement) {
   // All innerHTML templates are fixed extension-owned markup. User values use value/textContent only.
-  root.innerHTML = '<section aria-label="Subscriptions"><h2>Subscriptions</h2><p>Manually saved on this device. Do not enter payment or account details.</p><button type="button" data-subscription-action="add">Add subscription</button><button type="button" data-subscription-action="refresh">Refresh subscriptions</button><p role="status" aria-live="polite">Loading subscriptions…</p><div data-subscription-list></div><div data-subscription-editor></div></section>';
+  root.innerHTML = '<section aria-label="Subscriptions"><h2>Subscriptions</h2><p>Manually saved on this device. Do not enter payment or account details. Delete removes the local record only; it does not cancel billing. Help uses retained observations only; it cannot read payment data or cancel for you.</p><button type="button" data-subscription-action="add">Add subscription</button><button type="button" data-subscription-action="refresh">Refresh subscriptions</button><p role="status" aria-live="polite">Loading subscriptions…</p><div data-subscription-list></div><div data-subscription-editor></div></section>';
   const status = root.querySelector<HTMLElement>('[role="status"]')!;
   const list = root.querySelector<HTMLElement>('[data-subscription-list]')!;
   const editor = root.querySelector<HTMLElement>('[data-subscription-editor]')!;
@@ -69,7 +69,45 @@ export function mountSubscriptions(root: HTMLElement) {
             })();
           });
         });
-        row.append(text, edit, remove); list.append(row);
+        const helpButton = document.createElement('button');
+        helpButton.type = 'button'; helpButton.dataset.subscriptionAction = 'help';
+        helpButton.textContent = 'Cancellation help';
+        helpButton.setAttribute('aria-label', `Cancellation help for ${entry.merchant}`);
+        const helpRegion = document.createElement('div');
+        helpRegion.setAttribute('role', 'status'); helpRegion.setAttribute('aria-live', 'polite');
+        let helpPending = false;
+        helpButton.addEventListener('click', () => {
+          if (busy || helpPending || !row.isConnected) return;
+          const helpRevision = revision;
+          helpPending = true;
+          helpRegion.textContent = 'Loading cancellation help…';
+          const live = () => helpRevision === revision && row.isConnected && root.contains(row);
+          void (async () => {
+            try {
+              const response: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_SUBSCRIPTION_HELP, version: 1, id: entry.id });
+              if (!live()) return;
+              if (!isSubscriptionHelpResponse(response) || response.id !== entry.id) throw new Error('Invalid help');
+              helpRegion.replaceChildren();
+              const help = response.help;
+              if (help.kind === 'none') {
+                helpRegion.textContent = 'No known provider site; check your billing provider';
+                return;
+              }
+              const link = document.createElement('a');
+              link.href = help.kind === 'guide' ? help.destination : help.originURL;
+              link.target = '_blank'; link.rel = 'noopener noreferrer';
+              link.textContent = help.kind === 'guide' ? `Official guide (reviewed ${help.lastReviewed})` : 'Visit site — not a cancellation guide';
+              helpRegion.append(link);
+              if (help.kind === 'guide') {
+                const detail = document.createElement('p');
+                detail.textContent = `${help.title}. ${help.caveat}`;
+                helpRegion.append(detail);
+              }
+            } catch { if (live()) helpRegion.textContent = 'Could not load cancellation help. Try again; check your billing provider.'; }
+            finally { helpPending = false; }
+          })();
+        });
+        row.append(text, edit, remove, helpButton, helpRegion); list.append(row);
       }
       status.textContent = entries.length ? `${entries.length} subscriptions saved locally.` : 'No subscriptions saved.';
     return true;

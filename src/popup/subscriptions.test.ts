@@ -48,6 +48,85 @@ function submit(root: HTMLElement) { root.querySelector('form')!.dispatchEvent(n
 
 afterEach(() => { vi.unstubAllGlobals(); document.body.innerHTML = ''; });
 
+it.each(['https://netflix.com', 'https://spotify.com', 'https://unknown.test', 'https://netflix.com.evil.test', undefined])('reveals help only after click using retained origin %s, never merchant guesses', async (origin) => {
+  const { data, sendMessage } = await install();
+  const timestamp = new Date().toISOString();
+  data.subscriptions = [{ id: 's_help', merchant: '<Netflix>', amount: '10.00', currency: 'USD', cadence: 'monthly', createdAt: timestamp, updatedAt: timestamp, ...(origin ? { sourceFindingId: 'f_help' } : {}) }];
+  data.reviewHistory = origin ? [{ id: 'f_help', origin, kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt: 'Monthly plan $10.00', opaqueFingerprint: 'a'.repeat(64), ordinal: 1, firstSeen: timestamp, latestSeen: timestamp, status: 'reviewed' }] : [];
+  const { root } = await mount();
+  expect(root.querySelector('a')).toBeNull(); expect(root.querySelector('b')).toBeNull();
+  expect(sendMessage.mock.calls.some(([request]) => (request as { type: string }).type === 'CLEARCHOICE_SUBSCRIPTION_HELP')).toBe(false);
+  expect(root.querySelector('[data-subscription-action="help"]')).not.toBeNull();
+  click(root, 'help');
+  await vi.waitFor(() => expect(root.textContent).not.toContain('Loading cancellation help'));
+  const { resolveCancellationGuide } = await import('../shared/guide-catalog');
+  const help = resolveCancellationGuide(origin);
+  if (help.kind === 'none') {
+    expect(root.textContent).toContain('No known provider site; check your billing provider'); expect(root.querySelector('a')).toBeNull();
+  } else {
+    const link = root.querySelector('a')!;
+    expect(link.getAttribute('href')).toBe(help.kind === 'guide' ? help.destination : origin);
+    expect(link.target).toBe('_blank'); expect(link.rel).toBe('noopener noreferrer');
+    if (help.kind === 'guide') {
+      expect(link.textContent).toBe(`Official guide (reviewed ${help.lastReviewed})`);
+      expect(root.textContent).toContain(help.title); expect(root.textContent).toContain(help.caveat);
+    } else expect(link.textContent).toBe('Visit site — not a cancellation guide');
+  }
+});
+
+it('makes explicit that local deletion never cancels billing', async () => {
+  await install(); const { root } = await mount();
+  expect(root.textContent).toContain('Delete removes the local record only; it does not cancel billing.');
+});
+
+it.each(['refresh', 'delete', 'replace', 'unmount'])('discards delayed help after %s without detached DOM or focus side effects', async (operation) => {
+  const { data, sendMessage } = await install(); const { root, view } = await mount();
+  click(root, 'add'); fill(root); submit(root);
+  await vi.waitFor(() => expect(root.textContent).toContain('Subscription saved locally.'));
+  const row = root.querySelector('article')!;
+  let reply!: (response: unknown) => void;
+  sendMessage.mockImplementationOnce(() => new Promise((resolve) => { reply = resolve; }));
+  click(root, 'help');
+  if (operation === 'delete') { click(root, 'delete'); click(root, 'confirm-delete'); await vi.waitFor(() => expect(root.textContent).toContain('Subscription deleted locally.')); }
+  else if (operation === 'refresh' || operation === 'replace') {
+    if (operation === 'replace') data.subscriptions = (data.subscriptions as Subscription[]).map((entry) => ({ ...entry, merchant: 'Replacement', updatedAt: new Date().toISOString() }));
+    await view.refresh();
+  }
+  else root.remove();
+  const focused = document.activeElement;
+  const { resolveCancellationGuide } = await import('../shared/guide-catalog');
+  const request = sendMessage.mock.calls.find(([request]) => (request as { type: string }).type === 'CLEARCHOICE_SUBSCRIPTION_HELP')![0] as { id: string };
+  reply({ type: 'CLEARCHOICE_SUBSCRIPTION_HELP', version: 1, id: request.id, help: resolveCancellationGuide('https://netflix.com') });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(root.querySelector('a')).toBeNull(); expect(row.querySelector('a')).toBeNull(); expect(document.activeElement).toBe(focused);
+});
+
+it.each(['wrong-id', 'surplus', 'malicious', 'error', 'reject'])('rejects %s help without exposing links or guessing', async (mode) => {
+  const { sendMessage } = await install(); const { root } = await mount();
+  click(root, 'add'); fill(root); submit(root);
+  await vi.waitFor(() => expect(root.textContent).toContain('Subscription saved locally.'));
+  const { resolveCancellationGuide } = await import('../shared/guide-catalog');
+  sendMessage.mockImplementationOnce((request) => {
+    if (mode === 'reject') return Promise.reject(new Error('unavailable'));
+    const response = { ...(request as object), help: resolveCancellationGuide('https://netflix.com') };
+    return Promise.resolve(mode === 'wrong-id' ? { ...response, id: 's_other' } : mode === 'surplus' ? { ...response, extra: 'private' } : mode === 'malicious' ? { ...response, help: { kind: 'site', label: 'Visit site', originURL: 'https://evil.test/path?private' } } : { ok: false, error: 'request-failed' });
+  });
+  click(root, 'help');
+  await vi.waitFor(() => expect(root.textContent).toContain('Could not load cancellation help.'));
+  expect(root.querySelector('a')).toBeNull();
+  expect(root.textContent).not.toContain('No known provider site');
+});
+
+it('allows a fresh help request on a retained row after a failed list refresh', async () => {
+  const { sendMessage } = await install(); const { root, view } = await mount();
+  click(root, 'add'); fill(root); submit(root);
+  await vi.waitFor(() => expect(root.textContent).toContain('Subscription saved locally.'));
+  sendMessage.mockRejectedValueOnce(new Error('offline'));
+  expect(await view.refresh()).toBe(false);
+  click(root, 'help');
+  await vi.waitFor(() => expect(root.textContent).toContain('No known provider site; check your billing provider'));
+});
+
 it('review observation and cancel never create; blank confirmation fields require explicit completion and Save persists provenance', async () => {
   const { data, set, restart } = await install();
   const item = { id: 'f_source', origin: 'https://merchant.test', kind: 'recurring-charge' as const, reason: 'price-cadence' as const, screenedExcerpt: 'Monthly plan $10.00', firstSeen: new Date().toISOString(), latestSeen: new Date().toISOString(), status: 'reviewed' as const };

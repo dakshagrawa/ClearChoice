@@ -26,7 +26,7 @@ These rules are advisory-only heuristics for **English consumer checkout** pages
 
 The rules do not inspect typed form or `contenteditable` values. Static visible text may be transiently inspected while evaluating a candidate, but a candidate containing email, payment-card/PAN or masked-card, account/bank/routing number, CVV, or security-code text is discarded whole rather than redacted or retained. ClearChoice does not alter controls, prices, forms, payments, accounts, cancellations, or checkout submission.
 
-## Reviewed cancellation-guide catalog (preparatory)
+## Reviewed cancellation-guide catalog
 
 `src/shared/guide-catalog.ts` exports a pure synchronous resolver:
 
@@ -87,15 +87,37 @@ ClearChoice does not perform either action.
 
 ### Integration boundary
 
-This preparatory module has no browser globals, Chrome API calls, network requests,
-remote code, automatic navigation, added dependencies, or popup wiring. A later UI must
-distinguish **Official cancellation guide** from **Visit site**, display the article
-review date and caveat for guides, and open destinations only after an explicit user
-choice. A fallback has no article review date and must not be presented as reviewed
-cancellation help. Manual-only entries without an origin get no external link.
+The catalog remains pure: no browser globals, Chrome API calls, network requests,
+remote code, automatic navigation, or added dependencies. The subscriptions popup
+now requests help only when **Cancellation help** is clicked. Its exact popup-only
+worker request is `{ type: 'CLEARCHOICE_SUBSCRIPTION_HELP', version: 1, id }`, where
+`id` is a subscription ID, not an origin or merchant name. One serialized worker
+snapshot finds the existing subscription and its exact linked, unexpired retained
+observation across the full history, not just a popup page. Only that observation's
+validated origin is passed to the catalog. No origin is added to subscriptions or
+retained beyond the observation's configured expiry.
 
-Popup integration is deferred until the subscription workflow has been reviewed;
-this catalog alone does not complete Task 14 or establish browser/UI acceptance.
+The popup revalidates every returned field against the local catalog, including
+allowlisted destinations and source metadata; surplus keys and noncanonical site
+URLs fail closed. Guides display **Official guide (reviewed YYYY-MM-DD)**, title,
+and caveat. Fallback links display **Visit site — not a cancellation guide** and
+use exactly the known HTTPS origin. Missing manual provenance, a deleted source,
+or an expired source displays **No known provider site; check your billing provider**,
+without a link. A missing subscription or request failure is an error, not a guess.
+Delayed replies cannot update replaced/deleted/detached rows or change focus.
+
+Revealing help does not open it: a second explicit user click on a standard HTTPS
+anchor opens the article/site (`target="_blank"`, `rel="noopener noreferrer"`).
+There is no account access, payment-data read, cancellation, server request, search,
+or programmatic navigation. Delete removes a local subscription record only and
+does not cancel billing. Browser integration checks are programmatic, not human
+release QA.
+
+Both public official help articles were re-extracted on 2026-09-30 during popup
+integration; their titles and cancellation/third-party limitations remain consistent
+with the 2026-09-29 catalog review. The approved pure catalog and its recorded review
+dates are unchanged. Only help articles were fetched, never linked account/action
+pages. Recheck these sources again before release.
 
 ### Future ideas — not implemented
 

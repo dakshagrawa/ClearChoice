@@ -1,5 +1,6 @@
 import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_STATUS, CLEARCHOICE_AUTO_DOCUMENT_STATUS, isAutomaticDocumentStatus, CLEARCHOICE_AUTO_SUBMIT, CLEARCHOICE_AUTO_START, CLEARCHOICE_REVIEW_LIST, CLEARCHOICE_REVIEW_MARK, CLEARCHOICE_REVIEW_DELETE, CLEARCHOICE_REVIEW_RETENTION, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
-import { CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING, CLEARCHOICE_SUBSCRIPTION_LIST, CLEARCHOICE_SUBSCRIPTION_CREATE, CLEARCHOICE_SUBSCRIPTION_UPDATE, CLEARCHOICE_SUBSCRIPTION_DELETE } from '../shared/messages';
+import { resolveCancellationGuide } from '../shared/guide-catalog';
+import { CLEARCHOICE_SUBSCRIPTION_HELP, CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING, CLEARCHOICE_SUBSCRIPTION_LIST, CLEARCHOICE_SUBSCRIPTION_CREATE, CLEARCHOICE_SUBSCRIPTION_UPDATE, CLEARCHOICE_SUBSCRIPTION_DELETE } from '../shared/messages';
 import { canonicalOrigin } from '../shared/models';
 import { getDismissed, setDismissed, loadGrantState } from '../shared/storage';
 import { isCurrentActiveTab } from '../shared/tab-analysis';
@@ -221,6 +222,9 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       return { ok: true };
     }
     if (!popupSender(sender)) return { ok: false, error: 'request-failed' };
+    if (request.type === CLEARCHOICE_SUBSCRIPTION_HELP)
+      return { type: request.type, version: 1, id: request.id,
+        help: resolveCancellationGuide(await store.readSubscriptionHelpOrigin(request.id)) };
     if (request.type === CLEARCHOICE_SUBSCRIPTION_LIST)
       return { type: request.type, version: 1, subscriptions: await store.listSubscriptions() };
     if (request.type === CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING)

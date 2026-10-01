@@ -1,3 +1,5 @@
+import { resolveCancellationGuide } from './guide-catalog';
+import type { CancellationGuideResolution } from './guide-catalog';
 import { FINDING_WIRE_VERSION, isFindingDtoBatch, isValidRequestId } from './finding-dto';
 import type { FindingDto } from './finding-dto';
 import { isGrantOrigin } from './storage';
@@ -16,6 +18,23 @@ export function isSubscriptionMutationResponse(value: unknown): value is Subscri
       && (value.type === CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING || value.type === CLEARCHOICE_SUBSCRIPTION_CREATE || value.type === CLEARCHOICE_SUBSCRIPTION_UPDATE) && isSubscription(value.subscription)
       && (value.type !== CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING || isRecordIdentifier(value.subscription.sourceFindingId)))
       || (hasExactKeys(value, ['type', 'version', 'id']) && value.type === CLEARCHOICE_SUBSCRIPTION_DELETE && isRecordIdentifier(value.id)));
+}
+
+export const CLEARCHOICE_SUBSCRIPTION_HELP = 'CLEARCHOICE_SUBSCRIPTION_HELP' as const;
+export type SubscriptionHelpResponse = { type: typeof CLEARCHOICE_SUBSCRIPTION_HELP; version: 1; id: string; help: CancellationGuideResolution };
+
+/** Reconstruct metadata from the local allowlist; never trust an arbitrary destination. */
+export function isSubscriptionHelpResponse(value: unknown): value is SubscriptionHelpResponse {
+  if (!isRecord(value) || !hasExactKeys(value, ['type', 'version', 'id', 'help'])
+    || value.type !== CLEARCHOICE_SUBSCRIPTION_HELP || value.version !== 1 || !isRecordIdentifier(value.id)
+    || !isRecord(value.help)) return false;
+  const help = value.help;
+  const expected = help.kind === 'guide'
+    ? [resolveCancellationGuide('https://netflix.com'), resolveCancellationGuide('https://spotify.com')]
+    : [resolveCancellationGuide(help.kind === 'site' ? help.originURL : undefined)];
+  return expected.some((entry) => entry.kind === help.kind
+    && hasExactKeys(help, Object.keys(entry))
+    && Object.entries(entry).every(([key, item]) => help[key] === item));
 }
 
 export const CLEARCHOICE_SUBSCRIPTION_LIST = 'CLEARCHOICE_SUBSCRIPTION_LIST' as const;
@@ -196,7 +215,7 @@ export function isWorkerRequest(value: unknown): boolean {
     return value.version === 1 && isSubscriptionFields(value.fields);
   if (hasExactKeys(value, ['type', 'version', 'id', 'fields']) && (value.type === CLEARCHOICE_SUBSCRIPTION_UPDATE || value.type === CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING))
     return value.version === 1 && isRecordIdentifier(value.id) && isSubscriptionFields(value.fields);
-  if (hasExactKeys(value, ['type', 'version', 'id']) && value.type === CLEARCHOICE_SUBSCRIPTION_DELETE)
+  if (hasExactKeys(value, ['type', 'version', 'id']) && (value.type === CLEARCHOICE_SUBSCRIPTION_DELETE || value.type === CLEARCHOICE_SUBSCRIPTION_HELP))
     return value.version === 1 && isRecordIdentifier(value.id);
   if (isAutomaticObservation(value) || isAutomaticDocumentStatus(value)) return true;
   if (hasExactKeys(value, ['type', 'version', 'offset', 'limit']) && value.type === CLEARCHOICE_REVIEW_LIST)
