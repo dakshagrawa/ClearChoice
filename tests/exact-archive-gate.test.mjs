@@ -84,6 +84,14 @@ test('gate rejects stale commit and old schema synthetic markers', () => fixture
   expect(gate().stderr).toContain('schemaVersion must be 3');
 }));
 
+test('candidate rejects ZIP paths that alias the same extraction target', () => fixture(({ root, archive }) => {
+  execFileSync('python3', ['-c', 'import sys, zipfile\nwith zipfile.ZipFile(sys.argv[1], "a") as z:\n    z.writestr("extra//same.txt", "first")\n    z.writestr("extra/same.txt", "second")', archive]);
+  let candidate;
+  try {
+    expect(() => { candidate = artifacts.prepareCandidateArchive(root); }).toThrow(/unsafe ZIP entry/);
+  } finally { candidate?.cleanup(); }
+}));
+
 test('candidate rejects source changes during archive preparation', () => fixture(({ root }) => {
   expect(() => artifacts.prepareCandidateArchive(root, { testHooks: { afterOpen() {
     writeFileSync(resolve(root, 'manifest.json'), `${readFileSync(resolve(root, 'manifest.json'), 'utf8')} `);

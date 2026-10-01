@@ -80,6 +80,8 @@ with zipfile.ZipFile(sys.argv[1]) as z:
     for i in entries:
         p = pathlib.PurePosixPath(i.filename)
         mode = i.external_attr >> 16
+        canonical = p.as_posix() + ('/' if i.is_dir() else '')
+        if i.filename != canonical: raise ValueError('unsafe ZIP entry: noncanonical extraction target')
         if not i.filename or i.filename.startswith('/') or '\\\\' in i.filename or ':' in i.filename or '..' in p.parts or '.' in i.filename.split('/') or i.flag_bits & 1 or stat.S_ISLNK(mode): raise ValueError('unsafe ZIP entry')
         if stat.S_IFMT(mode) not in (0, stat.S_IFREG, stat.S_IFDIR): raise ValueError('non-regular ZIP entry')
     z.extractall(sys.argv[2])
