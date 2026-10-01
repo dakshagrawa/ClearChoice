@@ -1,6 +1,8 @@
 import { expect, test } from 'playwright/test';
 import { readFile } from 'node:fs/promises';
 import { PackagedRuntime } from './packaged-runtime';
+import { createHash } from 'node:crypto';
+import { isFindingHistory, type FindingRecord } from '../src/shared/models';
 
 async function badge(runtime: PackagedRuntime) {
   return runtime.worker.evaluate(async () => {
@@ -191,6 +193,156 @@ test('no-host native openPopup Analyze honestly denies without activeTab (NOT hu
     expect((await runtime.storage()).subscriptions ?? []).toEqual([]);
     await popup.close();
     expect(await runtime.inventory()).toEqual(before);
+  } finally { await runtime.stop(); }
+});
+
+// Synthetic timestamps/capacity below use genuine storage.local, not API replacements.
+// Neither fixture proves elapsed time, 500 production observations, or human consent.
+test('pre-granted packaged pruning of synthetic aged production finding preserves explicit subscription and receipts across restart (NOT elapsed-time/consent QA)', async () => {
+  test.setTimeout(90_000);
+  const runtime = new PackagedRuntime();
+  try {
+    const before = await runtime.inventory();
+    await runtime.start();
+    let popup = await runtime.popup();
+    await popup.click('[data-action="site-enable"]');
+    await popup.wait(`document.querySelector('[data-site-status]').textContent.startsWith('Detection enabled for')`);
+    await popup.close();
+    await runtime.page.goto(runtime.a+'/checkout/recurring');
+    await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(1);
+    const original = (await runtime.storage()).reviewHistory as FindingRecord[];
+    expect(original).toHaveLength(1);
+    popup = await runtime.popup();
+    await popup.click('[data-action="review-refresh"]');
+    await popup.wait(`document.querySelectorAll('[data-review-id]').length === 1`);
+    await popup.click('[data-action="review-as-subscription"]');
+    for (const [name,value] of Object.entries({merchant:'Local pruning membership',amount:'12.00',currency:'USD',cadence:'monthly'})) await popup.fill(name,value);
+    await popup.click('[data-subscription-editor] [type="submit"]');
+    await popup.wait(`document.querySelector('[aria-label="Subscriptions"] > [role="status"]').textContent === 'Subscription saved locally.'`);
+    const saved = await runtime.storage();
+    expect(saved.subscriptions).toHaveLength(1);
+    expect((saved.subscriptions as {sourceFindingId:string}[])[0].sourceFindingId).toBe(original[0].id);
+    expect(saved.receipts).toHaveLength(1);
+    await popup.close();
+    await runtime.page.goto(runtime.a+'/checkout/clean');
+    await runtime.page.waitForTimeout(500);
+    await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(0);
+    // Production cutoff is latestSeen <= now - policy * 86_400_000 (UTC ms).
+    // Eight days is deliberately beyond seven, NOT an exact-boundary clock test.
+    const aged = await runtime.worker.evaluate(async () => {
+      const {reviewHistory} = await chrome.storage.local.get('reviewHistory');
+      const timestamp = new Date(Date.now() - 8 * 86_400_000).toISOString();
+      const records = (reviewHistory as FindingRecord[]).map(record => ({...record,firstSeen:timestamp,latestSeen:timestamp}));
+      await chrome.storage.local.set({reviewHistory:records});
+      return records;
+    });
+    expect(isFindingHistory(aged)).toBe(true);
+    expect((await runtime.storage()).reviewHistory).toEqual(aged);
+    expect(aged[0].id).toBe(original[0].id);
+    popup = await runtime.popup();
+    await popup.evaluate(`document.querySelector('[data-review-retention]').value='7';document.querySelector('[data-review-retention]').dispatchEvent(new Event('change',{bubbles:true}));`);
+    await popup.wait(`document.querySelector('[data-review-retention]').value === '7' && !document.querySelector('[data-review-retention]').disabled`);
+    const pruned = await runtime.storage();
+    expect(pruned.reviewHistory).toEqual([]);
+    expect(pruned.retentionPolicy).toBe(7);
+    expect(pruned.subscriptions).toEqual(saved.subscriptions);
+    // setRetentionPolicy/readReviewSnapshot prune history only, not receipts.
+    expect(pruned.receipts).toEqual(saved.receipts);
+    expect(pruned.grantState).toEqual(saved.grantState);
+    await popup.close();
+    const api = await runtime.permissions();
+    const extensionId = runtime.extensionId;
+    await runtime.restart();
+    expect(await runtime.worker.evaluate(() => chrome.runtime.id)).toBe(extensionId);
+    expect(await runtime.storage()).toEqual(pruned);
+    expect(await runtime.permissions()).toEqual(api);
+    popup = await runtime.popup();
+    await popup.wait(`document.querySelector('[data-review-retention]').value === '7'`);
+    expect((await runtime.storage()).reviewHistory).toEqual([]);
+    expect((await runtime.storage()).subscriptions).toEqual(saved.subscriptions);
+    await popup.close();
+    expect(await runtime.inventory()).toEqual(before);
+    await test.info().attach('synthetic-aging-real-api-readback',{body:JSON.stringify({scope:'Synthetic eight-day timestamps on same production finding; NOT elapsed-time or consent QA',findingId:original[0].id,historyCount:0,policy:7,subscriptionPreserved:true,receiptsPreserved:true,restartPreserved:true}),contentType:'application/json'});
+  } finally { await runtime.stop(); }
+});
+
+test('pre-granted packaged synthetic 500-record capacity rejects real distinct observation without mutation and recovers after space is freed (NOT 500 production observations/consent QA)', async () => {
+  test.setTimeout(90_000);
+  const runtime = new PackagedRuntime();
+  try {
+    const before = await runtime.inventory();
+    await runtime.start();
+    let popup = await runtime.popup();
+    await popup.click('[data-action="site-enable"]');
+    await popup.wait(`document.querySelector('[data-site-status]').textContent.startsWith('Detection enabled for')`);
+    await popup.close();
+    await runtime.page.goto(runtime.a+'/checkout/recurring');
+    await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(1);
+    const seed = ((await runtime.storage()).reviewHistory as FindingRecord[])[0];
+    popup = await runtime.popup();
+    await popup.evaluate(`document.querySelector('[data-review-retention]').value='never';document.querySelector('[data-review-retention]').dispatchEvent(new Event('change',{bubbles:true}));`);
+    await popup.wait(`document.querySelector('[data-review-retention]').value === 'never' && !document.querySelector('[data-review-retention]').disabled`);
+    expect((await runtime.storage()).retentionPolicy).toBe('never');
+    await popup.close();
+    await runtime.page.goto(runtime.a+'/checkout/clean');
+    await runtime.page.waitForTimeout(500);
+    await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(0);
+    const sha = (value: string) => createHash('sha256').update(value).digest('hex');
+    // Derived screened evidence and IDs follow production hashing. Preserve the
+    // authentic ordinal-1 seed; identical route's ordinal-2 identity is absent.
+    const capacity = [seed,...Array.from({length:499},(_,index) => {
+      const screenedExcerpt = `Local synthetic membership ${index + 1} renews at $12.00 per month.`;
+      const opaqueFingerprint = sha(`${seed.kind}\u0000${seed.reason}\u0000${screenedExcerpt}`);
+      const id = `f_${sha(JSON.stringify([seed.origin,opaqueFingerprint,1]))}`;
+      return {...seed,id,screenedExcerpt,opaqueFingerprint,ordinal:1};
+    })];
+    expect(isFindingHistory(capacity)).toBe(true);
+    expect(capacity).toHaveLength(500);
+    const newId = `f_${sha(JSON.stringify([seed.origin,seed.opaqueFingerprint,2]))}`;
+    expect(capacity.some(record => record.id === newId)).toBe(false);
+    const authentic = await runtime.storage();
+    const api = await runtime.permissions();
+    await runtime.worker.evaluate(async (reviewHistory) => {await chrome.storage.local.set({reviewHistory});},capacity);
+    const full = await runtime.storage();
+    expect(full).toEqual({...authentic,reviewHistory:capacity});
+    // Passive real-message observation only: do not replace sendMessage/listeners
+    // or synthesize a batch/acknowledgement. Production worker validates fingerprints.
+    await runtime.worker.evaluate(() => {
+      const state = globalThis as typeof globalThis & {capacityObserved?:boolean};
+      state.capacityObserved = false;
+      chrome.runtime.onMessage.addListener((message, sender) => {
+        if (sender.tab && message.type === 'CLEARCHOICE_AUTO_SUBMIT' && message.batch?.findings?.some((finding: {ordinal:number}) => finding.ordinal === 2)) state.capacityObserved = true;
+        return false;
+      });
+    });
+    await runtime.page.goto(runtime.a+'/checkout/identical');
+    await expect.poll(() => runtime.worker.evaluate(() => (globalThis as typeof globalThis & {capacityObserved?:boolean}).capacityObserved)).toBe(true);
+    await runtime.page.waitForTimeout(700);
+    await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(0);
+    expect(await badge(runtime)).toBe('');
+    expect(await runtime.storage()).toEqual(full);
+    expect(await runtime.permissions()).toEqual(api);
+    await runtime.page.goto(runtime.a+'/checkout/clean');
+    await runtime.page.waitForTimeout(500);
+    await runtime.worker.evaluate(async (record) => {await chrome.storage.local.set({reviewHistory:[record]});},seed);
+    expect(await runtime.storage()).toEqual({...full,reviewHistory:[seed]});
+    await runtime.page.goto(runtime.a+'/checkout/identical');
+    await expect(runtime.page.locator('[data-clearchoice-panel] article')).toHaveCount(2);
+    await expect.poll(() => badge(runtime)).toBe('2');
+    const recovered = await runtime.storage();
+    const records = recovered.reviewHistory as FindingRecord[];
+    expect(isFindingHistory(records)).toBe(true);
+    expect(records).toHaveLength(2);
+    expect(records.map(record=>record.id).sort()).toEqual([seed.id,newId].sort());
+    expect(records.find(record=>record.id === seed.id)?.firstSeen).toBe(seed.firstSeen);
+    expect(recovered.receipts).toHaveLength((full.receipts as unknown[]).length+1);
+    expect((recovered.receipts as unknown[]).slice(0,-1)).toEqual(full.receipts);
+    expect(recovered.subscriptions).toEqual(full.subscriptions);
+    expect(recovered.grantState).toEqual(full.grantState);
+    expect(recovered.retentionPolicy).toBe('never');
+    expect(await runtime.permissions()).toEqual(api);
+    expect(await runtime.inventory()).toEqual(before);
+    await test.info().attach('synthetic-capacity-real-api-readback',{body:JSON.stringify({scope:'499 derived schema-valid records plus one authentic seed; NOT 500 production observations or consent QA',preloadedCount:500,distinctObservationSeen:true,rejectedStateUnchanged:true,rejectedPanelCount:0,rejectedBadge:'',recoveredIds:records.map(record=>record.id),recoveredCount:2}),contentType:'application/json'});
   } finally { await runtime.stop(); }
 });
 
