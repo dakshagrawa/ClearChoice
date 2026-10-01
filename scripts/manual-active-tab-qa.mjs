@@ -1,5 +1,5 @@
-/* global window, location, document, setTimeout, AbortSignal */
-import { mkdtemp, rm } from 'node:fs/promises';
+/* global window, location, document, setTimeout, clearTimeout, AbortSignal */
+import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { createServer } from 'node:https';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
@@ -69,6 +69,51 @@ export function reviewBrowserLaunchOptions(extensionDirectory, pin) {
     headless: false,
     args: [...restrictedBrowserArgs(extensionDirectory), ...(pin ? [`--ignore-certificate-errors-spki-list=${pin}`] : [])],
   };
+}
+
+// Linux Chromium derives an unpacked extension ID from its canonical directory.
+// Bind to the reviewed bytes, not the first (possibly unrelated) worker target.
+export async function reviewedWorkerUrl(extensionDirectory) {
+  const directory = await realpath(extensionDirectory);
+  const manifest = JSON.parse(await readFile(resolve(directory, 'manifest.json'), 'utf8'));
+  if (manifest.key || manifest.background?.service_worker !== 'worker.js') throw new Error('unexpected reviewed worker manifest');
+  const id = sha256(directory).slice(0, 32).replace(/[0-9a-f]/g, (digit) => String.fromCharCode(97 + parseInt(digit, 16)));
+  return `chrome-extension://${id}/worker.js`;
+}
+
+export async function waitForReviewedExtensionWorker(context, extensionDirectory, { timeoutMs = 5_000 } = {}) {
+  const url = await reviewedWorkerUrl(extensionDirectory);
+  const session = await context.newCDPSession(context.pages()[0]);
+  let timer;
+  let onVersion;
+  return runWithCleanup(async () => {
+    // A Playwright worker target can precede Chromium's extension installation.
+    // Observe activation of THIS script; no sleeps or retries of failed readback.
+    const activated = new Promise((resolveActivated, reject) => {
+      timer = setTimeout(() => reject(new Error('reviewed extension worker activation timed out')), timeoutMs);
+      onVersion = ({ versions }) => {
+        if (versions.some((version) => version.scriptURL === url && version.status === 'activated' && version.runningStatus === 'running')) resolveActivated();
+      };
+      session.on('ServiceWorker.workerVersionUpdated', onVersion);
+    });
+    await Promise.all([session.send('ServiceWorker.enable'), activated]);
+    const worker = context.serviceWorkers().find((item) => item.url() === url)
+      ?? await context.waitForEvent('serviceworker', { predicate: (item) => item.url() === url, timeout: timeoutMs });
+    const ready = await worker.evaluate((expectedUrl) => {
+      const api = globalThis.chrome;
+      return globalThis.location.href === expectedUrl && api?.runtime?.getURL('worker.js') === expectedUrl
+        && typeof api.storage?.local?.get === 'function'
+        && typeof api.permissions?.getAll === 'function'
+        && typeof api.scripting?.getRegisteredContentScripts === 'function'
+        && typeof api.tabs?.query === 'function' && typeof api.action?.getBadgeText === 'function';
+    }, url);
+    if (ready !== true) throw new Error('reviewed extension worker browser APIs unavailable');
+    return worker;
+  }, [
+    () => { clearTimeout(timer); },
+    () => { if (onVersion) session.off('ServiceWorker.workerVersionUpdated', onVersion); },
+    () => session.detach(),
+  ]);
 }
 
 function usage() {
@@ -263,7 +308,7 @@ export async function reviewCandidate(candidate, {
     await cleanPage.goto(`${fixtureOrigin}/checkout/clean`);
     await captureIntegrityBaseline(cleanPage);
     await cleanPage.bringToFront();
-    const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
+    const worker = await waitForReviewedExtensionWorker(context, extensionPath);
     const cleanUrl = `${fixtureOrigin}/checkout/clean`;
     const readClean = async (mode) => {
       const predicates = await worker.evaluate(`(${observeCleanState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(cleanUrl)})`);

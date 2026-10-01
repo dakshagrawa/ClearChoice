@@ -1,7 +1,8 @@
 // @vitest-environment node
 /* global window */
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { createServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { createFixtureTls } from '../scripts/manual-qa-fixtures.mjs';
@@ -26,6 +27,8 @@ import {
   runSiteCheckpoints,
   runCleanupSteps,
   recheckCandidateBinding,
+  reviewedWorkerUrl,
+  waitForReviewedExtensionWorker,
   reviewCandidate,
   serveFixture,
 } from '../scripts/manual-active-tab-qa.mjs';
@@ -34,12 +37,16 @@ const root = resolve(process.cwd());
 const temporaryPaths = [];
 
 // Same real build-manifest/ZIP builder as exact-archive-gate, with no human marker.
-async function archiveFixture(run) {
+async function archiveFixture(run, { runtime = false } = {}) {
   const dir = mkdtempSync(resolve(process.env.TMPDIR ?? '/home/daksh/.hermes/cache/scratch', 'manual-recheck-'));
   const repo = resolve(dir, 'repo');
   mkdirSync(repo);
   cpSync(resolve('scripts'), resolve(repo, 'scripts'), { recursive: true });
   for (const name of ['manifest.json', 'package.json']) cpSync(resolve(name), resolve(repo, name));
+  if (runtime) {
+    cpSync(resolve('src'), resolve(repo, 'src'), { recursive: true });
+    cpSync(resolve('vite.config.ts'), resolve(repo, 'vite.config.ts'));
+  }
   for (const args of [['init', '-q'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@invalid', 'commit', '-qm', 'fixture']]) execFileSync('git', args, { cwd: repo });
   const assets = resolve(dir, 'assets');
   mkdirSync(resolve(assets, 'popup'), { recursive: true });
@@ -47,6 +54,13 @@ async function archiveFixture(run) {
   writeFileSync(resolve(assets, 'content.js'), 'void 0;');
   writeFileSync(resolve(assets, 'worker.js'), 'void 0;');
   writeFileSync(resolve(assets, 'popup/index.html'), '<html>fixture</html>');
+  if (runtime) {
+    symlinkSync(resolve('node_modules'), resolve(repo, 'node_modules'), 'dir');
+    execFileSync('npm', ['run', 'build:assets'], { cwd: repo, stdio: 'pipe' });
+    cpSync(resolve(repo, 'dist'), assets, { recursive: true });
+    // The browser ZIP keeps the approved release serializer, not a demo manifest.
+    execFileSync(process.execPath, ['scripts/build-manifest.mjs', '--release', '--output', resolve(assets, 'manifest.json')], { cwd: repo });
+  }
   const archive = artifacts.unpackedArchivePath(repo);
   execFileSync('zip', ['-qr', archive, '.'], { cwd: assets });
   const initial = artifacts.prepareCandidateArchive(repo);
@@ -63,10 +77,57 @@ test('clean baseline observes a real extension worker using read-only browser AP
   try {
     const page = await browser.newPage();
     await page.bringToFront();
-    const worker = browser.serviceWorkers()[0] ?? await browser.waitForEvent('serviceworker');
+    const worker = await waitForReviewedExtensionWorker(browser, initial.extensionPath);
+    expect(worker.url()).toBe(await reviewedWorkerUrl(initial.extensionPath));
+    expect(await worker.evaluate(() => globalThis.chrome.runtime.getManifest().permissions)).toEqual(['activeTab', 'scripting', 'storage']);
     const summary = await worker.evaluate(`(${observeCleanState.toString()})(chrome, 'capture', 'https://checkout-a.test:123/checkout/clean')`);
     expect(summary).toEqual({ storageValid: true, historyCount: 0, subscriptionCount: 0, unchanged: true, permissionCount: 0, scriptCount: 0, grantCount: 0, badgeBlank: true });
   } finally { await browser.close(); }
+}, { runtime: true }), 15_000);
+
+test('reviewed worker selection ignores other targets and waits for exact activation', () => archiveFixture(async ({ initial }) => {
+  const url = await reviewedWorkerUrl(initial.extensionPath);
+  const session = new EventEmitter();
+  session.detach = vi.fn(async () => {});
+  session.send = vi.fn(async () => {});
+  const other = { url: () => 'chrome-extension://' + 'a'.repeat(32) + '/worker.js', evaluate: vi.fn() };
+  const reviewed = { url: () => url, evaluate: vi.fn(async () => true) };
+  const context = { pages: () => [{}], newCDPSession: async () => session, serviceWorkers: () => [other, reviewed] };
+  const pending = waitForReviewedExtensionWorker(context, initial.extensionPath);
+  await vi.waitFor(() => expect(session.send).toHaveBeenCalledOnce());
+  for (const [scriptURL, status] of [[other.url(), 'activated'], [url, 'installing']]) {
+    session.emit('ServiceWorker.workerVersionUpdated', { versions: [{ scriptURL, status, runningStatus: 'running' }] });
+    await Promise.resolve();
+    expect(reviewed.evaluate).not.toHaveBeenCalled();
+  }
+  session.emit('ServiceWorker.workerVersionUpdated', { versions: [{ scriptURL: url, status: 'activated', runningStatus: 'running' }] });
+  await expect(pending).resolves.toBe(reviewed);
+  expect(other.evaluate).not.toHaveBeenCalled();
+  expect(session.detach).toHaveBeenCalledOnce();
+  expect(session.listenerCount('ServiceWorker.workerVersionUpdated')).toBe(0);
+}));
+
+test('reviewed worker activation timeout fails closed and detaches observation', () => archiveFixture(async ({ initial }) => {
+  const session = new EventEmitter();
+  session.send = async () => {};
+  session.detach = vi.fn(async () => {});
+  const context = { pages: () => [{}], newCDPSession: async () => session };
+  await expect(waitForReviewedExtensionWorker(context, initial.extensionPath, { timeoutMs: 10 })).rejects.toThrow('activation timed out');
+  expect(session.detach).toHaveBeenCalledOnce();
+  expect(session.listenerCount('ServiceWorker.workerVersionUpdated')).toBe(0);
+}));
+
+test('activated worker with missing APIs fails once and preserves failure over detach error', () => archiveFixture(async ({ initial }) => {
+  const url = await reviewedWorkerUrl(initial.extensionPath);
+  const session = new EventEmitter();
+  session.send = async () => { session.emit('ServiceWorker.workerVersionUpdated', { versions: [{ scriptURL: url, status: 'activated', runningStatus: 'running' }] }); };
+  session.detach = vi.fn(async () => { throw new Error('detach failure'); });
+  const worker = { url: () => url, evaluate: vi.fn(async () => false) };
+  const context = { pages: () => [{}], newCDPSession: async () => session, serviceWorkers: () => [worker] };
+  await expect(waitForReviewedExtensionWorker(context, initial.extensionPath)).rejects.toThrow('browser APIs unavailable');
+  expect(worker.evaluate).toHaveBeenCalledOnce();
+  expect(session.detach).toHaveBeenCalledOnce();
+  expect(session.listenerCount('ServiceWorker.workerVersionUpdated')).toBe(0);
 }));
 
 test('final binding accepts unchanged exact ZIP without rebuilding or deleting review extraction', () => archiveFixture(async ({ repo, archive, initial }) => {
