@@ -84,7 +84,8 @@ test('candidate evidence and checklist separate current blocked gate from histor
     expect(document).toMatch(/Task 16B.*pending/i);
     expect(document).toContain('Integrated native browser checks remain unfinished.');
     expect(document).toMatch(/permission hang[^.]*resolved[^.]*exact mock-port seed/i);
-    expect(document).toMatch(/browser-restart loss[^.]*under investigation/i);
+    expect(document).toMatch(/persistence now pass genuine browser restart checks/i);
+    expect(document).toMatch(/do not establish human toolbar access or permission consent/i);
     expect(document).not.toMatch(/permission-request diagnosis is not passing/i);
   }
   expect(evidence).toContain('9ff1b37a3ca8f1508d9cc4eb47e20669fcf65434');
