@@ -1,4 +1,4 @@
-/* global setTimeout, crypto, TextEncoder */
+/* global setTimeout, crypto, TextEncoder, document */
 import { build } from 'esbuild';
 import { resolve } from 'node:path';
 
@@ -142,6 +142,95 @@ export async function observeSiteState(api, mode, origin, host = globalThis, val
     && historyDigest === host.__qaRevokeHistoryDigest && subscriptionsUnchanged && badge === '';
   else throw new Error('unknown site observation mode');
   return { passed, historyCount: history.length, subscriptionCount: subscriptions.length };
+}
+
+// Read-only human CRUD observer. Retained state contains digests/counts only.
+export async function observeHistorySubscriptions(api, mode, origin, host = globalThis, validate) {
+  const stored = await api.storage.local.get(null);
+  if (typeof validate !== 'function') throw new Error('readback storage validator unavailable');
+  validate(stored);
+  const history = stored.reviewHistory ?? [];
+  const subscriptions = stored.subscriptions ?? [];
+  const digest = async (value) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const historyDigest = await digest(history);
+  const subscriptionDigest = await digest(subscriptions);
+  const restDigest = await digest(Object.fromEntries(Object.entries(stored).filter(([key]) => !['reviewHistory', 'subscriptions'].includes(key))));
+  const result = (passed) => ({ passed, historyCount: history.length, subscriptionCount: subscriptions.length });
+  if (mode === 'baseline') {
+    if (!/^https:\/\/checkout-a\.test:[1-9]\d{0,4}$/.test(origin) || Number(new URL(origin).port) > 65535) throw new Error('invalid mock origin');
+    const target = [...history].sort((a, b) => b.latestSeen.localeCompare(a.latestSeen) || a.id.localeCompare(b.id)).find((item) => item.origin === origin && item.kind === 'recurring-charge' && item.status === 'needs-review');
+    if (!target || subscriptions.length !== 0) throw new Error('human CRUD baseline unavailable: retained unreviewed recurring observation and zero subscriptions required; reset only through human UI and rerun');
+    host.__qaCrud = { targetDigest: await digest(target.id), historyDigest,
+      reviewedDigest: await digest(history.map((item) => item.id === target.id ? { ...item, status: 'reviewed' } : item)),
+      subscriptionDigest, restDigest, phase: 0 };
+    return { ...result(true), targetDigest: host.__qaCrud.targetDigest };
+  }
+  const state = host.__qaCrud;
+  if (!state || restDigest !== state.restDigest) throw new Error('human CRUD baseline or settings changed');
+  if (mode === 'history') return result(state.phase === 0 && historyDigest === state.historyDigest && subscriptionDigest === state.subscriptionDigest);
+  if (mode === 'reviewed') {
+    const passed = [0, 1].includes(state.phase) && historyDigest === state.reviewedDigest && subscriptions.length === 0;
+    if (passed) { state.phase = 1; state.historyDigest = historyDigest; }
+    return result(passed);
+  }
+  if (historyDigest !== state.historyDigest) return result(false);
+  if (mode === 'unchanged') return result(subscriptionDigest === state.subscriptionDigest);
+  const matches = (item, merchant, amount, cadence) => item.merchant === merchant && item.amount === amount && item.currency === 'USD' && item.cadence === cadence
+    && !['notes', 'nextBillingDate', 'customDescription'].some((key) => Object.hasOwn(item, key));
+  if (mode === 'confirmed') {
+    if (state.phase === 2) return result(subscriptionDigest === state.subscriptionDigest);
+    const item = subscriptions[0];
+    const passed = [1, 2].includes(state.phase) && subscriptions.length === 1 && matches(item, 'QA Finding Mock', '12.34', 'monthly')
+      && await digest(item.sourceFindingId) === state.targetDigest;
+    if (passed) { state.phase = 2; state.confirmedDigest = await digest(item); state.subscriptionDigest = subscriptionDigest; }
+    return result(passed);
+  }
+  const confirmed = subscriptions.filter((item) => Object.hasOwn(item, 'sourceFindingId'));
+  if (confirmed.length !== 1 || await digest(confirmed[0]) !== state.confirmedDigest) return result(false);
+  const manual = subscriptions.filter((item) => !Object.hasOwn(item, 'sourceFindingId'));
+  if (mode === 'added') {
+    if (state.phase === 3) return result(subscriptionDigest === state.subscriptionDigest);
+    const passed = [2, 3].includes(state.phase) && subscriptions.length === 2 && manual.length === 1 && matches(manual[0], 'QA Manual Mock', '23.45', 'yearly');
+    if (passed) { state.phase = 3; state.manualIdentityDigest = await digest({ id: manual[0].id, createdAt: manual[0].createdAt }); state.manualUpdatedAtDigest = await digest(manual[0].updatedAt); state.subscriptionDigest = subscriptionDigest; }
+    return result(passed);
+  }
+  if (mode === 'edited') {
+    if (state.phase === 4) return result(subscriptionDigest === state.subscriptionDigest);
+    const passed = [3, 4].includes(state.phase) && subscriptions.length === 2 && manual.length === 1 && matches(manual[0], 'QA Manual Mock Edited', '34.56', 'weekly')
+      && await digest({ id: manual[0].id, createdAt: manual[0].createdAt }) === state.manualIdentityDigest
+      && await digest(manual[0].updatedAt) !== state.manualUpdatedAtDigest;
+    if (passed) { state.phase = 4; state.subscriptionDigest = subscriptionDigest; }
+    return result(passed);
+  }
+  if (mode === 'deleted') return result(state.phase === 4 && subscriptions.length === 1 && manual.length === 0);
+  throw new Error('unknown human CRUD observation mode');
+}
+
+// Genuine popup DOM readback, never clicks/fills or returns record contents.
+export async function observeHistorySubscriptionUi(mode, targetDigest) {
+  const digest = async (value) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const rows = Array.from(document.querySelectorAll('[data-review-id]'));
+  let target;
+  for (const row of rows) if (await digest(row.dataset.reviewId) === targetDigest) target = row;
+  const editor = document.querySelector('[data-subscription-editor]');
+  const status = document.querySelector('section[aria-label="Subscriptions"] > [role="status"]')?.textContent;
+  const count = document.querySelectorAll('[data-subscription-list] > article').length;
+  const closed = editor?.childElementCount === 0;
+  if (mode === 'history') return !!target && target.querySelector('[data-action="review-mark"]')?.disabled === false && count === 0
+    && /^Showing .* retained observations \(including reviewed\)\.$/.test(document.querySelector('[data-review-status]')?.textContent ?? '');
+  if (mode === 'reviewed') return !!target && target.querySelector('[data-action="review-mark"]')?.dataset.reviewed === 'true'
+    && target.querySelector('[data-action="review-mark"]')?.disabled === true && count === 0;
+  if (mode === 'draft') return editor?.querySelector('h3')?.textContent === 'Confirm observation as subscription'
+    && ['merchant', 'amount', 'currency', 'cadence'].every((name) => editor.querySelector(`[name="${name}"]`)?.value === '')
+    && status === 'Save explicitly to confirm changes.' && count === 0;
+  if (mode === 'cancelled') return closed && count === 0 && status === 'Editor closed; no additional save requested.';
+  if (mode === 'saved-one') return closed && count === 1 && status === 'Subscription saved locally.';
+  if (mode === 'saved-two') return closed && count === 2 && status === 'Subscription saved locally.';
+  if (mode === 'delete-prompt') return count === 2 && editor?.querySelector('[aria-label="Delete confirmation"] h3')?.textContent === 'Delete subscription?'
+    && editor.querySelector('[aria-label="Delete confirmation"] p')?.textContent === 'QA Manual Mock Edited';
+  if (mode === 'closed-two') return closed && count === 2;
+  if (mode === 'deleted-one') return closed && count === 1 && status === 'Subscription deleted locally.';
+  throw new Error('unknown human CRUD popup mode');
 }
 
 // Pristine clean-stage schema only, not a general loader. Nonempty or corrupt

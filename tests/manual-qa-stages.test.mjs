@@ -4,7 +4,7 @@ import { runInNewContext } from 'node:vm';
 const validate = runInNewContext(await storageValidatorSource(), { Intl, URL });
 import { WORKFLOW_PREDICATES } from '../scripts/active-tab-qa.mjs';
 import { createManualActiveTabQaMarker } from '../scripts/manual-active-tab-qa.mjs';
-import { storageValidatorSource, runHumanStage, runWithCleanup, observeCleanState, observeSiteState, waitForObservation } from '../scripts/manual-qa-stages.mjs';
+import { storageValidatorSource, observeHistorySubscriptions, runHumanStage, runWithCleanup, observeCleanState, observeSiteState, waitForObservation } from '../scripts/manual-qa-stages.mjs';
 
 test('exact clean readback rejects nested arrays and malformed storage rather than ignoring it', async () => {
   for (const state of [{ localState: { version: 1, reviewHistory: [{}], subscriptions: [] } },
@@ -176,6 +176,87 @@ test('bounded observation retries pending state and fails truthfully on timeout'
 });
 
 const candidate = { commit: 'a'.repeat(40), manifestSha256: 'b'.repeat(64), archiveSha256: 'c'.repeat(64) };
+
+// Explicit synthetic unit snapshots, not real human popup/storage evidence.
+function crudFixture() {
+  const origin = 'https://checkout-a.test:123';
+  const instant = '2026-10-01T00:00:00.000Z';
+  const finding = { origin, kind: 'recurring-charge', reason: 'price-cadence', id: 'f_mock', screenedExcerpt: '$1.00 monthly', opaqueFingerprint: 'a'.repeat(64), ordinal: 1, firstSeen: instant, latestSeen: instant, status: 'needs-review' };
+  const state = { version: 1, reviewHistory: [finding], subscriptions: [], retentionPolicy: 30, receipts: [] };
+  const host = {};
+  const read = (mode) => observeHistorySubscriptions(cleanApi(state), mode, origin, host, validate);
+  const confirmed = { id: 's_finding', merchant: 'QA Finding Mock', amount: '12.34', currency: 'USD', cadence: 'monthly', createdAt: instant, updatedAt: instant, sourceFindingId: finding.id };
+  const manual = { id: 's_manual', merchant: 'QA Manual Mock', amount: '23.45', currency: 'USD', cadence: 'yearly', createdAt: instant, updatedAt: instant };
+  return { state, host, read, finding, confirmed, manual };
+}
+
+test('synthetic CRUD checkpoints require exact history transition, explicit confirmation and correct provenance', async () => {
+  const { state, host, read, finding, confirmed, manual } = crudFixture();
+  expect((await read('baseline')).targetDigest).toMatch(/^[a-f0-9]{64}$/);
+  expect((await read('history')).passed).toBe(true);
+  expect((await read('reviewed')).passed).toBe(false);
+  finding.status = 'reviewed';
+  expect((await read('reviewed')).passed).toBe(true);
+  expect(state.subscriptions).toEqual([]); // Mark reviewed is NOT confirmation.
+  expect((await read('unchanged')).passed).toBe(true); // Blank draft/cancel.
+  for (const wrong of [{ ...confirmed, sourceFindingId: 'f_wrong' }, { ...confirmed, amount: '99.00' }, { ...confirmed, notes: 'Unexpected' }]) {
+    state.subscriptions = [wrong];
+    expect((await read('confirmed')).passed).toBe(false);
+    expect((await read('unchanged')).passed).toBe(false);
+  }
+  state.subscriptions = [confirmed, manual];
+  expect((await read('confirmed')).passed).toBe(false);
+  state.subscriptions = [confirmed];
+  expect((await read('confirmed')).passed).toBe(true);
+  state.subscriptions.push(manual);
+  expect((await read('added')).passed).toBe(true);
+  const prior = { ...manual };
+  Object.assign(manual, { merchant: 'QA Manual Mock Edited', amount: '34.56', cadence: 'weekly', updatedAt: '2026-10-01T00:00:01.000Z' });
+  manual.id = 's_replaced';
+  expect((await read('edited')).passed).toBe(false);
+  manual.id = prior.id;
+  manual.sourceFindingId = finding.id;
+  expect((await read('edited')).passed).toBe(false);
+  delete manual.sourceFindingId;
+  expect((await read('edited')).passed).toBe(true);
+  expect((await read('unchanged')).passed).toBe(true); // Delete Cancel.
+  state.subscriptions = [manual]; // Wrong deletion target.
+  expect((await read('deleted')).passed).toBe(false);
+  state.subscriptions = [];
+  expect((await read('deleted')).passed).toBe(false);
+  state.subscriptions = [{ ...confirmed, amount: '88.00' }];
+  expect((await read('deleted')).passed).toBe(false);
+  state.subscriptions = [confirmed];
+  expect((await read('deleted')).passed).toBe(true);
+  finding.screenedExcerpt = 'Changed mock';
+  expect((await read('deleted')).passed).toBe(false);
+  expect(Object.values(host.__qaCrud).every((value) => typeof value === 'number' || /^[a-f0-9]{64}$/.test(value))).toBe(true);
+});
+
+test('synthetic CRUD cancellation detects mutation and every mode rejects malformed storage', async () => {
+  const { state, host, read, finding, confirmed } = crudFixture();
+  await read('baseline');
+  finding.status = 'reviewed';
+  await read('reviewed');
+  state.subscriptions = [confirmed];
+  expect((await read('unchanged')).passed).toBe(false);
+  state.subscriptions = [];
+  const valid = structuredClone(state);
+  for (const broken of [{ version: 2 }, { subscriptions: [{}] }, { reviewHistory: [{}] }, { retentionPolicy: 999 }, { receipts: [{}] }, { dismissed: 'false' }, { grantState: { version: 1, sites: { bad: {} } } }]) {
+    Object.assign(state, valid, broken);
+    for (const mode of ['baseline', 'history', 'reviewed', 'unchanged', 'confirmed', 'added', 'edited', 'deleted']) await expect(read(mode)).rejects.toThrow('schema');
+    for (const key of Object.keys(state)) delete state[key];
+  }
+  Object.assign(state, valid);
+  expect(host.__qaCrud.phase).toBe(1);
+});
+
+test('already-reviewed synthetic baseline fails honestly instead of pretending a Mark transition occurred', async () => {
+  const { finding, read, host } = crudFixture();
+  finding.status = 'reviewed';
+  await expect(read('baseline')).rejects.toThrow('reset only through human UI');
+  expect(host).toEqual({});
+});
 const results = () => Object.fromEntries(WORKFLOW_PREDICATES.map((name) => [name, name === 'accessibility' ? true : 'passed']));
 
 test('marker constructor cannot manufacture passed workflow results', () => {

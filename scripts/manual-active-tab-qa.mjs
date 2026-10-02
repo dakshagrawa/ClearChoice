@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createFixtureTls, mockCheckoutHtml } from './manual-qa-fixtures.mjs';
 import { LOCAL_HUMAN_ATTESTATION, WORKFLOW_PREDICATES, validateManualActiveTabMarker, sha256 } from './active-tab-qa.mjs';
-import { storageValidatorSource, observeCleanState, observeSiteState, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
+import { storageValidatorSource, observeCleanState, observeSiteState, observeHistorySubscriptions, observeHistorySubscriptionUi, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
 import { prepareCandidateArchive } from './release-artifact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -246,6 +246,32 @@ export async function runSiteCheckpoints({ instruct, acknowledge, navigate, read
   await integrity('a');
 }
 
+// No workflow result/attestation is produced by this bounded human-only slice.
+export async function runHistorySubscriptionCheckpoints({ instruct, acknowledge, read, ui, waitForState = waitForObservation }) {
+  if (!await read('baseline')) throw new Error('human CRUD baseline predicate failed');
+  const stage = async (instruction, mode, visible) => {
+    const observe = async () => await ui(visible) && await read(mode);
+    await runHumanStage({ instruction, instruct, acknowledge, observe: () => waitForState(observe) });
+    if (!await observe()) throw new Error('human CRUD state changed during acknowledgement');
+  };
+  await stage('18. HISTORY: human-open the toolbar popup and click Refresh history. Confirm retained A recurring observations remain usable after revoke; subscriptions must still be empty. Leave popup open.', 'history', 'history');
+  await stage('19. HISTORY: click Mark reviewed on the first unreviewed A recurring-charge observation. Confirm Reviewed and the disabled Mark reviewed button. This must NOT create a subscription.', 'reviewed', 'reviewed');
+  await stage('20. DRAFT: on that same Reviewed observation click Review as subscription. Observe Confirm observation as subscription; Merchant, Amount, Currency and Cadence must all be blank. Do not Save.', 'unchanged', 'draft');
+  await stage('21. CANCEL: click Cancel in the subscription editor. Observe Editor closed; no additional save requested. No storage mutation is allowed.', 'unchanged', 'cancelled');
+  await stage('22. REOPEN: click Review as subscription on the same observation. Observe the same four blank fields again.', 'unchanged', 'draft');
+  await stage('23. CONFIRM: human-fill only fake Merchant QA Finding Mock, Amount 12.34, Currency USD, Cadence monthly; leave optional fields blank. Click Save subscription. Observe Subscription saved locally. Exactly one record must persist with the correct finding provenance.', 'confirmed', 'saved-one');
+  await stage('24. MANUAL ADD: click Add subscription. Human-fill only fake Merchant QA Manual Mock, Amount 23.45, Currency USD, Cadence yearly; leave optional fields blank. Click Save subscription. The finding-confirmed record must remain unchanged.', 'added', 'saved-two');
+  await stage('25. EDIT: click Edit on QA Manual Mock ONLY. Change fake Merchant to QA Manual Mock Edited, Amount to 34.56, Cadence to weekly; keep USD and optional fields blank. Click Save subscription. Identity and provenance must be preserved.', 'edited', 'saved-two');
+  await stage('26. DELETE PROMPT: click Delete on QA Manual Mock Edited ONLY. Observe Delete subscription? for that fake target; do not confirm yet.', 'unchanged', 'delete-prompt');
+  await stage('27. DELETE CANCEL: click Cancel in Delete confirmation. Both persisted subscriptions must remain byte-for-byte unchanged.', 'unchanged', 'closed-two');
+  await stage('28. DELETE REOPEN: click Delete on QA Manual Mock Edited ONLY again. Observe the correct Delete confirmation target.', 'unchanged', 'delete-prompt');
+  await stage('29. DELETE CONFIRM: click Delete subscription in Delete confirmation. Observe Subscription deleted locally. Only the manual record may disappear; the finding-confirmed subscription and retained history must survive.', 'deleted', 'deleted-one');
+}
+
+export function stopPendingHumanStages() {
+  throw new Error('retention, restart durability, cancellation-help and final human attestation stages are pending; no ATTEST or marker is available');
+}
+
 export function createManualActiveTabQaMarker({ commit, manifestSha256, archiveSha256 }, results) {
   if (!results || Object.getPrototypeOf(results) !== Object.prototype
       || Reflect.ownKeys(results).length !== WORKFLOW_PREDICATES.length
@@ -410,7 +436,22 @@ export async function reviewCandidate(candidate, {
         await pages.a.waitForFunction(() => document.querySelector('#fake-order-summary')?.textContent?.includes('updated') === true, undefined, { timeout: 300_000 });
       },
     });
-    throw new Error('expanded history CRUD, subscription, retention, restart durability and cancellation-help stages are pending; no ATTEST or marker is available');
+    let targetDigest;
+    await runHistorySubscriptionCheckpoints({
+      instruct: (text) => process.stdout.write(`${text}\n`),
+      acknowledge: () => terminal.question('Type DONE only after the requested human popup action and observed result: ', { signal: AbortSignal.timeout(300_000) }),
+      read: async (mode) => {
+        const result = await worker.evaluate(`(${observeHistorySubscriptions.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, globalThis, ${validateStorage})`);
+        if (mode === 'baseline') targetDigest = result.targetDigest;
+        return result.passed;
+      },
+      ui: async (mode) => {
+        const popup = context.pages().find((page) => !page.isClosed() && page.url() === popupUrl);
+        if (!popup) return false;
+        return popup.evaluate(`(${observeHistorySubscriptionUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(targetDigest)})`);
+      },
+    });
+    stopPendingHumanStages();
   }, [
     () => terminal?.close(),
     () => context?.close(),

@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { afterEach, expect, test, vi } from 'vitest';
-import { observeCleanState, observeSiteState, storageValidatorSource } from '../scripts/manual-qa-stages.mjs';
+import { observeHistorySubscriptionUi, observeCleanState, observeSiteState, storageValidatorSource } from '../scripts/manual-qa-stages.mjs';
 import * as artifacts from '../scripts/release-artifact.mjs';
 import {
   assertFixtureOrigin,
@@ -25,6 +25,8 @@ import {
   runManualActiveTabQa,
   runManualCheckpoints,
   runSiteCheckpoints,
+  runHistorySubscriptionCheckpoints,
+  stopPendingHumanStages,
   runCleanupSteps,
   recheckCandidateBinding,
   reviewedWorkerUrl,
@@ -225,6 +227,78 @@ test('site workflow cannot treat quiet state as denial or advance before acknowl
   await runSiteCheckpoints(options);
   expect(events.indexOf('quiet:b')).toBeLessThan(events.indexOf('before-revoke:a'));
   expect(events.filter((event) => event === 'revoked:a')).toHaveLength(3);
+});
+
+test('synthetic human CRUD orchestration never advances without observable UI, storage and separate DONE', async () => {
+  for (const failure of ['ui', 'storage', 'ack']) {
+    const events = [];
+    await expect(runHistorySubscriptionCheckpoints({
+      instruct: () => {}, waitForState: (observe) => observe(),
+      read: async (mode) => { events.push(mode); return mode === 'baseline' || failure !== 'storage'; },
+      ui: async () => failure !== 'ui',
+      acknowledge: async () => { events.push('ack'); return failure === 'ack' ? 'ATTEST' : 'DONE'; },
+    })).rejects.toThrow();
+    expect(events).not.toContain('reviewed');
+    if (failure !== 'ack') expect(events).not.toContain('ack');
+  }
+  let release;
+  const events = [];
+  const pending = runHistorySubscriptionCheckpoints({ instruct: () => {}, read: async (mode) => { events.push(mode); return true; }, ui: async () => true,
+    acknowledge: () => events.filter((value) => value === 'history').length === 1 && !release ? new Promise((resolveAck) => { release = resolveAck; }) : Promise.resolve('DONE') });
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+  expect(events).toEqual(['baseline', 'history']);
+  release('DONE');
+  await expect(pending).resolves.toBeUndefined();
+  expect(events).toEqual(['baseline', ...['history', 'reviewed', 'unchanged', 'unchanged', 'unchanged', 'confirmed', 'added', 'edited', 'unchanged', 'unchanged', 'unchanged', 'deleted'].flatMap((mode) => [mode, mode])]);
+  expect(() => stopPendingHumanStages()).toThrow('no ATTEST or marker');
+  const source = readFileSync(resolve(root, 'scripts/manual-active-tab-qa.mjs'), 'utf8');
+  expect(source.indexOf('await runHistorySubscriptionCheckpoints({', source.indexOf('export async function reviewCandidate'))).toBeGreaterThan(source.indexOf('await runSiteCheckpoints({'));
+  expect(source).toContain('    stopPendingHumanStages();');
+});
+
+test('synthetic acknowledgement-time drift aborts and each CRUD prompt fails closed on missing acknowledgement', async () => {
+  let current = true;
+  await expect(runHistorySubscriptionCheckpoints({
+    instruct: () => {}, ui: async () => current, read: async () => true,
+    acknowledge: async () => { current = false; return 'DONE'; },
+  })).rejects.toThrow('changed during acknowledgement');
+  for (let rejectedStage = 1; rejectedStage <= 12; rejectedStage++) {
+    let prompts = 0;
+    let acknowledgements = 0;
+    await expect(runHistorySubscriptionCheckpoints({
+      instruct: () => { prompts++; }, ui: async () => true, read: async () => true,
+      acknowledge: async () => ++acknowledgements === rejectedStage ? '' : 'DONE',
+    })).rejects.toThrow('acknowledgement');
+    expect(prompts).toBe(rejectedStage);
+    expect(acknowledgements).toBe(rejectedStage);
+  }
+});
+
+test('synthetic popup DOM predicates reject prefilled ambiguity, open cancellation and wrong delete target', async () => {
+  const browser = await chromium.launch({ channel: 'chromium', headless: true });
+  try {
+    const page = await browser.newPage();
+    // Static fixture DOM only, no extension API replacement or human QA claim.
+    const render = async (editor, status, count = 0) => page.setContent(`<section aria-label="Subscriptions"><p role="status">${status}</p><div data-subscription-list>${'<article></article>'.repeat(count)}</div><div data-subscription-editor>${editor}</div></section>`);
+    const read = (mode) => page.evaluate(`(${observeHistorySubscriptionUi.toString()})(${JSON.stringify(mode)}, '')`);
+    const fields = '<h3>Confirm observation as subscription</h3><input name="merchant"><input name="amount"><input name="currency"><select name="cadence"><option value=""></option></select>';
+    await render(fields, 'Save explicitly to confirm changes.');
+    expect(await read('draft')).toBe(true);
+    await render(fields.replace('name="currency"', 'name="currency" value="USD"'), 'Save explicitly to confirm changes.');
+    expect(await read('draft')).toBe(false);
+    expect(await read('cancelled')).toBe(false);
+    await render('', 'Editor closed; no additional save requested.');
+    expect(await read('cancelled')).toBe(true);
+    await render('<div aria-label="Delete confirmation"><h3>Delete subscription?</h3><p>QA Finding Mock</p></div>', '', 2);
+    expect(await read('delete-prompt')).toBe(false);
+    await render('<div aria-label="Delete confirmation"><h3>Delete subscription?</h3><p>QA Manual Mock Edited</p></div>', '', 2);
+    expect(await read('delete-prompt')).toBe(true);
+    expect(await read('closed-two')).toBe(false);
+    await render('', 'Subscription saved locally.', 2);
+    expect(await read('saved-two')).toBe(true);
+    await render('', 'Subscription deleted locally.', 1);
+    expect(await read('deleted-one')).toBe(true);
+  } finally { await browser.close(); }
 });
 
 test('manual runner loads the prepared archive extraction and cleans it after browser launch failure', async () => {
