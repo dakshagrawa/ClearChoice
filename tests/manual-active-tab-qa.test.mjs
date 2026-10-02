@@ -25,6 +25,7 @@ import {
   reviewBrowserLaunchOptions,
   runManualActiveTabQa,
   runManualCheckpoints,
+  runPermissionCycleCheckpoints,
   runSiteCheckpoints,
   runHistorySubscriptionCheckpoints,
   observeNativeHistoryDialog,
@@ -36,6 +37,27 @@ import {
   reviewCandidate,
   serveFixture,
 } from '../scripts/manual-active-tab-qa.mjs';
+
+test('permission cycle requires separate prompt self-attestation and rechecks after acknowledgement', async () => {
+  const events = [];
+  const run = (overrides = {}) => runPermissionCycleCheckpoints({
+    instruct: (text) => events.push(text), read: async (mode) => { events.push(mode); return true; },
+    ui: async () => true, integrity: async () => events.push('integrity'),
+    acknowledge: async (token) => { events.push(token); return token; }, waitForState: (observe) => observe(), ...overrides,
+  });
+  await run();
+  expect(events.filter((event) => event === 'reenabled')).toHaveLength(2);
+  expect(events.filter((event) => event === 'settings-removed')).toHaveLength(2);
+  expect(events.indexOf('NEW_CHROME_ALLOW_SEEN')).toBeLessThan(events.indexOf('before-settings'));
+  expect(events.some((event) => event.includes('OS permission-dialog automation is unavailable'))).toBe(true);
+  expect(events.some((event) => event.includes('never use the production popup Disable'))).toBe(true);
+  let ack = false;
+  await expect(run({ ui: async () => false, acknowledge: async () => { ack = true; return 'NEW_CHROME_ALLOW_SEEN'; } })).rejects.toThrow('observable');
+  expect(ack).toBe(false);
+  await expect(run({ acknowledge: async () => 'DONE' })).rejects.toThrow('acknowledgement');
+  let changed = false;
+  await expect(run({ acknowledge: async (token) => { changed = true; return token; }, ui: async () => !changed })).rejects.toThrow('changed during acknowledgement');
+});
 
 const root = resolve(process.cwd());
 const temporaryPaths = [];

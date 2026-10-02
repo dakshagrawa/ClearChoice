@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createFixtureTls, mockCheckoutHtml } from './manual-qa-fixtures.mjs';
 import { LOCAL_HUMAN_ATTESTATION, WORKFLOW_PREDICATES, validateManualActiveTabMarker, sha256 } from './active-tab-qa.mjs';
-import { storageValidatorSource, observeAutomaticLifecycle, observeFinalState, observeFinalUi, observeCleanState, observeSiteState, observeHistorySubscriptions, observeHistorySubscriptionUi, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
+import { storageValidatorSource, observePermissionCycle, observeAutomaticLifecycle, observeFinalState, observeFinalUi, observeCleanState, observeSiteState, observeHistorySubscriptions, observeHistorySubscriptionUi, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
 import { prepareCandidateArchive } from './release-artifact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -287,6 +287,22 @@ export async function runSiteCheckpoints({ instruct, acknowledge, navigate, read
   await navigate('a', true);
   if (!await read('revoked', 'a') || !await quiet('a')) throw new Error('revoked revisit predicate failed');
   await integrity('a');
+}
+
+// No prompt automation: the OS permission dialog is human self-attestation only.
+export async function runPermissionCycleCheckpoints({ instruct, acknowledge, read, ui, integrity, waitForState = waitForObservation }) {
+  if (!await read('baseline')) throw new Error('permission cycle baseline failed');
+  const stage = async (instruction, mode, visible, token) => {
+    instruct(instruction);
+    const observe = async () => await ui(visible) && await read(mode);
+    if (!await waitForState(observe)) throw new Error('permission cycle observable predicate failed');
+    if (await acknowledge(token) !== token) throw new Error('permission cycle human acknowledgement missing');
+    if (!await observe()) throw new Error('permission cycle changed during acknowledgement');
+    await integrity();
+  };
+  await stage('17a. REENABLE A: human-open the real toolbar popup, click Enable detection for this site and Allow a NEW actual Chrome permission dialog. Do not Analyze or Save. Leave popup open and observe enabled status, automatic panel and badge 1. OS permission-dialog automation is unavailable: NEW_CHROME_ALLOW_SEEN is your self-attestation, not automated proof. If no new dialog appears, abort; do not simulate or seed permission.', 'reenabled', 'enabled', 'NEW_CHROME_ALLOW_SEEN');
+  if (!await read('before-settings')) throw new Error('Settings removal baseline failed');
+  await stage('17b. CHROME SETTINGS REMOVE A: in THIS runner window only, human-open a separate chrome://extensions tab, find ClearChoice > Details > Site access. Chrome versions may show On specific sites with a site menu/Remove, or a Site access dropdown. Remove the A mock site permission through Chrome controls; never use the production popup Disable button. Do not uninstall/reload the extension or remove B instead. If this Chrome cannot remove this specific port-bearing mock origin, STOP with Ctrl+C, report the limitation, close the disposable runner and rerun only after a compatible Chrome/site-access remedy; do not broaden access or use permissions.remove automation. Return to the original A mock tab (do not reload), leave Settings, and observe panel gone and blank badge. Type CHROME_SETTINGS_A_REMOVED only after that actual Chrome Settings action.', 'settings-removed', 'quiet', 'CHROME_SETTINGS_A_REMOVED');
 }
 
 export async function runAutomaticLifecycleCheckpoints({ instruct, acknowledge, read, ui, navigate, reload, integrity, waitForState = waitForObservation }) {
@@ -587,6 +603,29 @@ export async function reviewCandidate(candidate, {
       mutate: async () => {
         await pages.a.waitForFunction(() => document.querySelector('#fake-order-summary')?.textContent?.includes('updated') === true, undefined, { timeout: 300_000 });
       },
+    });
+    await runPermissionCycleCheckpoints({
+      instruct: (text) => process.stdout.write(`${text}\n`),
+      acknowledge: (token) => terminal.question(`Type ${token} only after the specified real human action (anything else aborts): `, { signal: AbortSignal.timeout(300_000) }),
+      read: async (mode) => {
+        const observe = async () => (await worker.evaluate(`(${observePermissionCycle.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, globalThis, ${validateStorage}, (${observeSiteState.toString()}))`)).passed;
+        if (!await observe()) return false;
+        if (mode === 'settings-removed') {
+          for (let sample = 0; sample < 5; sample++) {
+            await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+            if (!await observe()) return false;
+          }
+        }
+        return true;
+      },
+      ui: async (mode) => {
+        const panel = pages.a.locator('aside[data-clearchoice-panel]');
+        if (mode === 'quiet') return await panel.count() === 0;
+        const popup = context.pages().find((page) => !page.isClosed() && page.url() === popupUrl);
+        return !!popup && await panel.count() === 1 && await panel.locator('article').count() === 1
+          && await popup.locator('[data-site-status]').textContent() === `Detection enabled for ${origins.a}; supported English checkout detection is enabled, not a completed scan.`;
+      },
+      integrity: () => assertIntegrity(pages.a, 'human reenable/Chrome Settings removal'),
     });
     let targetDigest;
     let deleteDigest;

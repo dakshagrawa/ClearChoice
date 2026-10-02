@@ -4,7 +4,59 @@ import { runInNewContext } from 'node:vm';
 const validate = runInNewContext(await storageValidatorSource(), { Intl, URL });
 import { WORKFLOW_PREDICATES } from '../scripts/active-tab-qa.mjs';
 import { createManualActiveTabQaMarker, runFinalCheckpoints, stopPendingHumanStages } from '../scripts/manual-active-tab-qa.mjs';
-import { storageValidatorSource, observeFinalState, observeFinalUi, observeHistorySubscriptions, runHumanStage, runWithCleanup, observeCleanState, observeSiteState, waitForObservation } from '../scripts/manual-qa-stages.mjs';
+import { storageValidatorSource, observePermissionCycle, observeFinalState, observeFinalUi, observeHistorySubscriptions, runHumanStage, runWithCleanup, observeCleanState, observeSiteState, waitForObservation } from '../scripts/manual-qa-stages.mjs';
+
+test('second consent derives generations and Settings observer rejects partial cleanup and identity changes', async () => {
+  const { state, finding, confirmed } = crudFixture();
+  const origin = finding.origin;
+  state.subscriptions = [confirmed]; // Also prove linked subscriptions survive.
+  state.grantState = { version: 1, sites: { [origin]: { enabled: false, generation: 8 } } };
+  const api = cleanApi(state);
+  let permitted = false;
+  let scripts = [];
+  let badge = '';
+  api.permissions.getAll = async () => ({ origins: permitted ? [origin + '/*'] : [] });
+  api.permissions.contains = async () => permitted;
+  api.scripting.getRegisteredContentScripts = async () => scripts;
+  api.action.getBadgeText = async () => badge;
+  const host = {};
+  await observeSiteState(api, 'baseline', origin, host, validate);
+  host.__qaRevokeGeneration = 7;
+  host.__qaRevokeHistoryDigest = host.__qaHistoryDigest;
+  const read = (mode) => observePermissionCycle(api, mode, origin, host, validate);
+  await expect(observePermissionCycle(api, 'reenabled', origin, {}, validate)).rejects.toThrow('baseline');
+  expect((await read('baseline')).passed).toBe(true);
+  const script = { id: 'clearchoice-site-b93005a526dc3134fdd360798aad3e73fbb20a3d50c16ebe605a4d4947098925', matches: [origin + '/*'], js: ['content.js'], allFrames: false, persistAcrossSessions: true, world: 'ISOLATED' };
+  permitted = true; scripts = [script]; badge = '1';
+  state.grantState.sites[origin] = { enabled: true, generation: 8 };
+  expect((await read('reenabled')).passed).toBe(false); // Reused generation.
+  state.grantState.sites[origin].generation = 9;
+  finding.latestSeen = '2026-10-01T00:01:00.000Z';
+  expect((await read('reenabled')).passed).toBe(true);
+  finding.id = 'f_replaced';
+  expect((await read('reenabled')).passed).toBe(false);
+  finding.id = 'f_mock';
+  confirmed.amount = '99.99';
+  expect((await read('reenabled')).passed).toBe(false);
+  confirmed.amount = '12.34';
+  expect((await read('before-settings')).passed).toBe(true);
+  permitted = false;
+  expect((await read('settings-removed')).passed).toBe(false); // Permission alone.
+  state.grantState.sites[origin] = { enabled: false, generation: 10 };
+  expect((await read('settings-removed')).passed).toBe(false); // Script remains.
+  scripts = [];
+  expect((await read('settings-removed')).passed).toBe(false); // Badge remains.
+  badge = '';
+  expect((await read('settings-removed')).passed).toBe(true);
+  api.tabs.query = async () => [{ id: 7, url: 'https://checkout-b.test:123/checkout/clean' }];
+  expect((await read('settings-removed')).passed).toBe(false);
+  api.tabs.query = async () => [{ id: 7 }];
+  delete state.grantState.sites[origin];
+  expect((await read('settings-removed')).passed).toBe(false);
+  state.reviewHistory = [{}];
+  await expect(read('settings-removed')).rejects.toThrow('schema');
+  expect(Object.values(host.__qaCycle).every((value) => typeof value === 'number' || /^[a-f0-9]{64}$/.test(value))).toBe(true);
+});
 
 test('exact clean readback rejects nested arrays and malformed storage rather than ignoring it', async () => {
   for (const state of [{ localState: { version: 1, reviewHistory: [{}], subscriptions: [] } },

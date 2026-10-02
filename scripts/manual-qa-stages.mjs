@@ -144,6 +144,52 @@ export async function observeSiteState(api, mode, origin, host = globalThis, val
   return { passed, historyCount: history.length, subscriptionCount: subscriptions.length };
 }
 
+// Human-only second consent/Settings cycle. Retain digests/counts, not records.
+export async function observePermissionCycle(api, mode, origin, host = globalThis, validate, siteObserve = observeSiteState) {
+  if (!/^https:\/\/checkout-a\.test:[1-9]\d{0,4}$/.test(origin) || Number(new URL(origin).port) > 65535) throw new Error('invalid cycle origin');
+  const stored = await api.storage.local.get(null);
+  validate(stored);
+  const history = stored.reviewHistory ?? [];
+  const subscriptions = stored.subscriptions ?? [];
+  const digest = async (value) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const stable = [...history].sort((a, b) => a.id.localeCompare(b.id)).map((item) => Object.fromEntries(Object.entries(item).filter(([key]) => key !== 'latestSeen')));
+  const identity = await digest(stable);
+  const subs = await digest(subscriptions);
+  const rest = await digest(Object.fromEntries(Object.entries(stored).filter(([key]) => !['reviewHistory', 'subscriptions', 'receipts', 'grantState'].includes(key))));
+  const others = await digest(Object.fromEntries(Object.entries(stored.grantState?.sites ?? {}).filter(([key]) => key !== origin)));
+  const grant = stored.grantState?.sites?.[origin];
+  const result = (passed) => ({ passed, historyCount: history.length, subscriptionCount: subscriptions.length });
+  const tabs = await api.tabs.query({ active: true, currentWindow: true });
+  // A human may be viewing chrome://extensions in this same runner window.
+  if (tabs.length !== 1 || !Number.isInteger(tabs[0].id) || (tabs[0].url !== undefined && new URL(tabs[0].url).origin !== origin)) return result(false);
+  if (mode === 'baseline') {
+    const previous = await siteObserve(api, 'revoked', origin, host, validate);
+    if (!previous.passed || !history.some((item) => item.origin === origin && item.kind === 'recurring-charge')) throw new Error('permission cycle revoked baseline unavailable');
+    host.__qaCycle = { identity, subs, rest, others, generation: grant.generation, tab: tabs[0].id };
+    return result(true);
+  }
+  const state = host.__qaCycle;
+  if (!state) throw new Error('permission cycle baseline missing');
+  if (tabs[0].id !== state.tab || identity !== state.identity || subs !== state.subs || rest !== state.rest || others !== state.others) return result(false);
+  if (mode === 'reenabled') {
+    if (tabs[0].url === undefined || grant?.enabled !== true || grant.generation !== state.generation + 1) return result(false);
+    // Existing exact Chrome permission/script/badge predicate, but no new IDs.
+    return result((await siteObserve(api, 'before-revoke', origin, host, validate)).passed
+      && await api.action.getBadgeText({ tabId: state.tab }) === '1');
+  }
+  if (mode === 'before-settings') {
+    if (grant?.enabled !== true || grant.generation !== state.generation + 1) throw new Error('Settings baseline generation invalid');
+    const readback = await siteObserve(api, 'before-revoke', origin, host, validate);
+    if (readback.passed) state.settingsGeneration = grant.generation;
+    return result(readback.passed);
+  }
+  if (mode === 'settings-removed') {
+    if (!Number.isSafeInteger(state.settingsGeneration) || grant?.enabled !== false || grant.generation !== state.settingsGeneration + 1) return result(false);
+    return result((await siteObserve(api, 'revoked', origin, host, validate)).passed);
+  }
+  throw new Error('unknown permission cycle mode');
+}
+
 // Read-only lifecycle identities; latestSeen may advance on a genuine rescan.
 export async function observeAutomaticLifecycle(api, mode, origin, host = globalThis, validate) {
   const stored = await api.storage.local.get(null);
