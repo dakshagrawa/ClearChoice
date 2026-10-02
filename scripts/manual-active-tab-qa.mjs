@@ -1,4 +1,4 @@
-/* global window, location, document, setTimeout, clearTimeout, AbortSignal */
+/* global window, location, document, chrome, setTimeout, clearTimeout, AbortSignal */
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { createServer } from 'node:https';
 import { tmpdir } from 'node:os';
@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createFixtureTls, mockCheckoutHtml } from './manual-qa-fixtures.mjs';
 import { LOCAL_HUMAN_ATTESTATION, WORKFLOW_PREDICATES, validateManualActiveTabMarker, sha256 } from './active-tab-qa.mjs';
-import { storageValidatorSource, observeCleanState, observeSiteState, observeHistorySubscriptions, observeHistorySubscriptionUi, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
+import { storageValidatorSource, observeFinalState, observeFinalUi, observeCleanState, observeSiteState, observeHistorySubscriptions, observeHistorySubscriptionUi, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
 import { prepareCandidateArchive } from './release-artifact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -52,10 +52,9 @@ export function fixtureOriginForServerAddress(address) {
   return assertFixtureOrigin(`https://checkout-a.test:${address.port}`);
 }
 
-export function restrictedBrowserArgs(extensionDirectory) {
+export function restrictedBrowserArgs() {
   return [
-    `--disable-extensions-except=${extensionDirectory}`,
-    `--load-extension=${extensionDirectory}`,
+    '--enable-unsafe-extension-debugging',
     '--proxy-server=http://127.0.0.1:9',
     '--proxy-bypass-list=<-loopback>;checkout-a.test;checkout-b.test',
     '--host-resolver-rules=MAP checkout-a.test 127.0.0.1, MAP checkout-b.test 127.0.0.1, MAP * ~NOTFOUND',
@@ -67,6 +66,7 @@ export function reviewBrowserLaunchOptions(extensionDirectory, pin) {
   return {
     channel: 'chromium',
     headless: false,
+    ignoreDefaultArgs: ['--disable-extensions'],
     args: [...restrictedBrowserArgs(extensionDirectory), ...(pin ? [`--ignore-certificate-errors-spki-list=${pin}`] : [])],
   };
 }
@@ -114,6 +114,43 @@ export async function waitForReviewedExtensionWorker(context, extensionDirectory
     () => { if (onVersion) session.off('ServiceWorker.workerVersionUpdated', onVersion); },
     () => session.detach(),
   ]);
+}
+
+export async function installReviewedExtension(context, extensionDirectory) {
+  const session = await context.browser().newBrowserCDPSession();
+  return runWithCleanup(async () => {
+    const { id } = await session.send('Extensions.loadUnpacked', { path: await realpath(extensionDirectory) });
+    if (id !== new URL(await reviewedWorkerUrl(extensionDirectory)).hostname) throw new Error('installed extension identity mismatch');
+    return id;
+  }, [() => session.detach()]);
+}
+
+export async function wakeReviewedExtension(context, extensionDirectory) {
+  const page = await context.newPage();
+  return runWithCleanup(async () => {
+    await page.goto(new URL('/popup/index.html', await reviewedWorkerUrl(extensionDirectory)).href);
+    // Wake only; this is not a native action popup or human gesture checkpoint.
+    await page.evaluate(() => chrome.runtime.getPlatformInfo());
+  }, [() => page.close()]);
+}
+
+export async function runFinalCheckpoints({ instruct, acknowledge, read, ui, integrity, restart, quiet, waitForState = waitForObservation }) {
+  if (!await read('baseline')) throw new Error('final baseline predicate failed');
+  const stage = async (instruction, mode, visible) => {
+    const observe = async () => await ui(visible) && await read(mode);
+    await runHumanStage({ instruction, instruct, acknowledge, observe: () => waitForState(observe) });
+    if (!await observe()) throw new Error('final state changed during acknowledgement');
+    await integrity();
+  };
+  await stage('30. RETENTION: human-select 7 days in Keep local observations. Leave popup open. Confirmed subscription and fresh history must stay unchanged; this does NOT prove elapsed expiry.', 'retention', 'retention');
+  await stage('31. HELP: click Cancellation help on QA Finding Mock. Confirm Visit site — not a cancellation guide, and local deletion does not cancel billing. Do not open any real provider or sign in; no second link click is required.', 'unchanged', 'help');
+  instruct('32. RESTART: type DONE to authorize closing this runner browser and reopening the SAME profile without reinstalling the extension.');
+  if (await acknowledge() !== 'DONE') throw new Error('restart authorization missing');
+  if (!await read('unchanged')) throw new Error('pre-restart state mismatch');
+  await integrity();
+  await restart();
+  if (!await read('unchanged') || !await quiet()) throw new Error('restart durability predicate failed');
+  await stage('33. RESTART READBACK: human-open the toolbar popup. Confirm 7 days, retained reviewed history and one saved QA Finding Mock subscription; automatic detection remains off. Leave popup open.', 'unchanged', 'restart');
 }
 
 function usage() {
@@ -269,7 +306,7 @@ export async function runHistorySubscriptionCheckpoints({ instruct, acknowledge,
 }
 
 export function stopPendingHumanStages() {
-  throw new Error('retention, restart durability, cancellation-help and final human attestation stages are pending; no ATTEST or marker is available');
+  throw new Error('final human attestation pending review; no ATTEST or marker is available');
 }
 
 export function createManualActiveTabQaMarker({ commit, manifestSha256, archiveSha256 }, results) {
@@ -307,6 +344,7 @@ export async function runManualActiveTabQa(argv = process.argv.slice(2), { prepa
 export async function reviewCandidate(candidate, {
   createTls = createFixtureTls, makeServer = createServer, createProfile = mkdtemp,
   launchContext = (...args) => chromium.launchPersistentContext(...args), removeProfile = rm,
+  install = installReviewedExtension,
 } = {}) {
   const { extensionPath } = candidate;
   let tls;
@@ -330,11 +368,12 @@ export async function reviewCandidate(candidate, {
 
     profile = await createProfile(resolve(tmpdir(), 'clearchoice-manual-active-tab-'));
     context = await launchContext(profile, reviewBrowserLaunchOptions(extensionPath, tls.pin));
+    await install(context, extensionPath);
     const cleanPage = await context.newPage();
     await cleanPage.goto(`${fixtureOrigin}/checkout/clean`);
     await captureIntegrityBaseline(cleanPage);
     await cleanPage.bringToFront();
-    const worker = await waitForReviewedExtensionWorker(context, extensionPath);
+    let worker = await waitForReviewedExtensionWorker(context, extensionPath);
     const cleanUrl = `${fixtureOrigin}/checkout/clean`;
     const readClean = async (mode) => {
       const predicates = await worker.evaluate(`(${observeCleanState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(cleanUrl)})`);
@@ -450,6 +489,37 @@ export async function reviewCandidate(candidate, {
         if (!popup) return false;
         return popup.evaluate(`(${observeHistorySubscriptionUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(targetDigest)})`);
       },
+    });
+    const expectedWorkerUrl = await reviewedWorkerUrl(extensionPath);
+    let finalBaseline;
+    const readFinal = async (mode) => worker.evaluate(`(${observeFinalState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, ${JSON.stringify(expectedWorkerUrl)}, ${JSON.stringify(finalBaseline)}, ${validateStorage})`);
+    const uiFinal = async (mode) => {
+      const popup = context.pages().find((page) => !page.isClosed() && page.url() === popupUrl);
+      return popup ? popup.evaluate(`(${observeFinalUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(origins.a)})`) : false;
+    };
+    await runFinalCheckpoints({
+      instruct: (text) => process.stdout.write(`${text}\n`),
+      acknowledge: () => terminal.question('Type DONE after the requested human action/observation: ', { signal: AbortSignal.timeout(300_000) }),
+      read: async (mode) => {
+        if (mode === 'baseline') { finalBaseline = await readFinal(mode); return true; }
+        const passed = await readFinal(mode);
+        if (passed && mode === 'retention') finalBaseline = { ...finalBaseline, policy: 7 };
+        return passed;
+      },
+      ui: uiFinal,
+      integrity: () => assertIntegrity(pages.a, 'final checkpoint'),
+      restart: async () => {
+        await context.close();
+        context = await launchContext(profile, reviewBrowserLaunchOptions(extensionPath, tls.pin));
+        // Same profile, no extension reinstall, same servers and pinned certificate.
+        pages.a = await context.newPage();
+        await pages.a.goto(`${origins.a}/checkout/dynamic-beta#checkout`);
+        await captureIntegrityBaseline(pages.a);
+        await pages.a.bringToFront();
+        await wakeReviewedExtension(context, extensionPath);
+        worker = await waitForReviewedExtensionWorker(context, extensionPath);
+      },
+      quiet: async () => await pages.a.locator('aside[data-clearchoice-panel]').count() === 0,
     });
     stopPendingHumanStages();
   }, [

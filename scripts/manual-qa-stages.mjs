@@ -233,6 +233,50 @@ export async function observeHistorySubscriptionUi(mode, targetDigest) {
   throw new Error('unknown human CRUD popup mode');
 }
 
+// Read-only final checkpoints: retain only hashes, never fixture records.
+export async function observeFinalState(api, mode, origin, expectedWorkerUrl, baseline, validate) {
+  const stored = await api.storage.local.get(null);
+  validate(stored);
+  const digest = async (value) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const permissions = await api.permissions.getAll();
+  const scripts = await api.scripting.getRegisteredContentScripts();
+  const history = stored.reviewHistory ?? [];
+  const subscriptions = stored.subscriptions ?? [];
+  const grant = stored.grantState?.sites?.[origin];
+  if (api.runtime.getURL('worker.js') !== expectedWorkerUrl || api.runtime.id !== new URL(expectedWorkerUrl).hostname
+    || !Array.isArray(permissions.origins) || permissions.origins.length !== 0 || scripts.length !== 0
+    || await api.permissions.contains({ origins: [origin + '/*'] }) || grant?.enabled !== false || !(grant.generation > 0)) throw new Error('final worker identity or revoked browser state invalid');
+  const snapshot = { history: await digest(history), subscriptions: await digest(subscriptions),
+    rest: await digest(Object.fromEntries(Object.entries(stored).filter(([key]) => !['reviewHistory', 'subscriptions', 'retentionPolicy'].includes(key)))),
+    policy: stored.retentionPolicy ?? 30 };
+  if (mode === 'baseline') {
+    if (subscriptions.length !== 1 || !subscriptions[0].sourceFindingId
+      || !history.some((item) => item.id === subscriptions[0].sourceFindingId && item.origin === origin && item.status === 'reviewed')
+      || history.some((item) => Date.parse(item.latestSeen) <= Date.now() - 7 * 86400000)) throw new Error('final baseline requires fresh retained source and one confirmed subscription');
+    return snapshot;
+  }
+  if (!baseline || !['retention', 'unchanged'].includes(mode)) throw new Error('final baseline or mode unavailable');
+  return snapshot.history === baseline.history && snapshot.subscriptions === baseline.subscriptions
+    && snapshot.rest === baseline.rest && snapshot.policy === (mode === 'retention' ? 7 : baseline.policy);
+}
+
+export function observeFinalUi(mode, origin) {
+  const section = document.querySelector('section[aria-label="Subscriptions"]');
+  const rows = Array.from(document.querySelectorAll('[data-subscription-list] > article'));
+  if (rows.length !== 1 || !section?.textContent.includes('Delete removes the local record only; it does not cancel billing.')) return false;
+  const retention = document.querySelector('[data-review-retention]');
+  if (!retention || retention.disabled || retention.value !== '7') return false;
+  if (mode === 'retention') return true;
+  if (mode === 'restart') return rows[0].textContent.includes('QA Finding Mock')
+    && Array.from(document.querySelectorAll('[data-review-id]')).some((row) => row.querySelector('[data-action="review-mark"]')?.dataset.reviewed === 'true'
+      && row.querySelector('[data-action="review-mark"]')?.disabled === true);
+  if (mode !== 'help') throw new Error('unknown final popup mode');
+  const anchors = Array.from(section.querySelectorAll('a'));
+  return anchors.length === 1 && anchors[0].getAttribute('href') === origin + '/'
+    && anchors[0].target === '_blank' && anchors[0].rel === 'noopener noreferrer'
+    && anchors[0].textContent === 'Visit site — not a cancellation guide';
+}
+
 // Pristine clean-stage schema only, not a general loader. Nonempty or corrupt
 // records are rejected, never defaulted or ignored. Serialized into the worker.
 export async function observeCleanState(api, mode, targetUrl, host = globalThis) {

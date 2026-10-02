@@ -3,8 +3,8 @@ import { expect, test } from 'vitest';
 import { runInNewContext } from 'node:vm';
 const validate = runInNewContext(await storageValidatorSource(), { Intl, URL });
 import { WORKFLOW_PREDICATES } from '../scripts/active-tab-qa.mjs';
-import { createManualActiveTabQaMarker } from '../scripts/manual-active-tab-qa.mjs';
-import { storageValidatorSource, observeHistorySubscriptions, runHumanStage, runWithCleanup, observeCleanState, observeSiteState, waitForObservation } from '../scripts/manual-qa-stages.mjs';
+import { createManualActiveTabQaMarker, runFinalCheckpoints, stopPendingHumanStages } from '../scripts/manual-active-tab-qa.mjs';
+import { storageValidatorSource, observeFinalState, observeFinalUi, observeHistorySubscriptions, runHumanStage, runWithCleanup, observeCleanState, observeSiteState, waitForObservation } from '../scripts/manual-qa-stages.mjs';
 
 test('exact clean readback rejects nested arrays and malformed storage rather than ignoring it', async () => {
   for (const state of [{ localState: { version: 1, reviewHistory: [{}], subscriptions: [] } },
@@ -258,6 +258,65 @@ test('already-reviewed synthetic baseline fails honestly instead of pretending a
   expect(host).toEqual({});
 });
 const results = () => Object.fromEntries(WORKFLOW_PREDICATES.map((name) => [name, name === 'accessibility' ? true : 'passed']));
+
+test('synthetic final readbacks preserve exact source, subscriptions, retention and revoked generation through restart', async () => {
+  const { state, finding, confirmed } = crudFixture();
+  const origin = finding.origin;
+  finding.firstSeen = finding.latestSeen = new Date().toISOString();
+  finding.status = 'reviewed'; state.subscriptions = [confirmed];
+  state.grantState = { version: 1, sites: { [origin]: { enabled: false, generation: 2 } } };
+  const api = cleanApi(state);
+  const url = 'chrome-extension://' + 'a'.repeat(32) + '/worker.js';
+  api.runtime = { id: 'a'.repeat(32), getURL: () => url };
+  api.permissions.contains = async () => false;
+  const read = (mode, base) => observeFinalState(api, mode, origin, url, base, validate);
+  const baseline = await read('baseline');
+  expect(Object.values(baseline).every((v) => typeof v === 'number' || /^[a-f0-9]{64}$/.test(v))).toBe(true);
+  expect(await read('retention', baseline)).toBe(false);
+  state.retentionPolicy = 7;
+  expect(await read('retention', baseline)).toBe(true);
+  const after = { ...baseline, policy: 7 };
+  expect(await read('unchanged', after)).toBe(true);
+  for (const key of ['history', 'subscriptions', 'rest']) expect(await read('unchanged', { ...after, [key]: '0'.repeat(64) })).toBe(false);
+  const good = structuredClone(state);
+  for (const mutation of [() => { finding.status = 'needs-review'; }, () => { state.subscriptions.push({ ...confirmed, id: 'extra' }); }, () => { state.retentionPolicy = 30; }, () => { state.grantState.sites[origin].generation++; }]) {
+    mutation(); expect(await read('unchanged', after)).toBe(false);
+    Object.assign(state, structuredClone(good));
+  }
+  for (const malformed of [{ retentionPolicy: 999 }, { reviewHistory: [{}] }, { subscriptions: [{}] }]) {
+    Object.assign(state, good, malformed); await expect(read('unchanged', after)).rejects.toThrow('schema');
+  }
+  Object.assign(state, good); api.runtime.id = 'b'.repeat(32);
+  await expect(read('unchanged', after)).rejects.toThrow('identity');
+});
+
+test('synthetic cancellation help DOM rejects wrong destination, target, rel and additional records', async () => {
+  const { JSDOM } = await import('jsdom');
+  const origin = 'https://checkout-a.test:123';
+  const dom = new JSDOM(`<select data-review-retention><option value="7" selected>7 days</option></select><section aria-label="Subscriptions"><p>Delete removes the local record only; it does not cancel billing.</p><div data-subscription-list><article><a href="${origin}/" target="_blank" rel="noopener noreferrer">Visit site — not a cancellation guide</a></article></div></section>`);
+  const observe = runInNewContext(`(${observeFinalUi.toString()})`, { document: dom.window.document });
+  expect(observe('help', origin)).toBe(true);
+  const a = dom.window.document.querySelector('a');
+  for (const [attribute, value] of [['href', origin + '/cancel'], ['href', 'https://wrong.test/'], ['target', '_self'], ['rel', 'noopener']]) {
+    const previous = a.getAttribute(attribute); a.setAttribute(attribute, value); expect(observe('help', origin)).toBe(false); a.setAttribute(attribute, previous);
+  }
+  dom.window.document.querySelector('[data-subscription-list]').append(dom.window.document.createElement('article'));
+  expect(observe('help', origin)).toBe(false);
+});
+
+test('final stages require explicit restart authorization and fail on persisted-state mismatch', async () => {
+  for (const failure of ['none', 'authorization', 'restart']) {
+    let restarted = false;
+    let acknowledgements = 0;
+    const run = runFinalCheckpoints({ instruct: () => {}, acknowledge: async () => ++acknowledgements === 3 && failure === 'authorization' ? '' : 'DONE',
+      read: async () => !(restarted && failure === 'restart'), ui: async () => true, integrity: async () => {},
+      restart: async () => { restarted = true; }, quiet: async () => true });
+    if (failure === 'none') await expect(run).resolves.toBeUndefined();
+    else await expect(run).rejects.toThrow(failure === 'authorization' ? 'authorization' : 'durability');
+    expect(restarted).toBe(failure !== 'authorization');
+  }
+  expect(() => stopPendingHumanStages()).toThrow('final human attestation pending review');
+});
 
 test('marker constructor cannot manufacture passed workflow results', () => {
   expect(() => createManualActiveTabQaMarker(candidate)).toThrow();

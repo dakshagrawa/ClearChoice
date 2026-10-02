@@ -1,4 +1,5 @@
 // @vitest-environment node
+/* global chrome */
 /* global window */
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -74,11 +75,13 @@ test('clean baseline observes a real extension worker using read-only browser AP
   const profile = await mkdtemp(resolve(tmpdir(), 'manual-readback-profile-'));
   temporaryPaths.push(profile);
   const browser = await chromium.launchPersistentContext(profile, {
-    channel: 'chromium', headless: true, args: restrictedBrowserArgs(initial.extensionPath),
+    ...reviewBrowserLaunchOptions(initial.extensionPath), headless: true,
   });
   try {
     const page = await browser.newPage();
     await page.bringToFront();
+    const { installReviewedExtension, wakeReviewedExtension } = await import('../scripts/manual-active-tab-qa.mjs');
+    await installReviewedExtension(browser, initial.extensionPath);
     const worker = await waitForReviewedExtensionWorker(browser, initial.extensionPath);
     expect(worker.url()).toBe(await reviewedWorkerUrl(initial.extensionPath));
     expect(await worker.evaluate(() => globalThis.chrome.runtime.getManifest().permissions)).toEqual(['activeTab', 'scripting', 'storage']);
@@ -88,6 +91,15 @@ test('clean baseline observes a real extension worker using read-only browser AP
     // Production pure validators execute in the genuine worker; no storage seeds.
     expect(validator).not.toMatch(/storage\.local\.(?:set|remove|clear)|loadLocalState|readLocalState/);
     expect(await worker.evaluate(`(${observeSiteState.toString()})(chrome, 'baseline', 'https://checkout-a.test:123', globalThis, ${validator})`)).toEqual({ passed: true, historyCount: 0, subscriptionCount: 0 });
+    const before = await worker.evaluate(async () => JSON.stringify({ stored: await chrome.storage.local.get(null), scripts: await chrome.scripting.getRegisteredContentScripts(), permissions: await chrome.permissions.getAll() }));
+    await browser.close();
+    const restarted = await chromium.launchPersistentContext(profile, { ...reviewBrowserLaunchOptions(initial.extensionPath), headless: true });
+    try {
+      await wakeReviewedExtension(restarted, initial.extensionPath);
+      const fresh = await waitForReviewedExtensionWorker(restarted, initial.extensionPath);
+      expect(await fresh.evaluate(() => chrome.runtime.id)).toBe(new URL(await reviewedWorkerUrl(initial.extensionPath)).hostname);
+      expect(await fresh.evaluate(async () => JSON.stringify({ stored: await chrome.storage.local.get(null), scripts: await chrome.scripting.getRegisteredContentScripts(), permissions: await chrome.permissions.getAll() }))).toBe(before);
+    } finally { await restarted.close(); }
   } finally { await browser.close(); }
 }, { runtime: true }), 15_000);
 
@@ -311,7 +323,7 @@ test('manual runner loads the prepared archive extraction and cleans it after br
     await expect(runManualActiveTabQa([])).rejects.toBe(failure);
     expect(prepared).toHaveBeenCalledExactlyOnceWith(root);
     expect(launch).toHaveBeenCalledOnce();
-    expect(launch.mock.calls[0][1].args).toContain(`--load-extension=${extensionPath}`);
+    expect(launch.mock.calls[0][1].args).not.toContain(`--load-extension=${extensionPath}`);
     expect(cleanup).toHaveBeenCalledOnce();
   } finally {
     launch.mockRestore();
@@ -367,7 +379,7 @@ test('midworkflow error survives browser close failure and every remaining resou
   const removeProfile = vi.fn();
   await expect(reviewCandidate({ extensionPath: root }, {
     createTls: async () => tls, makeServer: () => server,
-    createProfile: async () => 'unit-profile', launchContext: async () => browser, removeProfile,
+    createProfile: async () => 'unit-profile', launchContext: async () => browser, removeProfile, install: async () => {},
   })).rejects.toBe(primary);
   for (const closer of [browser.close, server.close, removeProfile, tls.cleanup]) expect(closer).toHaveBeenCalledOnce();
 });
@@ -423,8 +435,7 @@ test('derives the navigated fixture origin only from the runner-owned 127.0.0.1 
 test('restricts review Chromium to only its 127.0.0.1 fixture and disables implicit loopback bypass', () => {
   const extensionPath = resolve(root, 'dist');
   expect(restrictedBrowserArgs(extensionPath)).toEqual([
-    `--disable-extensions-except=${extensionPath}`,
-    `--load-extension=${extensionPath}`,
+    '--enable-unsafe-extension-debugging',
     '--proxy-server=http://127.0.0.1:9',
     '--proxy-bypass-list=<-loopback>;checkout-a.test;checkout-b.test',
     '--host-resolver-rules=MAP checkout-a.test 127.0.0.1, MAP checkout-b.test 127.0.0.1, MAP * ~NOTFOUND',
@@ -433,6 +444,7 @@ test('restricts review Chromium to only its 127.0.0.1 fixture and disables impli
   expect(reviewBrowserLaunchOptions(extensionPath)).toEqual({
     channel: 'chromium',
     headless: false,
+    ignoreDefaultArgs: ['--disable-extensions'],
     args: restrictedBrowserArgs(extensionPath),
   });
   expect(() => assertFixtureOrigin('https://checkout-a.test:43123')).not.toThrow();
