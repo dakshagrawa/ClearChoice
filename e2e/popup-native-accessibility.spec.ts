@@ -1,0 +1,222 @@
+import { expect, test } from 'playwright/test';
+import { readFile } from 'node:fs/promises';
+import { Buffer } from 'node:buffer';
+import { PackagedRuntime } from './packaged-runtime';
+
+type Popup = Awaited<ReturnType<PackagedRuntime['popup']>>;
+
+// Rendered measurements, not token/CSS inspection. Chrome setup pregrants the
+// reserved, form-free HTTPS fixture; CDP trusted input is NOT human consent QA.
+const measurements = `(() => {
+  const rgba = value => {
+    const values = value.match(/[\\d.]+/g)?.map(Number);
+    if (!values || values.length < 3) throw Error('Unsupported computed color: '+value);
+    return [...values.slice(0,3), values[3] ?? 1];
+  };
+  const over = (fg,bg) => {
+    const a = fg[3] + bg[3]*(1-fg[3]);
+    return [...fg.slice(0,3).map((c,i)=>(c*fg[3]+bg[i]*bg[3]*(1-fg[3]))/a),a];
+  };
+  const background = element => {
+    const layers=[];
+    for(let e=element;e;e=e.parentElement) {
+      const s=getComputedStyle(e);
+      if(s.backgroundImage!=='none' || Number(s.opacity)!==1) throw Error('Non-flat/opacity surface requires pixel audit: '+e.outerHTML);
+      const color=rgba(s.backgroundColor); layers.push(color);
+      if(color[3]===1) break;
+    }
+    if(layers.at(-1)?.[3]!==1) throw Error('No opaque ancestor; do not assume white');
+    return layers.reverse().reduce((bg,fg)=>over(fg,bg));
+  };
+  const lum = c => c.slice(0,3).map(x=>x/255).map(x=>x<=0.04045?x/12.92:((x+0.055)/1.055)**2.4).reduce((a,x,i)=>a+x*[0.2126,0.7152,0.0722][i],0);
+  const contrast = (a,b) => (Math.max(lum(a),lum(b))+0.05)/(Math.min(lum(a),lum(b))+0.05);
+  const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility==='visible' && !e.closest('[hidden]');
+  const identity = e => ({tag:e.tagName, name:e.getAttribute('aria-label') || e.getAttribute('name') || e.textContent.trim().slice(0,100), action:e.dataset.action || e.dataset.subscriptionAction || null});
+  const controls=[...document.querySelectorAll('button,select,input,textarea,a[href]')].filter(visible);
+  const disabled=controls.filter(e=>e.matches(':disabled')).map(identity);
+  const text=[];
+  for(const e of document.querySelectorAll('body *')) {
+    if(!visible(e) || e.closest(':disabled') || ['SCRIPT','STYLE','OPTION'].includes(e.tagName)) continue;
+    const content=[...e.childNodes].filter(n=>n.nodeType===Node.TEXT_NODE).map(n=>n.textContent).join('').trim();
+    if(!content && !['INPUT','TEXTAREA','SELECT'].includes(e.tagName)) continue;
+    const s=getComputedStyle(e), bg=background(e), fg=over(rgba(s.color),bg);
+    const large=parseFloat(s.fontSize)>=24 || (parseFloat(s.fontSize)>=18.6667 && Number(s.fontWeight)>=700);
+    text.push({...identity(e),text:content.slice(0,100),color:s.color,background:bg,font:s.fontSize,weight:s.fontWeight,ratio:contrast(fg,bg),minimum:large?3:4.5});
+  }
+  const targets=controls.filter(e=>!e.matches(':disabled')).map(e=> {
+    const r=e.getBoundingClientRect();
+    // Inline help links have no authored 44px policy. WCAG 2.5.8 permits
+    // undersized targets when their 24px diameter circles do not intersect
+    // another target/circle. Do not silently exempt all anchors.
+    const spaced=controls.filter(o=>o!==e && !o.matches(':disabled')).every(o=>{
+      const b=o.getBoundingClientRect(), x=r.x+r.width/2,y=r.y+r.height/2;
+      if(b.width<24 || b.height<24) return Math.hypot(x-b.x-b.width/2,y-b.y-b.height/2)>=24;
+      return Math.hypot(Math.max(b.x-x,0,x-b.right),Math.max(b.y-y,0,y-b.bottom))>=12;
+    });
+    return {...identity(e),width:r.width,height:r.height,policy:e.tagName==='A'?'WCAG 2.5.8 spacing':'authored 44px',pass:e.tagName==='A'?(r.width>=24 && r.height>=24)||spaced:r.width>=44 && r.height>=44};
+  });
+  const e=document.activeElement;
+  let focus=null;
+  if(controls.includes(e) && !e.matches(':disabled')) {
+    const s=getComputedStyle(e), bg=background(e.parentElement), outline=rgba(s.outlineColor);
+    const r=e.getBoundingClientRect(), hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);
+    // Chromium native-popup scaling leaves scroll edges up to one CSS pixel
+    // fractional (observed 0.686px); retain exact rectangles in the evidence.
+    // This is rounding tolerance, not permission for clipped/occluded controls.
+    focus={...identity(e),rect:{x:r.x,y:r.y,width:r.width,height:r.height},viewport:{width:innerWidth,height:innerHeight},visible:e.matches(':focus-visible'),inViewport:r.top>=-1 && r.bottom<=innerHeight+1 && r.left>=-1 && r.right<=innerWidth+1,hit:hit===e || e.contains(hit),outlineStyle:s.outlineStyle,outlineWidth:parseFloat(s.outlineWidth),outlineColor:s.outlineColor,shadow:s.boxShadow,ratio:contrast(over(outline,bg),bg)};
+  }
+  return {text,targets,disabled,focus,theme:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'};
+})()`;
+
+type Measures = {
+  text: { name: string; ratio: number; minimum: number }[];
+  targets: { name: string; pass: boolean }[];
+  disabled: unknown[];
+  focus: { name: string; visible: boolean; inViewport: boolean; hit: boolean; outlineStyle: string; outlineWidth: number; ratio: number } | null;
+  theme: string;
+};
+
+async function key(popup: Popup, keyName: 'Tab' | 'Enter', shift = false) {
+  const code = keyName === 'Tab' ? 9 : 13;
+  for (const type of ['keyDown', 'keyUp']) await popup.send('Input.dispatchKeyEvent', {
+    type, key: keyName, code: keyName, windowsVirtualKeyCode: code, modifiers: shift ? 8 : 0,
+    ...(keyName === 'Enter' && type === 'keyDown' ? { text: '\r', unmodifiedText: '\r' } : {}),
+  });
+  // Native keyboard scroll and synthesized activation settle on rendering frames.
+  await popup.evaluate(`new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))`);
+}
+
+async function keyboardCancel(popup: Popup) {
+  const count = await popup.evaluate<number>(`document.querySelectorAll('button,select,input,textarea,a[href]').length`);
+  for (let step = 0; step <= count; step++) {
+    if (await popup.evaluate(`document.activeElement.matches('[data-subscription-action="cancel"]')`)) {
+      await key(popup, 'Enter');
+      return;
+    }
+    await key(popup, 'Tab');
+  }
+  throw Error('Cancel unreachable via native popup keyboard traversal');
+}
+
+async function audit(popup: Popup, theme: string, state: string) {
+  const measured = await popup.evaluate<Measures>(measurements);
+  await test.info().attach(`${theme}-${state}-computed`, { body: JSON.stringify(measured, null, 2), contentType: 'application/json' });
+  expect.soft(measured.theme).toBe(theme);
+  expect.soft(measured.text.length).toBeGreaterThan(10);
+  expect.soft(measured.text.filter(t => t.ratio < t.minimum), `${theme}/${state} rendered text contrast`).toEqual([]);
+  expect.soft(measured.targets.filter(t => !t.pass), `${theme}/${state} actual target geometry`).toEqual([]);
+  const axe = await popup.evaluate(`axe.run().then(r=>r.violations.filter(v=>['serious','critical'].includes(v.impact)).map(v=>({id:v.id,impact:v.impact,nodes:v.nodes.map(n=>({target:n.target,summary:n.failureSummary}))})))`);
+  await test.info().attach(`${theme}-${state}-axe`, { body: JSON.stringify(axe, null, 2), contentType: 'application/json' });
+  expect.soft(axe, `${theme}/${state} full Axe serious/critical`).toEqual([]);
+}
+
+async function keyboardReview(popup: Popup, theme: string, state: string) {
+  const count = await popup.evaluate<number>(`(() => {
+    const controls=[...document.querySelectorAll('button,select,input,textarea,a[href]')].filter(e=>!e.disabled && e.getClientRects().length && getComputedStyle(e).visibility==='visible');
+    controls.forEach((e,i)=>e.dataset.a11yOrder=String(i));
+    controls[0].focus(); return controls.length;
+  })()`);
+  const evidence: unknown[] = [];
+  // Initial focus is only a traversal anchor. Every measured focus follows
+  // actual CDP Tab/Shift+Tab, including forward/backward checks of each control.
+  for (let i = 1; i < count; i++) {
+    await key(popup, 'Tab');
+    expect.soft(await popup.evaluate(`document.activeElement.dataset.a11yOrder`), `${state} forward order`).toBe(String(i));
+    const result = await popup.evaluate<Measures>(measurements);
+    if (result.focus?.name === 'nextBillingDate') {
+      const diagnostic = await popup.evaluate(`(async () => {
+        const e=document.activeElement, frames=[];
+        for(let i=0;i<12;i++) {
+          const s=getComputedStyle(e);
+          frames.push({frame:i,active:document.activeElement===e,documentFocus:document.hasFocus(),focus:e.matches(':focus'),focusVisible:e.matches(':focus-visible'),focusWithin:e.matches(':focus-within'),outline:s.outline,shadow:s.boxShadow});
+          await new Promise(resolve=>requestAnimationFrame(resolve));
+        }
+        return {html:e.outerHTML,frames};
+      })()`);
+      await test.info().attach(`${theme}-${state}-date-forward-diagnostic`, { body: JSON.stringify(diagnostic, null, 2), contentType: 'application/json' });
+      await popup.send('DOM.enable');
+      const dom = await popup.send('DOM.getDocument', { depth: -1, pierce: true });
+      await test.info().attach(`${theme}-${state}-date-forward-shadow-dom`, { body: JSON.stringify(dom, null, 2), contentType: 'application/json' });
+      const screenshot = await popup.send('Page.captureScreenshot');
+      await test.info().attach(`${theme}-${state}-date-forward-pixels`, { body: Buffer.from(screenshot.data as string, 'base64'), contentType: 'image/png' });
+    }
+    evidence.push(result.focus);
+    expect.soft(result.focus?.inViewport, `${state} focus target within viewport`).toBe(true);
+    expect.soft(result.focus?.hit, `${state} focused target center hit-tests correctly`).toBe(true);
+    expect.soft(result.focus?.visible, `${theme}/${state} ${result.focus?.name} focus-visible`).toBe(true);
+    expect.soft(result.focus?.outlineStyle).not.toBe('none');
+    expect.soft(result.focus?.outlineWidth).toBeGreaterThanOrEqual(1);
+    expect.soft(result.focus?.ratio, `${theme}/${state} ${result.focus?.name} focus contrast`).toBeGreaterThanOrEqual(3);
+  }
+  for (let i = count - 2; i >= 0; i--) {
+    await key(popup, 'Tab', true);
+    expect.soft(await popup.evaluate(`document.activeElement.dataset.a11yOrder`), `${state} reverse order`).toBe(String(i));
+    const result = await popup.evaluate<Measures>(measurements);
+    evidence.push(result.focus);
+    expect.soft(result.focus?.inViewport, `${state} focus target within viewport`).toBe(true);
+    expect.soft(result.focus?.hit, `${state} focused target center hit-tests correctly`).toBe(true);
+    expect.soft(result.focus?.visible).toBe(true);
+    expect.soft(result.focus?.outlineWidth).toBeGreaterThanOrEqual(1);
+    expect.soft(result.focus?.ratio).toBeGreaterThanOrEqual(3);
+  }
+  await test.info().attach(`${theme}-${state}-keyboard`, { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' });
+}
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`native packaged ${theme}: rendered review/help, manual editor and delete confirmation accessibility (NOT human QA)`, async () => {
+    test.setTimeout(90_000);
+    const runtime = new PackagedRuntime();
+    const before = await runtime.inventory();
+    try {
+      await runtime.start();
+      let popup = await runtime.popup();
+      await popup.click('[data-action="site-enable"]');
+      await popup.wait(`document.querySelector('[data-site-status]').textContent.startsWith('Detection enabled for')`);
+      await popup.close();
+      await runtime.page.goto(runtime.a + '/checkout/recurring');
+      await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(1);
+      popup = await runtime.popup();
+      await popup.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] });
+      await popup.evaluate(await readFile('node_modules/axe-core/axe.min.js', 'utf8'));
+      await popup.wait(`document.querySelectorAll('[data-review-id]').length === 1`);
+      await popup.click('[data-action="review-as-subscription"]');
+      for (const [name, value] of Object.entries({ merchant: 'Fake local membership', amount: '12.00', currency: 'USD', cadence: 'monthly' })) await popup.fill(name, value);
+      await popup.click('[data-subscription-editor] [type="submit"]');
+      await popup.wait(`document.querySelector('[aria-label="Subscriptions"] > [role="status"]').textContent === 'Subscription saved locally.'`);
+      const saved = (await runtime.storage()).subscriptions;
+      expect(saved).toHaveLength(1);
+      await popup.click('[data-subscription-action="help"]');
+      await popup.wait(`document.querySelector('[data-subscription-list]').textContent.includes('No known provider site; check your billing provider')`);
+      // Reserved mock origins are deliberately not provider sites. Exercise the
+      // genuine no-link help fallback without forging a provider or opening one.
+      expect(await popup.evaluate(`document.querySelectorAll('[data-subscription-list] a').length`)).toBe(0);
+      await audit(popup, theme, 'review-help');
+      await keyboardReview(popup, theme, 'review-help');
+
+      await popup.click('[data-subscription-action="add"]');
+      await audit(popup, theme, 'manual-editor');
+      await keyboardReview(popup, theme, 'manual-editor');
+      await keyboardCancel(popup);
+      expect(await popup.evaluate(`document.activeElement.dataset.subscriptionAction`)).toBe('add');
+      expect((await runtime.storage()).subscriptions).toEqual(saved);
+      // History refresh rebuilds its rows; cancellation must return to the live
+      // new review control, not a detached element from the previous render.
+      await popup.click('[data-action="review-refresh"]');
+      await popup.wait(`document.querySelectorAll('[data-review-id]').length === 1 && !document.querySelector('[data-action="review-refresh"]').disabled`);
+      await popup.click('[data-action="review-as-subscription"]');
+      await keyboardCancel(popup);
+      expect(await popup.evaluate(`document.activeElement.isConnected && document.activeElement.dataset.action === 'review-as-subscription'`)).toBe(true);
+
+      await popup.click('[data-subscription-action="delete"]');
+      await audit(popup, theme, 'delete-confirmation');
+      await keyboardReview(popup, theme, 'delete-confirmation');
+      await keyboardCancel(popup);
+      expect(await popup.evaluate(`document.activeElement.isConnected && document.activeElement.dataset.subscriptionAction === 'delete'`)).toBe(true);
+      expect((await runtime.storage()).subscriptions).toEqual(saved);
+      await popup.close();
+    } finally {
+      expect(await runtime.inventory(), 'approved dist must remain byte-identical').toEqual(before);
+      await runtime.stop();
+    }
+  });
+}
