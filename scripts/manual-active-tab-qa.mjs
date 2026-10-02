@@ -1,4 +1,4 @@
-/* global window, location, document, chrome, setTimeout, clearTimeout, AbortSignal */
+/* global window, location, document, chrome, setTimeout, clearTimeout, AbortSignal, crypto, TextEncoder */
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { createServer } from 'node:https';
 import { tmpdir } from 'node:os';
@@ -312,12 +312,17 @@ export async function runAutomaticLifecycleCheckpoints({ instruct, acknowledge, 
 }
 
 // No workflow result/attestation is produced by this bounded human-only slice.
-export async function runHistorySubscriptionCheckpoints({ instruct, acknowledge, read, ui, waitForState = waitForObservation }) {
+export async function runHistorySubscriptionCheckpoints({ instruct, acknowledge, read, ui, nativeDialog, waitForState = waitForObservation }) {
   if (!await read('baseline')) throw new Error('human CRUD baseline predicate failed');
   const stage = async (instruction, mode, visible) => {
-    const observe = async () => await ui(visible) && await read(mode);
-    await runHumanStage({ instruction, instruct, acknowledge, observe: () => waitForState(observe) });
-    if (!await observe()) throw new Error('human CRUD state changed during acknowledgement');
+    const deletion = ['history-delete-cancelled', 'history-deleted'].includes(mode);
+    if (deletion && typeof nativeDialog !== 'function') throw new Error('native history dialog observer unavailable');
+    const dialog = deletion ? await nativeDialog(mode === 'history-deleted') : undefined;
+    await runWithCleanup(async () => {
+      const observe = async () => (!dialog || await dialog.passed()) && await ui(visible) && await read(mode);
+      await runHumanStage({ instruction, instruct, acknowledge, observe: () => waitForState(observe) });
+      if (!await observe()) throw new Error('human CRUD state changed during acknowledgement');
+    }, [() => dialog?.close()]);
   };
   await stage('18. HISTORY: human-open the toolbar popup and click Refresh history. Confirm retained A recurring observations remain usable after revoke; subscriptions must still be empty. Leave popup open.', 'history', 'history');
   await stage('19. HISTORY: click Mark reviewed on the first unreviewed A recurring-charge observation. Confirm Reviewed and the disabled Mark reviewed button. This must NOT create a subscription.', 'reviewed', 'reviewed');
@@ -334,6 +339,54 @@ export async function runHistorySubscriptionCheckpoints({ instruct, acknowledge,
   await stage('27. DELETE CANCEL: click Cancel in Delete confirmation. Both persisted subscriptions must remain byte-for-byte unchanged.', 'unchanged', 'closed-two');
   await stage('28. DELETE REOPEN: click Delete on QA Manual Mock Edited ONLY again. Observe the correct Delete confirmation target.', 'unchanged', 'delete-prompt');
   await stage('29. DELETE CONFIRM: click Delete subscription in Delete confirmation. Observe Subscription deleted locally. Only the manual record may disappear; the finding-confirmed subscription and retained history must survive.', 'deleted', 'deleted-one');
+}
+
+// Passive native CDP observation. A fresh session and click checkpoint are bound
+// to exactly one genuine popup; no confirm replacement or dialog response exists.
+export async function observeNativeHistoryDialog(context, popup, targetDigest, messageDigest, accepted) {
+  if (!popup || popup.isClosed() || ![targetDigest, messageDigest].every((value) => /^[a-f0-9]{64}$/.test(value))) throw new Error('native history dialog target unavailable');
+  const session = await context.newCDPSession(popup);
+  const state = { opening: 0, closed: 0, type: '', digest: '', accepted: null };
+  const opening = (event) => {
+    state.opening++;
+    state.type = event.type;
+    state.digest = sha256(JSON.stringify(event.message));
+  };
+  const closed = (event) => { state.closed++; state.accepted = event.result; };
+  session.on('Page.javascriptDialogOpening', opening);
+  session.on('Page.javascriptDialogClosed', closed);
+  try {
+    await session.send('Page.enable');
+    await popup.evaluate(async () => {
+      const digest = async (value) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+      window.__qaNativeDelete = { counter: 0, digest: '' };
+      for (const row of document.querySelectorAll('[data-review-id]')) {
+        const hash = await digest(row.dataset.reviewId);
+        row.querySelector('[data-action="review-delete"]')?.addEventListener('click', (event) => {
+          if (event.isTrusted) { window.__qaNativeDelete.counter++; window.__qaNativeDelete.digest = hash; }
+        }, { capture: true, once: true });
+      }
+    });
+  } catch (error) {
+    await session.detach();
+    throw error;
+  }
+  return {
+    passed: async () => {
+      if (popup.isClosed()) throw new Error('native history dialog popup changed');
+      if (state.opening > 1 || state.closed > 1 || state.closed > state.opening) throw new Error('native history dialog event sequence invalid');
+      if (state.opening === 0 || state.closed === 0) return false;
+      if (state.type !== 'confirm' || state.digest !== messageDigest || state.accepted !== accepted) throw new Error('native history dialog confirmation mismatch');
+      const click = await popup.evaluate(() => window.__qaNativeDelete);
+      if (click?.counter !== 1 || click.digest !== targetDigest) throw new Error('native history dialog clicked record mismatch');
+      return true;
+    },
+    close: async () => {
+      session.off('Page.javascriptDialogOpening', opening);
+      session.off('Page.javascriptDialogClosed', closed);
+      await session.detach();
+    },
+  };
 }
 
 export function stopPendingHumanStages() {
@@ -537,13 +590,15 @@ export async function reviewCandidate(candidate, {
     });
     let targetDigest;
     let deleteDigest;
+    let dialogDigest;
     await runHistorySubscriptionCheckpoints({
+      nativeDialog: (accepted) => observeNativeHistoryDialog(context, context.pages().find((page) => !page.isClosed() && page.url() === popupUrl), deleteDigest, dialogDigest, accepted),
       instruct: (text) => process.stdout.write(`${text}\n`),
       acknowledge: () => terminal.question('Type DONE only after the requested human popup action and observed result: ', { signal: AbortSignal.timeout(300_000) }),
       read: async (mode) => {
         const result = await worker.evaluate(`(${observeHistorySubscriptions.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, globalThis, ${validateStorage})`);
         if (mode === 'baseline') targetDigest = result.targetDigest;
-        if (mode === 'history-delete-baseline') deleteDigest = result.deleteDigest;
+        if (mode === 'history-delete-baseline') { deleteDigest = result.deleteDigest; dialogDigest = result.dialogDigest; }
         return result.passed;
       },
       ui: async (mode) => {

@@ -221,7 +221,8 @@ export async function observeHistorySubscriptions(api, mode, origin, host = glob
     if (!target) throw new Error('history delete requires a non-source duplicate');
     state.deleteDigest = await digest(target.id);
     state.deletedHistoryDigest = await digest(history.filter((item) => item.id !== target.id));
-    return { ...result(true), deleteDigest: state.deleteDigest };
+    return { ...result(true), deleteDigest: state.deleteDigest,
+      dialogDigest: await digest(`Permanently delete observation ${target.id} from ${target.origin}?`) };
   }
   if (mode === 'history-delete-cancelled') return result(state.phase === 2 && historyDigest === state.historyDigest && subscriptionDigest === state.subscriptionDigest);
   if (mode === 'history-deleted') {

@@ -257,7 +257,12 @@ test('history delete Cancel preserves all data; confirmation removes only non-so
   state.reviewHistory.push(other);
   await read('baseline'); finding.status = 'reviewed'; await read('reviewed');
   state.subscriptions = [confirmed]; await read('confirmed');
-  expect((await read('history-delete-baseline')).deleteDigest).toMatch(/^[a-f0-9]{64}$/);
+  const baseline = await read('history-delete-baseline');
+  expect(baseline.deleteDigest).toMatch(/^[a-f0-9]{64}$/);
+  const { createHash } = await import('node:crypto');
+  expect(baseline.dialogDigest).toBe(createHash('sha256').update(JSON.stringify(`Permanently delete observation ${other.id} from ${other.origin}?`)).digest('hex'));
+  expect(JSON.stringify(baseline)).not.toContain(other.id);
+  expect(JSON.stringify(baseline)).not.toContain(other.origin);
   expect((await read('history-delete-cancelled')).passed).toBe(true);
   state.reviewHistory = [other];
   expect((await read('history-deleted')).passed).toBe(false);

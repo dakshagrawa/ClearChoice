@@ -27,6 +27,7 @@ import {
   runManualCheckpoints,
   runSiteCheckpoints,
   runHistorySubscriptionCheckpoints,
+  observeNativeHistoryDialog,
   stopPendingHumanStages,
   runCleanupSteps,
   recheckCandidateBinding,
@@ -241,10 +242,39 @@ test('site workflow cannot treat quiet state as denial or advance before acknowl
   expect(events.filter((event) => event === 'revoked:a')).toHaveLength(4);
 });
 
+test('synthetic native dialog events require fresh exact popup, record, message and closed Cancel', async () => {
+  const { createHash } = await import('node:crypto');
+  const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  for (const failure of ['none', 'missing', 'unresolved', 'other-popup', 'wrong-record', 'wrong-message', 'accepted', 'stale']) {
+    const session = new EventEmitter(); session.send = async () => {}; session.detach = vi.fn(async () => {});
+    const other = new EventEmitter();
+    let calls = 0;
+    const popup = { isClosed: () => false, evaluate: async () => ++calls === 1 ? undefined : { counter: 1, digest: hash(failure === 'wrong-record' ? 'wrong' : 'target') } };
+    if (failure === 'stale') { session.emit('Page.javascriptDialogOpening', { type: 'confirm', message: 'expected' }); session.emit('Page.javascriptDialogClosed', { result: false }); }
+    const observer = await observeNativeHistoryDialog({ newCDPSession: async (page) => { expect(page).toBe(popup); return session; } }, popup, hash('target'), hash('expected'), false);
+    expect(await observer.passed()).toBe(false);
+    const emitter = failure === 'other-popup' ? other : session;
+    if (!['missing', 'stale'].includes(failure)) emitter.emit('Page.javascriptDialogOpening', { type: 'confirm', message: failure === 'wrong-message' ? 'wrong' : 'expected' });
+    if (!['missing', 'stale', 'unresolved'].includes(failure)) emitter.emit('Page.javascriptDialogClosed', { result: failure === 'accepted' });
+    if (['wrong-record', 'wrong-message', 'accepted'].includes(failure)) await expect(observer.passed()).rejects.toThrow('mismatch');
+    else expect(await observer.passed()).toBe(failure === 'none');
+    await observer.close(); expect(session.detach).toHaveBeenCalledOnce();
+  }
+});
+
+test('history native Cancel cannot pass with unchanged pre-click state and DONE alone', async () => {
+  const prompts = [];
+  await expect(runHistorySubscriptionCheckpoints({ instruct: (text) => prompts.push(text),
+    read: async () => true, ui: async () => true, waitForState: (observe) => observe(),
+    acknowledge: async () => 'DONE',
+  })).rejects.toThrow('native history dialog observer unavailable');
+  expect(prompts.some((text) => text.startsWith('23b.'))).toBe(false);
+});
+
 test('synthetic human CRUD orchestration never advances without observable UI, storage and separate DONE', async () => {
   for (const failure of ['ui', 'storage', 'ack']) {
     const events = [];
-    await expect(runHistorySubscriptionCheckpoints({
+    await expect(runHistorySubscriptionCheckpoints({ nativeDialog: async () => ({ passed: async () => true, close: async () => {} }),
       instruct: () => {}, waitForState: (observe) => observe(),
       read: async (mode) => { events.push(mode); return mode === 'baseline' || failure !== 'storage'; },
       ui: async () => failure !== 'ui',
@@ -255,7 +285,7 @@ test('synthetic human CRUD orchestration never advances without observable UI, s
   }
   let release;
   const events = [];
-  const pending = runHistorySubscriptionCheckpoints({ instruct: () => {}, read: async (mode) => { events.push(mode); return true; }, ui: async () => true,
+  const pending = runHistorySubscriptionCheckpoints({ nativeDialog: async () => ({ passed: async () => true, close: async () => {} }), instruct: () => {}, read: async (mode) => { events.push(mode); return true; }, ui: async () => true,
     acknowledge: () => events.filter((value) => value === 'history').length === 1 && !release ? new Promise((resolveAck) => { release = resolveAck; }) : Promise.resolve('DONE') });
   await vi.waitFor(() => expect(release).toBeTypeOf('function'));
   expect(events).toEqual(['baseline', 'history']);
@@ -270,14 +300,14 @@ test('synthetic human CRUD orchestration never advances without observable UI, s
 
 test('synthetic acknowledgement-time drift aborts and each CRUD prompt fails closed on missing acknowledgement', async () => {
   let current = true;
-  await expect(runHistorySubscriptionCheckpoints({
+  await expect(runHistorySubscriptionCheckpoints({ nativeDialog: async () => ({ passed: async () => true, close: async () => {} }),
     instruct: () => {}, ui: async () => current, read: async () => true,
     acknowledge: async () => { current = false; return 'DONE'; },
   })).rejects.toThrow('changed during acknowledgement');
   for (let rejectedStage = 1; rejectedStage <= 14; rejectedStage++) {
     let prompts = 0;
     let acknowledgements = 0;
-    await expect(runHistorySubscriptionCheckpoints({
+    await expect(runHistorySubscriptionCheckpoints({ nativeDialog: async () => ({ passed: async () => true, close: async () => {} }),
       instruct: () => { prompts++; }, ui: async () => true, read: async () => true,
       acknowledge: async () => ++acknowledgements === rejectedStage ? '' : 'DONE',
     })).rejects.toThrow('acknowledgement');
@@ -428,8 +458,16 @@ test('identical fixture stays form-free and its human buttons mutate and exit/re
   expect(paragraphs).toHaveLength(2); expect(paragraphs[0].textContent).toBe(paragraphs[1].textContent);
   doc.querySelector('#replace-order-summary').click(); doc.querySelector('#replace-order-summary').click();
   expect(doc.querySelector('h2').textContent).toBe('Order summary updated again');
+  const { build } = await import('esbuild');
+  const { runInNewContext } = await import('node:vm');
+  const bundle = await build({ entryPoints: ['src/core/context.ts'], bundle: true, write: false, format: 'iife', globalName: 'QaContext' });
+  const classify = runInNewContext(`${bundle.outputFiles[0].text}; QaContext.classifyCheckoutContext`, { window: dom.window, document: doc, NodeFilter: dom.window.NodeFilter });
+  expect(classify(doc.body)).toBe('supported');
   doc.querySelector('#spa-exit').click(); expect(dom.window.location.pathname).toBe('/information');
+  expect(classify(doc.body)).toBe('unsupported');
   doc.querySelector('#spa-return').click(); expect(dom.window.location.pathname).toBe('/checkout/identical');
+  expect(classify(doc.body)).toBe('supported');
+  expect(doc.querySelectorAll('form,input,select')).toHaveLength(0);
   dom.window.close();
 });
 
