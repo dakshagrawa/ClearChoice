@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createFixtureTls, mockCheckoutHtml } from './manual-qa-fixtures.mjs';
 import { LOCAL_HUMAN_ATTESTATION, WORKFLOW_PREDICATES, validateManualActiveTabMarker, sha256 } from './active-tab-qa.mjs';
-import { observeCleanState, observeSiteState, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
+import { storageValidatorSource, observeCleanState, observeSiteState, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
 import { prepareCandidateArchive } from './release-artifact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -368,9 +368,10 @@ export async function reviewCandidate(candidate, {
     const pages = { a: dynamicPage };
     const origins = { a: fixtureOrigin, b: fixtureOrigin.replace('checkout-a.test', 'checkout-b.test') };
     const popupUrl = new URL('/popup/index.html', worker.url()).href;
+    const validateStorage = await storageValidatorSource();
     const siteRead = async (mode, site) => {
       if (new URL(pages[site].url()).origin !== origins[site]) throw new Error('mock page origin changed');
-      const observe = async () => (await worker.evaluate(`(${observeSiteState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins[site])})`)).passed;
+      const observe = async () => (await worker.evaluate(`(${observeSiteState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins[site])}, globalThis, ${validateStorage})`)).passed;
       if (['baseline', 'before-revoke'].includes(mode)) return observe();
       await waitForObservation(observe);
       if (['quiet', 'revoked'].includes(mode)) {

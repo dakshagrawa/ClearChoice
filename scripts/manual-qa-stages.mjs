@@ -1,4 +1,42 @@
 /* global setTimeout, crypto, TextEncoder */
+import { build } from 'esbuild';
+import { resolve } from 'node:path';
+
+// Bundle only the production PURE validators, never call the mutating loader.
+// This does not build/repackage the reviewed extension or write any files.
+export async function storageValidatorSource() {
+  const result = await build({ stdin: { contents: `export { isFindingHistory, isSubscriptionCollection, isRetentionPolicy } from './src/shared/models.ts'; export { isGrantState } from './src/shared/storage.ts';`, resolveDir: resolve(import.meta.dirname, '..') }, bundle: true, write: false, format: 'iife', globalName: 'QaSchemas', platform: 'browser' });
+  return `(() => { ${result.outputFiles[0].text}; return (stored) => (${validateStorageReadback.toString()})(stored, QaSchemas); })()`;
+}
+
+export function validateStorageReadback(stored, schema) {
+  const record = (x) => x !== null && typeof x === 'object' && !Array.isArray(x);
+  const has = (key) => Object.hasOwn(stored, key);
+  const keys = ['version', 'dismissed', 'subscriptions', 'reviewHistory', 'retentionPolicy', 'receipts', 'grantState'];
+  const receipts = (value) => Array.isArray(value) && value.length <= 500
+    && value.every((item) => record(item) && Object.keys(item).length === 3
+      && ['requestId', 'digest', 'outcome'].every((key) => Object.hasOwn(item, key))
+      && typeof item.requestId === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(item.requestId)
+      && typeof item.digest === 'string' && /^[a-f0-9]{64}$/.test(item.digest)
+      && record(item.outcome) && Object.keys(item.outcome).length === 1
+      && Array.isArray(item.outcome.ids) && item.outcome.ids.length <= 100
+      && item.outcome.ids.every((id) => typeof id === 'string' && /^f_[a-f0-9]{64}$/.test(id)))
+    && new Set(value.map((item) => item.requestId)).size === value.length;
+  if (!schema || !record(stored) || !Object.keys(stored).every((key) => keys.includes(key))
+    || (has('version') && stored.version !== 1)
+    || (has('dismissed') && typeof stored.dismissed !== 'boolean')
+    || (has('subscriptions') && !schema.isSubscriptionCollection(stored.subscriptions))
+    || (has('reviewHistory') && !schema.isFindingHistory(stored.reviewHistory))
+    || (has('retentionPolicy') && !schema.isRetentionPolicy(stored.retentionPolicy))
+    || (has('receipts') && !receipts(stored.receipts))
+    || (has('grantState') && !schema.isGrantState(stored.grantState))
+    || (has('version') ? !has('subscriptions') || !has('reviewHistory')
+      : ['subscriptions', 'reviewHistory', 'retentionPolicy', 'receipts'].some(has))) {
+    throw new Error('readback storage schema invalid');
+  }
+  return true;
+}
+
 // Enclose acquisition as well as work: every registered closer is attempted,
 // and cleanup cannot replace the first operation failure (even a falsy throw).
 export async function runWithCleanup(operation, steps) {
@@ -36,9 +74,11 @@ export async function waitForObservation(observe, { timeoutMs = 300_000, interva
 
 // Serialized into the genuine worker. Raw mock records are transient; only hashes
 // and generation numbers survive a call. No writes, messages or permission grants.
-export async function observeSiteState(api, mode, origin, host = globalThis) {
+export async function observeSiteState(api, mode, origin, host = globalThis, validate) {
   if (!/^https:\/\/checkout-[ab]\.test:[1-9]\d{0,4}$/.test(origin) || new URL(origin).port > 65535) throw new Error('invalid mock origin');
   const stored = await api.storage.local.get(null);
+  if (typeof validate !== 'function') throw new Error('readback storage validator unavailable');
+  validate(stored);
   const history = stored.reviewHistory ?? [];
   const subscriptions = stored.subscriptions ?? [];
   const sites = stored.grantState?.sites ?? {};

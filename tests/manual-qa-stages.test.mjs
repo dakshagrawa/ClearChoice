@@ -1,8 +1,10 @@
 // @vitest-environment node
 import { expect, test } from 'vitest';
+import { runInNewContext } from 'node:vm';
+const validate = runInNewContext(await storageValidatorSource(), { Intl, URL });
 import { WORKFLOW_PREDICATES } from '../scripts/active-tab-qa.mjs';
 import { createManualActiveTabQaMarker } from '../scripts/manual-active-tab-qa.mjs';
-import { runHumanStage, runWithCleanup, observeCleanState, observeSiteState, waitForObservation } from '../scripts/manual-qa-stages.mjs';
+import { storageValidatorSource, runHumanStage, runWithCleanup, observeCleanState, observeSiteState, waitForObservation } from '../scripts/manual-qa-stages.mjs';
 
 test('exact clean readback rejects nested arrays and malformed storage rather than ignoring it', async () => {
   for (const state of [{ localState: { version: 1, reviewHistory: [{}], subscriptions: [] } },
@@ -76,48 +78,88 @@ test('cleanup-only failure is surfaced rather than silently discarded', async ()
 
 test('site readback binds exact permission, grant and script; revoke preserves records without creating subscriptions', async () => {
   const origin = 'https://checkout-a.test:123';
-  const state = { version: 1, reviewHistory: [], subscriptions: [{ id: 'fake-confirmed' }], grantState: { version: 1, sites: {} } };
+  const state = { version: 1, reviewHistory: [], subscriptions: [{ id: 'fake-confirmed', merchant: 'Synthetic Mock', amount: '1.00', currency: 'USD', cadence: 'monthly', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' }], grantState: { version: 1, sites: {} } };
   const api = cleanApi(state);
   const host = {};
-  await observeSiteState(api, 'baseline', origin, host);
+  await observeSiteState(api, 'baseline', origin, host, validate);
   api.tabs.query = async () => [{ id: 7 }];
-  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(false);
+  expect((await observeSiteState(api, 'enabled', origin, host, validate)).passed).toBe(false);
   api.tabs.query = async () => [{ id: 7, url: origin + '/checkout/clean' }];
   api.permissions.getAll = async () => ({ origins: [origin + '/*'] });
   api.permissions.contains = async () => true;
   state.grantState.sites[origin] = { enabled: true, generation: 1 };
   const script = { id: 'clearchoice-site-b93005a526dc3134fdd360798aad3e73fbb20a3d50c16ebe605a4d4947098925', matches: [origin + '/*'], js: ['content.js'], allFrames: false, persistAcrossSessions: true, world: 'ISOLATED' };
   api.scripting.getRegisteredContentScripts = async () => [script];
-  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(true);
+  expect((await observeSiteState(api, 'enabled', origin, host, validate)).passed).toBe(true);
   state.grantState.sites[origin].generation = 0;
-  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(false);
+  await expect(observeSiteState(api, 'enabled', origin, host, validate)).rejects.toThrow('schema');
   state.grantState.sites[origin].generation = 1;
   api.permissions.getAll = async () => ({ origins: ['https://checkout-b.test:123/*'] });
-  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(false);
+  expect((await observeSiteState(api, 'enabled', origin, host, validate)).passed).toBe(false);
   api.permissions.getAll = async () => ({ origins: [origin + '/*'] });
-  state.subscriptions.push({ id: 'unwanted-auto-created' });
-  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(false);
+  state.subscriptions.push({ ...state.subscriptions[0], id: 'unwanted-auto-created' });
+  expect((await observeSiteState(api, 'enabled', origin, host, validate)).passed).toBe(false);
   state.subscriptions.pop();
   script.world = 'MAIN';
-  expect((await observeSiteState(api, 'enabled', origin, host)).passed).toBe(false);
+  expect((await observeSiteState(api, 'enabled', origin, host, validate)).passed).toBe(false);
   script.world = 'ISOLATED';
-  state.reviewHistory.push({ origin, kind: 'recurring-charge', id: 'fake-observation' });
+  state.reviewHistory.push({ origin, kind: 'recurring-charge', reason: 'price-cadence', id: 'fake-observation', screenedExcerpt: '$1.00 monthly', opaqueFingerprint: 'a'.repeat(64), ordinal: 1, firstSeen: '2026-01-01T00:00:00.000Z', latestSeen: '2026-01-01T00:00:00.000Z', status: 'needs-review' });
   api.action.getBadgeText = async () => '1';
-  expect((await observeSiteState(api, 'positive', origin, host)).passed).toBe(true);
-  await observeSiteState(api, 'before-revoke', origin, host);
-  expect((await observeSiteState(api, 'revoked', origin, host)).passed).toBe(false);
+  expect((await observeSiteState(api, 'positive', origin, host, validate)).passed).toBe(true);
+  await observeSiteState(api, 'before-revoke', origin, host, validate);
+  expect((await observeSiteState(api, 'revoked', origin, host, validate)).passed).toBe(false);
   state.grantState.sites[origin] = { enabled: false, generation: 2 };
   api.permissions.getAll = async () => ({ origins: [] });
   api.permissions.contains = async () => false;
   api.scripting.getRegisteredContentScripts = async () => [];
   api.action.getBadgeText = async () => '';
-  expect((await observeSiteState(api, 'revoked', origin, host)).passed).toBe(true);
-  state.reviewHistory.push({ origin, kind: 'recurring-charge' });
-  expect((await observeSiteState(api, 'revoked', origin, host)).passed).toBe(false);
-  expect(state.subscriptions).toEqual([{ id: 'fake-confirmed' }]);
+  expect((await observeSiteState(api, 'revoked', origin, host, validate)).passed).toBe(true);
+  state.reviewHistory.push({ ...state.reviewHistory[0], id: 'second-synthetic' });
+  expect((await observeSiteState(api, 'revoked', origin, host, validate)).passed).toBe(false);
+  expect(state.subscriptions).toHaveLength(1);
+  expect(state.subscriptions[0].id).toBe('fake-confirmed');
   api.tabs.query = async () => [{ id: 7, url: 'https://wrong.test/' }];
-  await expect(observeSiteState(api, 'revoked', origin, host)).rejects.toThrow('tab');
+  await expect(observeSiteState(api, 'revoked', origin, host, validate)).rejects.toThrow('tab');
   expect(Object.values(host).every((value) => typeof value === 'string' ? /^[a-f0-9]{64}$/.test(value) : typeof value === 'number')).toBe(true);
+});
+
+// Synthetic fixtures, never passed to a production mutating loader.
+test('site readback rejects unsupported, incomplete and malformed nested schemas before capture or comparison', async () => {
+  const origin = 'https://checkout-a.test:123';
+  const valid = { version: 1, reviewHistory: [], subscriptions: [], retentionPolicy: 30, receipts: [], dismissed: false, grantState: { version: 1, sites: {} } };
+  const malformed = [null, [], { ...valid, version: 999 }, { ...valid, subscriptions: [{ id: 'malformed' }] },
+    { ...valid, reviewHistory: [{}] }, { ...valid, dismissed: 'false' }, { ...valid, retentionPolicy: 999 },
+    { ...valid, receipts: [{}] }, { ...valid, receipts: [{ requestId: 'mock', digest: 'a'.repeat(64), outcome: { ids: ['bad'] } }] },
+    { version: 1, subscriptions: [] }, { version: 1, reviewHistory: [] }, { subscriptions: [], reviewHistory: [] },
+    { ...valid, grantState: { version: 999, sites: {} } }, { ...valid, grantState: { version: 1, sites: {}, extra: true } },
+    { ...valid, grantState: { version: 1, sites: { [origin]: { enabled: true, generation: 1, extra: true } } } },
+    { ...valid, grantState: { version: 1, sites: { [origin]: { enabled: true, generation: 0 } } } },
+    { ...valid, grantState: { version: 1, sites: { 'https://127.0.0.1': { enabled: true, generation: 1 } } } }];
+  for (const state of malformed) {
+    const host = {};
+    await expect(observeSiteState(cleanApi(state), 'baseline', origin, host, validate)).rejects.toThrow('schema');
+    expect(host).toEqual({});
+    await observeSiteState(cleanApi(valid), 'baseline', origin, host, validate);
+    for (const mode of ['enabled', 'positive', 'quiet', 'before-revoke', 'revoked']) {
+      await expect(observeSiteState(cleanApi(state), mode, origin, host, validate)).rejects.toThrow('schema');
+    }
+  }
+  for (const state of [{}, { dismissed: false }, valid]) {
+    expect((await observeSiteState(cleanApi(state), 'baseline', origin, {}, validate)).passed).toBe(true);
+  }
+});
+
+test('readback validator accepts realistic nested receipts and rejects duplicate or surplus records', () => {
+  const subscription = { id: 's_mock', merchant: 'Synthetic Mock', amount: '1.00', currency: 'USD', cadence: 'monthly', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z' };
+  const receipt = { requestId: 'mock', digest: 'b'.repeat(64), outcome: { ids: ['f_' + 'a'.repeat(64)] } };
+  const state = { version: 1, reviewHistory: [], subscriptions: [subscription], receipts: [receipt] };
+  expect(validate(state)).toBe(true);
+  for (const changed of [{ ...state, subscriptions: [subscription, subscription] },
+    { ...state, subscriptions: [{ ...subscription, extra: true }] },
+    { ...state, receipts: [receipt, receipt] },
+    { ...state, receipts: [{ ...receipt, outcome: { ...receipt.outcome, extra: true } }] }]) {
+    expect(() => validate(changed)).toThrow('schema');
+  }
 });
 
 test('missing permission cannot by itself prove human denial', async () => {

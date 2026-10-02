@@ -20,6 +20,12 @@ This protocol targets `0.4.0-beta.1`. **Task16B is partially implemented: no hum
 6. Return to A, observe automatic detection, capture history/subscription digests, then human toolbar → Disable. Require permission/script removal, disabled next generation, blank badge, removed panel and preserved records. Human mock-summary replacement and another mock navigation must remain quiet with no new history.
 7. The runner then stops explicitly as pending. It does not offer final ATTEST or produce a marker. Human stages require observation followed by `DONE`; observations and acknowledgement have bounded waits. If no genuine Chrome permission prompt is available, abort rather than simulate consent or denial.
 
+## Readback prerequisite correction
+
+Site observations validate the entire storage snapshot **before** capturing baselines or comparing permissions. Pure production history, subscription, retention and grant validators are bundled in memory for read-only worker evaluation; the mutating storage loader is never invoked and no extension artifact is rebuilt. Receipts, version boundaries and dismissed settings are checked explicitly. Unsupported versions, incomplete versioned collections, malformed nested records and surplus grant fields abort rather than become empty defaults. Truly pristine missing collections remain supported. Returned observations contain only predicates/counts; retained comparison state contains only digests and numeric identifiers.
+
+The prerequisite correction does **not** implement history/subscription CRUD or establish human evidence. Those checkpoints remain deferred; the explicit pending-stage throw, no-ATTEST boundary and exact-archive requirements remain unchanged.
+
 ## Required remaining staged acceptance checks
 
 Implement one window/tab/action per prompt with read-only storage, permissions and registered-content-script readback:

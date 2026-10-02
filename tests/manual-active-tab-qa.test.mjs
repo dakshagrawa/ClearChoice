@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { chromium } from 'playwright';
 import { afterEach, expect, test, vi } from 'vitest';
-import { observeCleanState } from '../scripts/manual-qa-stages.mjs';
+import { observeCleanState, observeSiteState, storageValidatorSource } from '../scripts/manual-qa-stages.mjs';
 import * as artifacts from '../scripts/release-artifact.mjs';
 import {
   assertFixtureOrigin,
@@ -82,6 +82,10 @@ test('clean baseline observes a real extension worker using read-only browser AP
     expect(await worker.evaluate(() => globalThis.chrome.runtime.getManifest().permissions)).toEqual(['activeTab', 'scripting', 'storage']);
     const summary = await worker.evaluate(`(${observeCleanState.toString()})(chrome, 'capture', 'https://checkout-a.test:123/checkout/clean')`);
     expect(summary).toEqual({ storageValid: true, historyCount: 0, subscriptionCount: 0, unchanged: true, permissionCount: 0, scriptCount: 0, grantCount: 0, badgeBlank: true });
+    const validator = await storageValidatorSource();
+    // Production pure validators execute in the genuine worker; no storage seeds.
+    expect(validator).not.toMatch(/storage\.local\.(?:set|remove|clear)|loadLocalState|readLocalState/);
+    expect(await worker.evaluate(`(${observeSiteState.toString()})(chrome, 'baseline', 'https://checkout-a.test:123', globalThis, ${validator})`)).toEqual({ passed: true, historyCount: 0, subscriptionCount: 0 });
   } finally { await browser.close(); }
 }, { runtime: true }), 15_000);
 
