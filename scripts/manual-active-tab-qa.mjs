@@ -143,7 +143,7 @@ export async function runFinalCheckpoints({ instruct, acknowledge, read, ui, int
     await integrity();
   };
   await stage('30. RETENTION: human-select 7 days in Keep local observations. Leave popup open. Confirmed subscription and fresh history must stay unchanged; this does NOT prove elapsed expiry.', 'retention', 'retention');
-  await stage('31. HELP: click Cancellation help on QA Finding Mock. Confirm Visit site — not a cancellation guide, and local deletion does not cancel billing. Do not open any real provider or sign in; no second link click is required.', 'unchanged', 'help');
+  await stage('31. HELP NEGATIVE BOUNDARY: click Cancellation help on QA Finding Mock. Confirm No known provider site; check your billing provider, NO anchor, and local deletion does not cancel billing. The mock port is rejected by production policy; positive Visit site fallback and official guides remain UNVERIFIED. Do not open a provider or sign in.', 'unchanged', 'help');
   instruct('32. RESTART: type DONE to authorize closing this runner browser and reopening the SAME profile without reinstalling the extension.');
   if (await acknowledge() !== 'DONE') throw new Error('restart authorization missing');
   if (!await read('unchanged')) throw new Error('pre-restart state mismatch');

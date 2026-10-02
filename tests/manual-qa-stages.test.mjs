@@ -290,16 +290,29 @@ test('synthetic final readbacks preserve exact source, subscriptions, retention 
   await expect(read('unchanged', after)).rejects.toThrow('identity');
 });
 
-test('synthetic cancellation help DOM rejects wrong destination, target, rel and additional records', async () => {
+test('production pure catalog rejects actual runner port origin; help DOM observes NONE, not a fabricated fallback', async () => {
+  const { build } = await import('esbuild');
+  const { fixtureOriginForServerAddress } = await import('../scripts/manual-active-tab-qa.mjs');
   const { JSDOM } = await import('jsdom');
-  const origin = 'https://checkout-a.test:123';
-  const dom = new JSDOM(`<select data-review-retention><option value="7" selected>7 days</option></select><section aria-label="Subscriptions"><p>Delete removes the local record only; it does not cancel billing.</p><div data-subscription-list><article><a href="${origin}/" target="_blank" rel="noopener noreferrer">Visit site — not a cancellation guide</a></article></div></section>`);
-  const observe = runInNewContext(`(${observeFinalUi.toString()})`, { document: dom.window.document });
+  const bundle = await build({ entryPoints: ['src/shared/guide-catalog.ts'], bundle: true, write: false, format: 'iife', globalName: 'QaCatalog' });
+  const resolveGuide = runInNewContext(`${bundle.outputFiles[0].text}; QaCatalog.resolveCancellationGuide`, { URL });
+  const origin = fixtureOriginForServerAddress({ address: '127.0.0.1', port: 49152 });
+  expect(resolveGuide(origin).kind).toBe('none');
+  // Isolated catalog control ONLY: this is not the browser's actual origin.
+  expect(resolveGuide('https://checkout-a.test')).toMatchObject({ kind: 'site', originURL: 'https://checkout-a.test' });
+  const help = resolveGuide(origin);
+  const dom = new JSDOM(`<select data-review-retention><option value="7" selected>7 days</option></select><section aria-label="Subscriptions"><p>Delete removes the local record only; it does not cancel billing.</p><div data-subscription-list><article><div role="status"></div></article></div></section>`);
+  const status = dom.window.document.querySelector('[role="status"]');
+  if (help.kind === 'none') status.textContent = 'No known provider site; check your billing provider';
+  const observe = runInNewContext(`(${observeFinalUi.toString()})`, { document: dom.window.document, URL });
   expect(observe('help', origin)).toBe(true);
-  const a = dom.window.document.querySelector('a');
-  for (const [attribute, value] of [['href', origin + '/cancel'], ['href', 'https://wrong.test/'], ['target', '_self'], ['rel', 'noopener']]) {
-    const previous = a.getAttribute(attribute); a.setAttribute(attribute, value); expect(observe('help', origin)).toBe(false); a.setAttribute(attribute, previous);
-  }
+  status.textContent = 'Loading cancellation help…';
+  expect(observe('help', origin)).toBe(false);
+  status.textContent = 'No known provider site; check your billing provider';
+  status.innerHTML += `<a href="${origin}/">Visit site — not a cancellation guide</a>`;
+  expect(observe('help', origin)).toBe(false);
+  status.querySelector('a').remove();
+  expect(observe('help', 'https://checkout-a.test')).toBe(false);
   dom.window.document.querySelector('[data-subscription-list]').append(dom.window.document.createElement('article'));
   expect(observe('help', origin)).toBe(false);
 });
@@ -308,11 +321,16 @@ test('final stages require explicit restart authorization and fail on persisted-
   for (const failure of ['none', 'authorization', 'restart']) {
     let restarted = false;
     let acknowledgements = 0;
-    const run = runFinalCheckpoints({ instruct: () => {}, acknowledge: async () => ++acknowledgements === 3 && failure === 'authorization' ? '' : 'DONE',
+    const instructions = [];
+    const run = runFinalCheckpoints({ instruct: (text) => instructions.push(text), acknowledge: async () => ++acknowledgements === 3 && failure === 'authorization' ? '' : 'DONE',
       read: async () => !(restarted && failure === 'restart'), ui: async () => true, integrity: async () => {},
       restart: async () => { restarted = true; }, quiet: async () => true });
     if (failure === 'none') await expect(run).resolves.toBeUndefined();
     else await expect(run).rejects.toThrow(failure === 'authorization' ? 'authorization' : 'durability');
+    const helpInstruction = instructions.find((text) => text.startsWith('31.'));
+    expect(helpInstruction).toContain('HELP NEGATIVE BOUNDARY');
+    expect(helpInstruction).toContain('NO anchor');
+    expect(helpInstruction).toContain('positive Visit site fallback and official guides remain UNVERIFIED');
     expect(restarted).toBe(failure !== 'authorization');
   }
   expect(() => stopPendingHumanStages()).toThrow('final human attestation pending review');
@@ -320,6 +338,8 @@ test('final stages require explicit restart authorization and fail on persisted-
 
 test('marker constructor cannot manufacture passed workflow results', () => {
   expect(() => createManualActiveTabQaMarker(candidate)).toThrow();
+  // A negative mock boundary is not the complete cancellationHelp criterion.
+  expect(() => createManualActiveTabQaMarker(candidate, { ...results(), cancellationHelp: 'unverified' })).toThrow();
   for (const name of WORKFLOW_PREDICATES) {
     const incomplete = results();
     delete incomplete[name];

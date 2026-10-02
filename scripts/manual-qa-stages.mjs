@@ -271,10 +271,11 @@ export function observeFinalUi(mode, origin) {
     && Array.from(document.querySelectorAll('[data-review-id]')).some((row) => row.querySelector('[data-action="review-mark"]')?.dataset.reviewed === 'true'
       && row.querySelector('[data-action="review-mark"]')?.disabled === true);
   if (mode !== 'help') throw new Error('unknown final popup mode');
-  const anchors = Array.from(section.querySelectorAll('a'));
-  return anchors.length === 1 && anchors[0].getAttribute('href') === origin + '/'
-    && anchors[0].target === '_blank' && anchors[0].rel === 'noopener noreferrer'
-    && anchors[0].textContent === 'Visit site — not a cancellation guide';
+  // The controlled mock has a nonempty port: production guide-catalog rejects
+  // it as NONE. Never strip that port or invent provider/fallback provenance.
+  if (!/^https:\/\/checkout-a\.test:[1-9]\d{0,4}$/.test(origin) || Number(new URL(origin).port) > 65535 || new URL(origin).port === '') return false;
+  return section.querySelectorAll('a').length === 0
+    && rows[0].querySelector('[role="status"]')?.textContent === 'No known provider site; check your billing provider';
 }
 
 // Pristine clean-stage schema only, not a general loader. Nonempty or corrupt
