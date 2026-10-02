@@ -229,7 +229,7 @@ test('site workflow cannot treat quiet state as denial or advance before acknowl
     read: async (mode, site) => { events.push(`${mode}:${site}`); return true; },
     quiet: async () => true, positive: async () => true,
     denied: async () => denialObserved,
-    integrity: async () => {}, mutate: async () => {},
+    integrity: async () => {}, mutate: async () => {}, lifecycle: async () => {},
   };
   await expect(runSiteCheckpoints(options)).rejects.toThrow('observable');
   expect(events).not.toContain('before-revoke:a');
@@ -238,7 +238,7 @@ test('site workflow cannot treat quiet state as denial or advance before acknowl
   events.length = 0;
   await runSiteCheckpoints(options);
   expect(events.indexOf('quiet:b')).toBeLessThan(events.indexOf('before-revoke:a'));
-  expect(events.filter((event) => event === 'revoked:a')).toHaveLength(3);
+  expect(events.filter((event) => event === 'revoked:a')).toHaveLength(4);
 });
 
 test('synthetic human CRUD orchestration never advances without observable UI, storage and separate DONE', async () => {
@@ -261,7 +261,7 @@ test('synthetic human CRUD orchestration never advances without observable UI, s
   expect(events).toEqual(['baseline', 'history']);
   release('DONE');
   await expect(pending).resolves.toBeUndefined();
-  expect(events).toEqual(['baseline', ...['history', 'reviewed', 'unchanged', 'unchanged', 'unchanged', 'confirmed', 'added', 'edited', 'unchanged', 'unchanged', 'unchanged', 'deleted'].flatMap((mode) => [mode, mode])]);
+  expect(events).toEqual(['baseline', ...['history', 'reviewed', 'unchanged', 'unchanged', 'unchanged', 'confirmed', 'history-delete-cancelled', 'history-deleted', 'added', 'edited', 'unchanged', 'unchanged', 'unchanged', 'deleted'].flatMap((mode) => mode === 'history-delete-cancelled' ? ['history-delete-baseline', mode, mode] : [mode, mode])]);
   expect(() => stopPendingHumanStages()).toThrow('no ATTEST or marker');
   const source = readFileSync(resolve(root, 'scripts/manual-active-tab-qa.mjs'), 'utf8');
   expect(source.indexOf('await runHistorySubscriptionCheckpoints({', source.indexOf('export async function reviewCandidate'))).toBeGreaterThan(source.indexOf('await runSiteCheckpoints({'));
@@ -274,7 +274,7 @@ test('synthetic acknowledgement-time drift aborts and each CRUD prompt fails clo
     instruct: () => {}, ui: async () => current, read: async () => true,
     acknowledge: async () => { current = false; return 'DONE'; },
   })).rejects.toThrow('changed during acknowledgement');
-  for (let rejectedStage = 1; rejectedStage <= 12; rejectedStage++) {
+  for (let rejectedStage = 1; rejectedStage <= 14; rejectedStage++) {
     let prompts = 0;
     let acknowledgements = 0;
     await expect(runHistorySubscriptionCheckpoints({
@@ -375,7 +375,7 @@ test('midworkflow error survives browser close failure and every remaining resou
     address: () => ({ address: '127.0.0.1', port: 12345 }),
     close: vi.fn((callback) => callback()),
   };
-  const browser = { newPage: async () => ({ goto: async () => { throw primary; } }), close: vi.fn(async () => { throw new Error('browser close'); }) };
+  const browser = { on: vi.fn(), newPage: async () => ({ goto: async () => { throw primary; } }), close: vi.fn(async () => { throw new Error('browser close'); }) };
   const removeProfile = vi.fn();
   await expect(reviewCandidate({ extensionPath: root }, {
     createTls: async () => tls, makeServer: () => server,
@@ -403,6 +403,34 @@ test('manual QA cleanup attempts every resource even when Chromium close rejects
   for (const cleanup of [closeTerminal, closeBrowser, closeFixtureServer, removeProfile]) {
     expect(cleanup).toHaveBeenCalledOnce();
   }
+});
+
+test('automatic lifecycle gates reload, SPA transitions and acknowledgement-time drift', async () => {
+  const { runAutomaticLifecycleCheckpoints } = await import('../scripts/manual-active-tab-qa.mjs');
+  for (const failure of ['none', 'ui', 'drift', 'reload-authorization']) {
+    let current = true; let acknowledgements = 0; const events = [];
+    const run = runAutomaticLifecycleCheckpoints({ instruct: () => {}, waitForState: (observe) => observe(),
+      read: async (mode) => { events.push(mode); return true; }, ui: async () => failure !== 'ui' && current,
+      navigate: async () => events.push('navigate'), reload: async () => events.push('reload'), integrity: async () => {},
+      acknowledge: async () => { acknowledgements++; if (failure === 'drift') current = false; return failure === 'reload-authorization' && acknowledgements === 3 ? '' : 'DONE'; } });
+    if (failure === 'none') { await run; expect(events).toContain('exit'); expect(events.filter((x) => x === 'reload')).toHaveLength(1); }
+    else { await expect(run).rejects.toThrow(); expect(events).not.toContain('reload'); }
+  }
+});
+
+test('identical fixture stays form-free and its human buttons mutate and exit/return supported routes', async () => {
+  const { mockCheckoutHtml } = await import('../scripts/manual-qa-fixtures.mjs');
+  const { JSDOM } = await import('jsdom');
+  const dom = new JSDOM(mockCheckoutHtml('identical'), { url: 'https://checkout-a.test:123/checkout/identical', runScripts: 'dangerously' });
+  const doc = dom.window.document;
+  expect(doc.querySelectorAll('form,input,select')).toHaveLength(0);
+  const paragraphs = [...doc.querySelectorAll('#fake-order-summary p')];
+  expect(paragraphs).toHaveLength(2); expect(paragraphs[0].textContent).toBe(paragraphs[1].textContent);
+  doc.querySelector('#replace-order-summary').click(); doc.querySelector('#replace-order-summary').click();
+  expect(doc.querySelector('h2').textContent).toBe('Order summary updated again');
+  doc.querySelector('#spa-exit').click(); expect(dom.window.location.pathname).toBe('/information');
+  doc.querySelector('#spa-return').click(); expect(dom.window.location.pathname).toBe('/checkout/identical');
+  dom.window.close();
 });
 
 test('serves separate clean and dynamic fake checkout fixtures for manual integrity QA', () => {

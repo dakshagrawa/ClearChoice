@@ -144,6 +144,48 @@ export async function observeSiteState(api, mode, origin, host = globalThis, val
   return { passed, historyCount: history.length, subscriptionCount: subscriptions.length };
 }
 
+// Read-only lifecycle identities; latestSeen may advance on a genuine rescan.
+export async function observeAutomaticLifecycle(api, mode, origin, host = globalThis, validate) {
+  const stored = await api.storage.local.get(null);
+  validate(stored);
+  const history = stored.reviewHistory ?? [];
+  const subscriptions = stored.subscriptions ?? [];
+  const digest = async (value) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)))), (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const sorted = (items) => [...items].sort((a, b) => a.id.localeCompare(b.id));
+  const stable = (items) => sorted(items).map((item) => Object.fromEntries(Object.entries(item).filter(([key]) => key !== 'latestSeen')));
+  const result = (passed) => ({ passed, historyCount: history.length, subscriptionCount: subscriptions.length });
+  if (mode === 'baseline') {
+    const first = history.filter((item) => item.origin === origin && item.kind === 'recurring-charge' && item.ordinal === 1);
+    if (first.length !== 1 || subscriptions.length !== 0) throw new Error('automatic lifecycle baseline unavailable');
+    const ids = await Promise.all([1, 2].map(async (ordinal) => 'f_' + await digest([origin, first[0].opaqueFingerprint, ordinal])));
+    if (first[0].id !== ids[0]) throw new Error('automatic lifecycle canonical identity invalid');
+    host.__qaAutoIds = await digest([...new Set([...history.map((item) => item.id), ...ids])].sort());
+    host.__qaAutoOthers = await digest(sorted(history.filter((item) => !ids.includes(item.id))));
+    host.__qaAutoCount = new Set([...history.map((item) => item.id), ...ids]).size;
+    return result(true);
+  }
+  const pair = history.filter((item) => item.origin === origin && item.kind === 'recurring-charge');
+  let passed = subscriptions.length === 0 && pair.length === 2 && pair[0].screenedExcerpt === pair[1].screenedExcerpt
+    && pair[0].opaqueFingerprint === pair[1].opaqueFingerprint && new Set(pair.map((item) => item.ordinal)).size === 2
+    && pair.every((item) => [1, 2].includes(item.ordinal) && item.status === 'needs-review');
+  for (const item of pair) passed &&= item.id === 'f_' + await digest([origin, item.opaqueFingerprint, item.ordinal]);
+  passed &&= history.length === host.__qaAutoCount && await digest(history.map((item) => item.id).sort()) === host.__qaAutoIds
+    && await digest(sorted(history.filter((item) => !pair.includes(item)))) === host.__qaAutoOthers;
+  const stableDigest = await digest(stable(history));
+  const tabs = await api.tabs.query({ active: true, currentWindow: true });
+  if (tabs.length !== 1 || !Number.isInteger(tabs[0].id) || new URL(tabs[0].url).origin !== origin) throw new Error('automatic lifecycle tab drift');
+  const badge = await api.action.getBadgeText({ tabId: tabs[0].id });
+  if (mode === 'distinct') {
+    passed &&= badge === '2' && (!host.__qaAutoStable || host.__qaAutoStable === stableDigest);
+    if (passed) host.__qaAutoStable = stableDigest;
+  } else if (mode === 'repeat' || mode === 'before-exit') {
+    passed &&= badge === '2' && stableDigest === host.__qaAutoStable;
+    if (passed && mode === 'before-exit') host.__qaAutoExit = await digest(sorted(history));
+  } else if (mode === 'exit') passed &&= badge === '' && await digest(sorted(history)) === host.__qaAutoExit;
+  else throw new Error('unknown automatic lifecycle mode');
+  return result(passed);
+}
+
 // Read-only human CRUD observer. Retained state contains digests/counts only.
 export async function observeHistorySubscriptions(api, mode, origin, host = globalThis, validate) {
   const stored = await api.storage.local.get(null);
@@ -171,6 +213,20 @@ export async function observeHistorySubscriptions(api, mode, origin, host = glob
   if (mode === 'reviewed') {
     const passed = [0, 1].includes(state.phase) && historyDigest === state.reviewedDigest && subscriptions.length === 0;
     if (passed) { state.phase = 1; state.historyDigest = historyDigest; }
+    return result(passed);
+  }
+  if (mode === 'history-delete-baseline') {
+    if (state.phase !== 2 || historyDigest !== state.historyDigest || subscriptionDigest !== state.subscriptionDigest) throw new Error('history delete baseline changed');
+    const target = history.find((item) => item.origin === origin && item.kind === 'recurring-charge' && !subscriptions.some((sub) => sub.sourceFindingId === item.id));
+    if (!target) throw new Error('history delete requires a non-source duplicate');
+    state.deleteDigest = await digest(target.id);
+    state.deletedHistoryDigest = await digest(history.filter((item) => item.id !== target.id));
+    return { ...result(true), deleteDigest: state.deleteDigest };
+  }
+  if (mode === 'history-delete-cancelled') return result(state.phase === 2 && historyDigest === state.historyDigest && subscriptionDigest === state.subscriptionDigest);
+  if (mode === 'history-deleted') {
+    const passed = state.phase === 2 && historyDigest === state.deletedHistoryDigest && subscriptionDigest === state.subscriptionDigest;
+    if (passed) state.historyDigest = historyDigest;
     return result(passed);
   }
   if (historyDigest !== state.historyDigest) return result(false);
@@ -207,11 +263,17 @@ export async function observeHistorySubscriptions(api, mode, origin, host = glob
 }
 
 // Genuine popup DOM readback, never clicks/fills or returns record contents.
-export async function observeHistorySubscriptionUi(mode, targetDigest) {
+export async function observeHistorySubscriptionUi(mode, targetDigest, deleteDigest) {
   const digest = async (value) => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(JSON.stringify(value)))), (byte) => byte.toString(16).padStart(2, '0')).join('');
   const rows = Array.from(document.querySelectorAll('[data-review-id]'));
   let target;
   for (const row of rows) if (await digest(row.dataset.reviewId) === targetDigest) target = row;
+  let deletionTarget;
+  for (const row of rows) if (await digest(row.dataset.reviewId) === deleteDigest) deletionTarget = row;
+  if (mode === 'history-delete-cancelled' || mode === 'history-deleted') return !!target
+    && target.querySelector('[data-action="review-mark"]')?.dataset.reviewed === 'true'
+    && document.querySelectorAll('[data-subscription-list] > article').length === 1
+    && (mode === 'history-deleted' ? !deletionTarget : !!deletionTarget);
   const editor = document.querySelector('[data-subscription-editor]');
   const status = document.querySelector('section[aria-label="Subscriptions"] > [role="status"]')?.textContent;
   const count = document.querySelectorAll('[data-subscription-list] > article').length;

@@ -251,12 +251,62 @@ test('synthetic CRUD cancellation detects mutation and every mode rejects malfor
   expect(host.__qaCrud.phase).toBe(1);
 });
 
+test('history delete Cancel preserves all data; confirmation removes only non-source duplicate', async () => {
+  const { state, read, finding, confirmed } = crudFixture();
+  const other = { ...finding, id: 'z_duplicate', ordinal: 2 };
+  state.reviewHistory.push(other);
+  await read('baseline'); finding.status = 'reviewed'; await read('reviewed');
+  state.subscriptions = [confirmed]; await read('confirmed');
+  expect((await read('history-delete-baseline')).deleteDigest).toMatch(/^[a-f0-9]{64}$/);
+  expect((await read('history-delete-cancelled')).passed).toBe(true);
+  state.reviewHistory = [other];
+  expect((await read('history-deleted')).passed).toBe(false);
+  state.reviewHistory = [finding];
+  expect((await read('history-deleted')).passed).toBe(true);
+  expect((await read('unchanged')).passed).toBe(true);
+  state.subscriptions[0].amount = '99.00';
+  expect((await read('history-deleted')).passed).toBe(false);
+});
+
 test('already-reviewed synthetic baseline fails honestly instead of pretending a Mark transition occurred', async () => {
   const { finding, read, host } = crudFixture();
   finding.status = 'reviewed';
   await expect(read('baseline')).rejects.toThrow('reset only through human UI');
   expect(host).toEqual({});
 });
+test('automatic duplicate lifecycle binds canonical IDs, ordinals and stable provenance across repeats and SPA exit', async () => {
+  const { observeAutomaticLifecycle } = await import('../scripts/manual-qa-stages.mjs');
+  const { state, finding } = crudFixture();
+  const { createHash } = await import('node:crypto');
+  const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  finding.id = 'f_' + hash([finding.origin, finding.opaqueFingerprint, 1]);
+  const api = cleanApi(state); const host = {};
+  const read = (mode) => observeAutomaticLifecycle(api, mode, finding.origin, host, validate);
+  expect((await read('baseline')).passed).toBe(true);
+  state.reviewHistory.push({ ...finding, id: 'f_' + hash([finding.origin, finding.opaqueFingerprint, 2]), ordinal: 2 });
+  api.action.getBadgeText = async () => '2';
+  expect((await read('distinct')).passed).toBe(true);
+  for (const item of state.reviewHistory) item.latestSeen = '2026-10-01T00:00:01.000Z';
+  expect((await read('repeat')).passed).toBe(true);
+  state.reviewHistory[1].id = 'f_wrong';
+  expect((await read('repeat')).passed).toBe(false);
+  state.reviewHistory[1].id = 'f_' + hash([finding.origin, finding.opaqueFingerprint, 2]);
+  state.reviewHistory[1].ordinal = 3;
+  expect((await read('repeat')).passed).toBe(false);
+  state.reviewHistory[1].ordinal = 2;
+  state.reviewHistory.push({ ...finding, id: 'overflow', ordinal: 3 });
+  expect((await read('repeat')).passed).toBe(false);
+  state.reviewHistory.pop();
+  expect((await read('before-exit')).passed).toBe(true);
+  api.action.getBadgeText = async () => '';
+  expect((await read('exit')).passed).toBe(true);
+  finding.latestSeen = '2026-10-01T00:00:02.000Z';
+  expect((await read('exit')).passed).toBe(false);
+  state.reviewHistory = [{}];
+  await expect(read('repeat')).rejects.toThrow('schema');
+  expect(Object.values(host).every((v) => typeof v === 'number' || /^[a-f0-9]{64}$/.test(v))).toBe(true);
+});
+
 const results = () => Object.fromEntries(WORKFLOW_PREDICATES.map((name) => [name, name === 'accessibility' ? true : 'passed']));
 
 test('synthetic final readbacks preserve exact source, subscriptions, retention and revoked generation through restart', async () => {

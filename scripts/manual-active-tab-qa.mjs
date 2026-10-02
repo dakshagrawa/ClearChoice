@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { createFixtureTls, mockCheckoutHtml } from './manual-qa-fixtures.mjs';
 import { LOCAL_HUMAN_ATTESTATION, WORKFLOW_PREDICATES, validateManualActiveTabMarker, sha256 } from './active-tab-qa.mjs';
-import { storageValidatorSource, observeFinalState, observeFinalUi, observeCleanState, observeSiteState, observeHistorySubscriptions, observeHistorySubscriptionUi, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
+import { storageValidatorSource, observeAutomaticLifecycle, observeFinalState, observeFinalUi, observeCleanState, observeSiteState, observeHistorySubscriptions, observeHistorySubscriptionUi, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
 import { prepareCandidateArchive } from './release-artifact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -18,6 +18,7 @@ const fixtureOriginPattern = /^https:\/\/checkout-a\.test:([1-9]\d{0,4})$/;
 export function fixtureForRequest(url) {
   if (url === '/checkout/clean') return 'clean';
   if (url === '/checkout/dynamic-beta') return 'dynamic';
+  if (url === '/checkout/identical') return 'identical';
   throw new Error('unknown manual QA fixture request');
 }
 
@@ -173,7 +174,7 @@ async function integrityDigest(page) {
   const snapshot = await page.evaluate(() => {
     const owned = (node) => node.closest('[data-clearchoice-panel]') !== null;
     return JSON.stringify({
-      href: location.href,
+      href: window.__qaLifecycleIntegrity && ['/checkout/identical', '/information'].includes(location.pathname) ? location.origin + '/checkout/identical' : location.href,
       forms: Array.from(document.forms, (form) => form.action),
       controls: Array.from(document.querySelectorAll('input, select'))
         .filter((node) => !owned(node))
@@ -186,7 +187,8 @@ async function integrityDigest(page) {
   return sha256(snapshot);
 }
 
-export async function captureIntegrityBaseline(page) {
+export async function captureIntegrityBaseline(page, lifecycle = false) {
+  await page.evaluate((value) => { window.__qaLifecycleIntegrity = value; }, lifecycle);
   const digest = await integrityDigest(page);
   await page.evaluate((value) => {
     window.__clearchoiceManualIntegrityBaseline = {
@@ -254,8 +256,11 @@ export async function runManualCheckpoints({ cleanPage, getDynamicPage, instruct
 }
 
 // This slice deliberately returns no attestation predicates or marker.
-export async function runSiteCheckpoints({ instruct, acknowledge, navigate, read, quiet, positive, denied, integrity, mutate }) {
-  const stage = (instruction, observe) => runHumanStage({ instruction, instruct, observe, acknowledge });
+export async function runSiteCheckpoints({ instruct, acknowledge, navigate, read, quiet, positive, denied, integrity, mutate, lifecycle }) {
+  const stage = async (instruction, observe) => {
+    await runHumanStage({ instruction, instruct, observe, acknowledge });
+    if (!await observe()) throw new Error('site state changed during acknowledgement');
+  };
   await navigate('a', false);
   await read('baseline', 'a');
   await stage('13. A CLEAN: pointer-click toolbar, then Enable detection for this site. ALLOW the real Chrome permission prompt. Leave popup open; no simulated permission is accepted.', async () => await read('enabled', 'a') && await quiet('a'));
@@ -271,6 +276,7 @@ export async function runSiteCheckpoints({ instruct, acknowledge, navigate, read
   await integrity('b');
   await navigate('a', true);
   if (!await read('positive', 'a') || !await positive('a')) throw new Error('automatic A revisit predicate failed');
+  await lifecycle();
   await read('before-revoke', 'a');
   await stage('16. A REVOKE: pointer-click toolbar, then Disable detection for this site. Wait for panel and badge to clear.', async () => await read('revoked', 'a') && await quiet('a'));
   await integrity('a');
@@ -281,6 +287,28 @@ export async function runSiteCheckpoints({ instruct, acknowledge, navigate, read
   await navigate('a', true);
   if (!await read('revoked', 'a') || !await quiet('a')) throw new Error('revoked revisit predicate failed');
   await integrity('a');
+}
+
+export async function runAutomaticLifecycleCheckpoints({ instruct, acknowledge, read, ui, navigate, reload, integrity, waitForState = waitForObservation }) {
+  if (!await read('baseline')) throw new Error('automatic lifecycle baseline failed');
+  const stage = async (instruction, mode, visible) => {
+    const observe = async () => await ui(visible) && await read(mode);
+    await runHumanStage({ instruction, instruct, acknowledge, observe: () => waitForState(observe) });
+    if (!await observe()) throw new Error('automatic lifecycle changed during acknowledgement');
+    await integrity();
+  };
+  instruct('15a. AUTOMATIC IDENTICAL: runner navigates to two identical mock paragraphs. Do not Analyze or Save; observe two findings and badge 2, zero subscriptions.');
+  await navigate();
+  await stage('15b. DISTINCT: acknowledge only after both identical findings appear automatically.', 'distinct', 'two');
+  await stage('15c. REPEAT: human-click Replace fake order summary twice. Both findings and IDs must remain distinct without new history or subscriptions.', 'repeat', 'mutated');
+  instruct('15d. RELOAD: type DONE to authorize runner reload of the same controlled mock.');
+  if (await acknowledge() !== 'DONE') throw new Error('lifecycle reload authorization missing');
+  if (!await read('repeat')) throw new Error('pre-reload lifecycle changed');
+  await reload();
+  await stage('15e. RELOADED: without Analyze or Save, observe two automatic findings; identities and history count must be unchanged.', 'repeat', 'two');
+  if (!await read('before-exit')) throw new Error('SPA exit baseline failed');
+  await stage('15f. SPA EXIT: human-click Exit checkout route. Panel must disappear and badge clear while history persists.', 'exit', 'exit');
+  await stage('15g. SPA RETURN: human-click Return to checkout route. Two automatic findings and badge 2 must return without duplicate history.', 'repeat', 'two');
 }
 
 // No workflow result/attestation is produced by this bounded human-only slice.
@@ -297,6 +325,9 @@ export async function runHistorySubscriptionCheckpoints({ instruct, acknowledge,
   await stage('21. CANCEL: click Cancel in the subscription editor. Observe Editor closed; no additional save requested. No storage mutation is allowed.', 'unchanged', 'cancelled');
   await stage('22. REOPEN: click Review as subscription on the same observation. Observe the same four blank fields again.', 'unchanged', 'draft');
   await stage('23. CONFIRM: human-fill only fake Merchant QA Finding Mock, Amount 12.34, Currency USD, Cadence monthly; leave optional fields blank. Click Save subscription. Observe Subscription saved locally. Exactly one record must persist with the correct finding provenance.', 'confirmed', 'saved-one');
+  if (!await read('history-delete-baseline')) throw new Error('history delete baseline failed');
+  await stage('23a. HISTORY DELETE CANCEL: on the OTHER unreviewed recurring observation (not the Reviewed subscription source), click Delete. In the native Permanently delete observation confirmation choose Cancel. Leave popup open; all history and subscriptions must remain unchanged.', 'history-delete-cancelled', 'history-delete-cancelled');
+  await stage('23b. HISTORY DELETE CONFIRM: click Delete on that SAME other unreviewed observation again; approve the native confirmation. Only that observation may disappear; the Reviewed source and its confirmed subscription must remain unchanged.', 'history-deleted', 'history-deleted');
   await stage('24. MANUAL ADD: click Add subscription. Human-fill only fake Merchant QA Manual Mock, Amount 23.45, Currency USD, Cadence yearly; leave optional fields blank. Click Save subscription. The finding-confirmed record must remain unchanged.', 'added', 'saved-two');
   await stage('25. EDIT: click Edit on QA Manual Mock ONLY. Change fake Merchant to QA Manual Mock Edited, Amount to 34.56, Cadence to weekly; keep USD and optional fields blank. Click Save subscription. Identity and provenance must be preserved.', 'edited', 'saved-two');
   await stage('26. DELETE PROMPT: click Delete on QA Manual Mock Edited ONLY. Observe Delete subscription? for that fake target; do not confirm yet.', 'unchanged', 'delete-prompt');
@@ -354,7 +385,7 @@ export async function reviewCandidate(candidate, {
   let terminal;
   await runWithCleanup(async () => {
     tls = await createTls();
-    const fixtures = { clean: mockCheckoutHtml(), dynamic: mockCheckoutHtml(true) };
+    const fixtures = { clean: mockCheckoutHtml(), dynamic: mockCheckoutHtml(true), identical: mockCheckoutHtml('identical') };
     server = makeServer({ key: tls.key, cert: tls.cert }, (request, response) => {
       serveFixture(request.url, response, fixtures);
     });
@@ -368,6 +399,8 @@ export async function reviewCandidate(candidate, {
 
     profile = await createProfile(resolve(tmpdir(), 'clearchoice-manual-active-tab-'));
     context = await launchContext(profile, reviewBrowserLaunchOptions(extensionPath, tls.pin));
+    // Observe native confirmations without auto-accept/dismiss; only the human responds.
+    context.on('dialog', () => {});
     await install(context, extensionPath);
     const cleanPage = await context.newPage();
     await cleanPage.goto(`${fixtureOrigin}/checkout/clean`);
@@ -457,6 +490,33 @@ export async function reviewCandidate(candidate, {
         await captureIntegrityBaseline(pages[site]);
         await pages[site].bringToFront();
       },
+      lifecycle: () => runAutomaticLifecycleCheckpoints({
+        instruct: (text) => process.stdout.write(`${text}\n`),
+        acknowledge: () => terminal.question('Type DONE after the requested automatic lifecycle observation: ', { signal: AbortSignal.timeout(300_000) }),
+        read: async (mode) => {
+          const observe = async () => {
+            if (!await siteRead('before-revoke', 'a')) return false;
+            return (await worker.evaluate(`(${observeAutomaticLifecycle.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, globalThis, ${validateStorage})`)).passed;
+          };
+          if (!await observe()) return false;
+          if (['repeat', 'exit'].includes(mode)) {
+            for (let sample = 0; sample < 5; sample++) {
+              await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+              if (!await observe()) return false;
+            }
+          }
+          return true;
+        },
+        navigate: async () => { await pages.a.goto(`${origins.a}/checkout/identical`); await captureIntegrityBaseline(pages.a, true); },
+        reload: async () => { await pages.a.reload(); await captureIntegrityBaseline(pages.a, true); },
+        integrity: () => assertIntegrity(pages.a, 'automatic lifecycle'),
+        ui: async (mode) => {
+          const count = await pages.a.locator('aside[data-clearchoice-panel] article').count();
+          if (mode === 'exit') return new URL(pages.a.url()).pathname === '/information' && count === 0 && await pages.a.locator('aside[data-clearchoice-panel]').count() === 0;
+          return new URL(pages.a.url()).pathname === '/checkout/identical' && count === 2
+            && (mode !== 'mutated' || await pages.a.locator('#fake-order-summary h2').textContent() === 'Order summary updated again');
+        },
+      }),
       read: siteRead,
       quiet: async (site) => await pages[site].locator('aside[data-clearchoice-panel]').count() === 0,
       positive: async (site) => {
@@ -476,18 +536,20 @@ export async function reviewCandidate(candidate, {
       },
     });
     let targetDigest;
+    let deleteDigest;
     await runHistorySubscriptionCheckpoints({
       instruct: (text) => process.stdout.write(`${text}\n`),
       acknowledge: () => terminal.question('Type DONE only after the requested human popup action and observed result: ', { signal: AbortSignal.timeout(300_000) }),
       read: async (mode) => {
         const result = await worker.evaluate(`(${observeHistorySubscriptions.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, globalThis, ${validateStorage})`);
         if (mode === 'baseline') targetDigest = result.targetDigest;
+        if (mode === 'history-delete-baseline') deleteDigest = result.deleteDigest;
         return result.passed;
       },
       ui: async (mode) => {
         const popup = context.pages().find((page) => !page.isClosed() && page.url() === popupUrl);
         if (!popup) return false;
-        return popup.evaluate(`(${observeHistorySubscriptionUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(targetDigest)})`);
+        return popup.evaluate(`(${observeHistorySubscriptionUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(targetDigest)}, ${JSON.stringify(deleteDigest)})`);
       },
     });
     const expectedWorkerUrl = await reviewedWorkerUrl(extensionPath);
