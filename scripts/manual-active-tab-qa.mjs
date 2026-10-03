@@ -6,8 +6,9 @@ import { resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { syntheticNativePopup } from './synthetic-native-popup.mjs';
 import { createFixtureTls, mockCheckoutHtml } from './manual-qa-fixtures.mjs';
-import { LOCAL_HUMAN_ATTESTATION, WORKFLOW_PREDICATES, validateManualActiveTabMarker, sha256 } from './active-tab-qa.mjs';
+import { LOCAL_HUMAN_ATTESTATION, MIXED_EVIDENCE, WORKFLOW_PREDICATES, validateManualActiveTabMarker, sha256 } from './active-tab-qa.mjs';
 import { storageValidatorSource, observePermissionCycle, observeAutomaticLifecycle, observeFinalState, observeFinalUi, observeCleanState, observeSiteState, observeHistorySubscriptions, observeHistorySubscriptionUi, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
 import { prepareCandidateArchive } from './release-artifact.mjs';
 
@@ -405,8 +406,106 @@ export async function observeNativeHistoryDialog(context, popup, targetDigest, m
   };
 }
 
-export function stopPendingHumanStages() {
-  throw new Error('final human attestation pending review; no ATTEST or marker is available');
+// Separate disposable profile: synthetic records are never mixed into human
+// consent/CRUD provenance. Load the SAME extracted candidate, without rebuilding.
+function canonicalSnapshot(value) {
+  const ordered = item => Array.isArray(item) ? item.map(ordered)
+    : item && typeof item === 'object' ? Object.fromEntries(Object.keys(item).sort().map(key => [key, ordered(item[key])])) : item;
+  return JSON.stringify(ordered(value));
+}
+
+export async function runSyntheticEvidence(candidate, template, { instruct, acknowledge, headless = false, selectPolicy } = {}) {
+  let profile;
+  let context;
+  let popup;
+  return runWithCleanup(async () => {
+    instruct('34. SYNTHETIC EVIDENCE ONLY: a separate disposable profile loads the exact reviewed artifact. Fake 40-day-old/fresh observations and confirmed subscriptions are seeded through genuine storage APIs. This is NOT elapsed-time or organic provider history, consent, or positive provider browser navigation. Main human profile remains untouched.');
+    profile = await mkdtemp(resolve(tmpdir(), 'clearchoice-synthetic-evidence-'));
+    const launch = reviewBrowserLaunchOptions(candidate.extensionPath);
+    context = await chromium.launchPersistentContext(profile, { ...launch, headless,
+      args: [...launch.args, ...(!headless ? ['--ozone-platform=x11'] : [])] });
+    await installReviewedExtension(context, candidate.extensionPath);
+    const worker = await waitForReviewedExtensionWorker(context, candidate.extensionPath);
+    popup = await syntheticNativePopup(context, worker, { headless });
+    await waitForObservation(() => popup.evaluate(() => document.querySelector('[data-review-retention]')?.disabled === false));
+    instruct('Synthetic candidate worker ready.');
+    const validate = await storageValidatorSource();
+    const origins = ['https://checkout-a.test:123', 'https://netflix.com', 'https://spotify.com', 'https://catalog-fallback.test'];
+    const history = origins.map((origin, index) => {
+      const timestamp = new Date(Date.now() - (index === 0 ? 40 : 1) * 86400000).toISOString();
+      return { kind: template.kind, reason: template.reason, screenedExcerpt: template.screenedExcerpt,
+        opaqueFingerprint: template.opaqueFingerprint, ordinal: 1, origin,
+        id: 'f_' + sha256(JSON.stringify([origin, template.opaqueFingerprint, 1])),
+        firstSeen: timestamp, latestSeen: timestamp, status: 'reviewed' };
+    });
+    const subscriptions = history.map((item, index) => ({ id: `s_synthetic_${index}`, merchant: `QA Synthetic ${index}`,
+      amount: '12.00', currency: 'USD', cadence: 'monthly', createdAt: item.firstSeen, updatedAt: item.latestSeen, sourceFindingId: item.id }));
+    const fixture = { version: 1, dismissed: false, reviewHistory: history, subscriptions, retentionPolicy: 'never', receipts: [], grantState: { version: 1, sites: {} } };
+    const seed = await worker.evaluate(`(async value => { const validate = ${validate}; const canonical = ${canonicalSnapshot.toString()}; validate(await chrome.storage.local.get(null)); validate(value); await chrome.storage.local.set(value); return canonical(await chrome.storage.local.get(null)) === canonical(value); })(${JSON.stringify(fixture)})`);
+    if (!seed) throw new Error('synthetic fixture seed readback mismatch');
+    await (await popup.locator('[data-action="review-refresh"]').all())[0].click();
+    await (await popup.locator('[data-subscription-action="refresh"]').all())[0].click();
+    await waitForObservation(async () => await popup.locator('[data-review-id]').count() === 4);
+    if (await popup.locator('[data-review-id]').count() !== 4) throw new Error('synthetic Never baseline mismatch');
+    instruct('35. SYNTHETIC EXPIRY: in this separate visible extension page human-select 7 days in Keep local observations. Four observations must become three, while ALL four subscriptions survive. This page is not a toolbar consent checkpoint.');
+    if (selectPolicy) await selectPolicy(popup); // Test-only injected callback; CLI never supplies it.
+    const expected = { ...fixture, reviewHistory: history.slice(1), retentionPolicy: 7 };
+    const read = async () => worker.evaluate(`(async expected => { const canonical = ${canonicalSnapshot.toString()}; const stored = await chrome.storage.local.get(null); (${validate})(stored); return canonical(stored) === canonical(expected); })(${JSON.stringify(expected)})`);
+    await waitForObservation(async () => await read() && await popup.locator('[data-review-id]').count() === 3);
+    if (await acknowledge('SYNTHETIC_EXPIRY_REVIEWED') !== 'SYNTHETIC_EXPIRY_REVIEWED') throw new Error('synthetic expiry acknowledgement missing');
+    if (!await read()) throw new Error('synthetic expiry changed during acknowledgement');
+    // Terminal/public-browser focus may destroy native action popups. Reacquire
+    // the genuine target; this is disclosed synthetic UI evidence only.
+    const reopen = async () => {
+      await popup.close();
+      popup = await syntheticNativePopup(context, worker, { headless });
+      await waitForObservation(async () => await popup.locator('[data-subscription-list] > article').count() === 4);
+    };
+    await reopen();
+    // Programmatic help-button activation is explicitly catalog/UI integration,
+    // not a human provider action. Never activate any resulting anchor.
+    const revealHelp = async () => {
+      for (const button of await popup.locator('[data-subscription-action="help"]').all()) await button.click();
+    };
+    await revealHelp();
+    const thirdParty = 'If billed through a third party, cancellation may need to be handled by that billing provider.';
+    const expectedGuides = [
+      { href: 'https://help.netflix.com/en/node/407', label: 'Official guide (reviewed 2026-09-29)', detail: `How to cancel Netflix. ${thirdParty}` },
+      { href: 'https://support.spotify.com/us/article/cancel-premium/', label: 'Official guide (reviewed 2026-09-29)', detail: `How to cancel Premium plans. ${thirdParty} Leaving a Family or Duo plan as a member does not cancel the plan; contact the plan manager.` },
+      { href: 'https://catalog-fallback.test/', label: 'Visit site — not a cancellation guide', detail: '' },
+    ];
+    const catalog = async () => popup.evaluate((guides) => {
+      const allRows = Array.from(document.querySelectorAll('[data-subscription-list] > article'));
+      const rows = [0, 1, 2, 3].map(index => allRows.find(row => row.querySelector('[data-subscription-action="help"]')?.getAttribute('aria-label') === `Cancellation help for QA Synthetic ${index}`));
+      if (allRows.length !== 4 || rows.some(row => !row)) return false;
+      if (rows.length !== 4 || rows[0].querySelector('a') || rows[0].querySelector('[role="status"]')?.textContent !== 'No known provider site; check your billing provider') return false;
+      return guides.every((guide, index) => {
+        const region = rows[index + 1].querySelector('[role="status"]');
+        const links = region?.querySelectorAll('a');
+        return links?.length === 1 && links[0].href === guide.href && links[0].textContent === guide.label
+          && links[0].target === '_blank' && links[0].rel === 'noopener noreferrer'
+          && (region.querySelector('p')?.textContent ?? '') === guide.detail;
+      });
+    }, expectedGuides);
+    await waitForObservation(catalog);
+    instruct('36. PUBLIC ARTICLES + ACTUAL BUNDLED CATALOG: inspect the three rendered help links, literal reviewed date 2026-09-29, titles, third-party billing and Spotify Family/Duo caveats. Do NOT click these links. Separately, in your own browser outside the restricted runner, read ONLY https://help.netflix.com/en/node/407 and https://support.spotify.com/us/article/cancel-premium/ (official public help articles, not accounts). Compare current instructions/caveats with this actual candidate catalog. If content is unavailable or mismatches, abort and report it. This acceptance is NOT positive provider browser navigation, billing provenance or cancellation.');
+    if (await acknowledge('PUBLIC_GUIDES_AND_CATALOG_REVIEWED') !== 'PUBLIC_GUIDES_AND_CATALOG_REVIEWED') throw new Error('public guides and catalog acknowledgement missing');
+    await reopen();
+    await revealHelp();
+    await waitForObservation(catalog);
+    if (!await catalog() || !await read()) throw new Error('synthetic catalog or storage changed during acknowledgement');
+    return { expiry: true, catalog: true, publicReview: true };
+  }, [() => popup?.close(), () => context?.close(), () => profile && rm(profile, { recursive: true, force: true })]);
+}
+
+export async function attestCompletedWorkflow(candidate, results, { instruct, acknowledge, recheck, emit }) {
+  // Validate completeness BEFORE offering ATTEST. No default passing predicates.
+  createManualActiveTabQaMarker(candidate, results);
+  await recheck();
+  instruct('37. Final local human self-attestation: all real toolbar/Chrome/keyboard/CRUD actions plus the explicitly mixed synthetic-expiry and public-article/bundled-catalog evidence are complete. NOT positive provider browser navigation. Type ATTEST only if accurate; anything else aborts.');
+  if (await acknowledge() !== 'ATTEST') throw new Error('final human attestation missing; marker was not emitted');
+  await recheck();
+  emit(JSON.stringify(createManualActiveTabQaMarker(candidate, results), null, 2) + '\n');
 }
 
 export function createManualActiveTabQaMarker({ commit, manifestSha256, archiveSha256 }, results) {
@@ -415,7 +514,7 @@ export function createManualActiveTabQaMarker({ commit, manifestSha256, archiveS
       || WORKFLOW_PREDICATES.some((field) => !Object.hasOwn(results, field))) {
     throw new Error('complete validated workflow results are required; marker was not emitted');
   }
-  const marker = { schemaVersion: 4, outcome: 'passed', ...results,
+  const marker = { schemaVersion: 5, ...MIXED_EVIDENCE, outcome: 'passed', ...results,
     commit, manifestSha256, archiveSha256, reviewer: LOCAL_HUMAN_ATTESTATION };
   const validation = validateManualActiveTabMarker(marker, { commit, manifestSha256, archiveSha256 });
   if (!validation.ok) throw new Error(validation.error);
@@ -491,6 +590,7 @@ export async function reviewCandidate(candidate, {
     process.stdout.write('The runner retains only SHA-256 integrity digests and panel/integrity pass-fail predicates; it never writes or prints page data.\n\n');
     terminal = createInterface({ input: process.stdin, output: process.stdout });
     let dynamicPage;
+    const results = {};
     await runManualCheckpoints({
       cleanPage,
       getDynamicPage: () => dynamicPage,
@@ -532,6 +632,10 @@ export async function reviewCandidate(candidate, {
         await dynamicPage.waitForFunction(() => document.querySelector('#fake-order-summary')?.textContent?.includes('updated') === true, undefined, { timeout: 300_000 });
       },
     });
+    results.cleanFixtureIntegrity = 'passed';
+    results.dynamicFixtureIntegrity = 'passed';
+    if (await terminal.question('Type KEYBOARD_AND_POINTER_REVIEWED only after visible Tab focus, Escape, pointer Dismiss and both pointer Restore actions were actually verified: ', { signal: AbortSignal.timeout(300_000) }) !== 'KEYBOARD_AND_POINTER_REVIEWED') throw new Error('accessibility acknowledgement missing');
+    results.accessibility = true;
     const pages = { a: dynamicPage };
     const origins = { a: fixtureOrigin, b: fixtureOrigin.replace('checkout-a.test', 'checkout-b.test') };
     const popupUrl = new URL('/popup/index.html', worker.url()).href;
@@ -604,6 +708,10 @@ export async function reviewCandidate(candidate, {
         await pages.a.waitForFunction(() => document.querySelector('#fake-order-summary')?.textContent?.includes('updated') === true, undefined, { timeout: 300_000 });
       },
     });
+    results.optInConsent = 'passed';
+    results.optInDenial = 'passed';
+    results.siteIsolation = 'passed';
+    results.automaticLifecycle = 'passed';
     await runPermissionCycleCheckpoints({
       instruct: (text) => process.stdout.write(`${text}\n`),
       acknowledge: (token) => terminal.question(`Type ${token} only after the specified real human action (anything else aborts): `, { signal: AbortSignal.timeout(300_000) }),
@@ -627,6 +735,7 @@ export async function reviewCandidate(candidate, {
       },
       integrity: () => assertIntegrity(pages.a, 'human reenable/Chrome Settings removal'),
     });
+    results.revocation = 'passed';
     let targetDigest;
     let deleteDigest;
     let dialogDigest;
@@ -646,6 +755,8 @@ export async function reviewCandidate(candidate, {
         return popup.evaluate(`(${observeHistorySubscriptionUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(targetDigest)}, ${JSON.stringify(deleteDigest)})`);
       },
     });
+    results.reviewHistory = 'passed';
+    results.subscriptions = 'passed';
     const expectedWorkerUrl = await reviewedWorkerUrl(extensionPath);
     let finalBaseline;
     const readFinal = async (mode) => worker.evaluate(`(${observeFinalState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, ${JSON.stringify(expectedWorkerUrl)}, ${JSON.stringify(finalBaseline)}, ${validateStorage})`);
@@ -677,7 +788,28 @@ export async function reviewCandidate(candidate, {
       },
       quiet: async () => await pages.a.locator('aside[data-clearchoice-panel]').count() === 0,
     });
-    stopPendingHumanStages();
+    // Only screened fake fixture evidence crosses into the separate test profile;
+    // no records are printed, written to evidence files, or included in the marker.
+    const template = await worker.evaluate(async () => {
+      const stored = await chrome.storage.local.get(null);
+      const source = stored.reviewHistory.find(item => item.id === stored.subscriptions[0].sourceFindingId);
+      return { kind: source.kind, reason: source.reason, screenedExcerpt: source.screenedExcerpt, opaqueFingerprint: source.opaqueFingerprint };
+    });
+    const mixed = await runSyntheticEvidence(candidate, template, {
+      instruct: text => process.stdout.write(`${text}\n`),
+      acknowledge: token => terminal.question(`Type ${token} only after the explicitly labeled review: `, { signal: AbortSignal.timeout(300_000) }),
+    });
+    if (mixed.expiry !== true || mixed.catalog !== true || mixed.publicReview !== true) throw new Error('mixed evidence acceptance incomplete');
+    if (!await readFinal('unchanged')) throw new Error('primary human profile changed during separate synthetic review');
+    results.retention = 'passed';
+    results.cancellationHelp = 'passed';
+    await attestCompletedWorkflow(candidate, results, {
+      instruct: text => process.stdout.write(`${text}\n`),
+      acknowledge: () => terminal.question('Final acknowledgement: ', { signal: AbortSignal.timeout(300_000) }),
+      recheck: () => recheckCandidateBinding(root, candidate),
+      emit: text => process.stdout.write(text),
+    });
+    process.stdout.write('Save ONLY the emitted JSON outside this repository and supply its path in CLEARCHOICE_ACTIVE_TAB_QA_MARKER to npm run check:beta. Do not rebuild or repackage after attestation.\n');
   }, [
     () => terminal?.close(),
     () => context?.close(),

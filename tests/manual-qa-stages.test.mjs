@@ -3,7 +3,7 @@ import { expect, test } from 'vitest';
 import { runInNewContext } from 'node:vm';
 const validate = runInNewContext(await storageValidatorSource(), { Intl, URL });
 import { WORKFLOW_PREDICATES } from '../scripts/active-tab-qa.mjs';
-import { createManualActiveTabQaMarker, runFinalCheckpoints, stopPendingHumanStages } from '../scripts/manual-active-tab-qa.mjs';
+import { createManualActiveTabQaMarker, runFinalCheckpoints } from '../scripts/manual-active-tab-qa.mjs';
 import { storageValidatorSource, observePermissionCycle, observeFinalState, observeFinalUi, observeHistorySubscriptions, runHumanStage, runWithCleanup, observeCleanState, observeSiteState, waitForObservation } from '../scripts/manual-qa-stages.mjs';
 
 test('second consent derives generations and Settings observer rejects partial cleanup and identity changes', async () => {
@@ -440,7 +440,7 @@ test('final stages require explicit restart authorization and fail on persisted-
     expect(helpInstruction).toContain('positive Visit site fallback and official guides remain UNVERIFIED');
     expect(restarted).toBe(failure !== 'authorization');
   }
-  expect(() => stopPendingHumanStages()).toThrow('final human attestation pending review');
+  // Final attestation is now gated by complete explicit results and fresh binding.
 });
 
 test('marker constructor cannot manufacture passed workflow results', () => {
@@ -453,7 +453,7 @@ test('marker constructor cannot manufacture passed workflow results', () => {
     expect(() => createManualActiveTabQaMarker(candidate, incomplete)).toThrow();
   }
   expect(() => createManualActiveTabQaMarker(candidate, { ...results(), url: 'https://fixture.test' })).toThrow();
-  expect(createManualActiveTabQaMarker(candidate, results()).schemaVersion).toBe(4);
+  expect(createManualActiveTabQaMarker(candidate, results()).schemaVersion).toBe(5);
 });
 
 test('stage does not advance until the observation and explicit acknowledgement both pass', async () => {

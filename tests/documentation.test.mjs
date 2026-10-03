@@ -82,7 +82,9 @@ test('candidate evidence and checklist separate current blocked gate from histor
     for (const term of ['0.4.0-beta.1', '`0.4.0`', 'actual marker schema', 'packaged manifest SHA-256', 'complete ZIP SHA-256']) expect(document).toContain(term);
     expect(document).toMatch(/existing archive.*no rebuild/i);
     expect(document).toMatch(/Task 16B.*pending/i);
-    expect(document).toContain('Integrated native browser checks remain unfinished.');
+    expect(document).toMatch(/not final-candidate proof/);
+    expect(document).toContain('Schema 5');
+    expect(document).toContain('do not establish human toolbar access or permission consent');
     expect(document).toMatch(/permission hang[^.]*resolved[^.]*exact mock-port seed/i);
     expect(document).toMatch(/persistence now pass genuine browser restart checks/i);
     expect(document).toMatch(/do not establish human toolbar access or permission consent/i);

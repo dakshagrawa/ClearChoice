@@ -4,7 +4,7 @@ This is the unreleased `0.4.0-beta.1` private opt-in beta candidate, not release
 
 Chrome numeric `version` is `0.4.0`; `version_name` is `0.4.0-beta.1`. The candidate archive is `ClearChoice-v0.4.0-beta.1-unpacked.zip`.
 
-Task 16A serialization work at `18de837` was quality-approved in the recovered review transcript `deleg_db6fb112`. Task 16B expanded human protocol and native workflow remain pending. The existing manual runner/protocol must not be treated as completed coverage for opt-in, revoke, retention, subscription CRUD, and guides. Integrated native browser checks remain unfinished. The permission hang was resolved with the exact mock-port seed. The restart harness was corrected to install once rather than reinstall on launch; packaged detector and record persistence now pass genuine browser restart checks. Four scoped packaged tests pass, including programmatic no-host denial, identical findings, unsupported-page quiet behavior, and revoked badge clearing. These pre-granted/programmatic checks do not establish human toolbar access or permission consent. Remaining adverse-state coverage is incomplete. Final human QA, full negative audit, passing beta gate, and actual final-tag CI proof are not complete.
+Task 16A exact-archive serialization is integrated and quality-approved. Task 16B final mixed-evidence runner wiring is implemented and independently approved; genuine human QA remains pending. The permission hang was resolved with the exact mock-port seed. The restart harness was corrected to install once rather than reinstall on launch; packaged detector and record persistence now pass genuine browser restart checks. The last integrated committed-source run at `f307973691ea91e984efc7b2ad5111a3295b4452` passed 768 units and 15 browser tests, lint, TypeScript, build/package policy, and both dependency audits. Two additional real-browser in-flight-revoke/quota-retry tests independently passed and were quality-approved before commit `a1a30a5`. Native programmatic checks do not establish human toolbar access or permission consent. Final runner working-tree verification passed 771 units, 17 browser tests, lint, TypeScript, build/package policy and both audits (zero vulnerabilities). These results are automated evidence, not final-candidate proof of human gestures. Final human QA, exact-artifact beta gate, publication and final-tag CI proof are not complete.
 
 ## Required behavior
 
@@ -26,14 +26,16 @@ Catalog metadata was reviewed September 29, 2026; official articles were recheck
 
 ## Uncompleted gates
 
-- [ ] Integrate quality-approved Task 16A serialization and recheck exact-byte archive binding on the final candidate
-- [ ] Complete Task 16B human opt-in/revoke, retention, CRUD, guide, keyboard, and integrity protocol
-- [ ] Investigate browser-restart loss and complete integrated native browser checks; run full native E2E
+- [x] Integrate quality-approved Task 16A serialization; final archive binding still requires recheck
+- [x] Implement and independently review Task 16B mixed-evidence runner and schema 5
+- [ ] Complete genuine human opt-in/revoke, retention, CRUD, guide, keyboard, and integrity QA
+- [x] Resolve harness reinstall/restart loss and verify native persistence
+- [x] Rerun full native E2E after final runner integration: 17/17 passed
 - [ ] Run bounded units, lint, TypeScript, clean build/package checks, and full negative audit on final candidate
 - [ ] Obtain deliberate human evidence and validate existing archive without rebuilding
 - [ ] Record final-tag CI proof only after all private release gates pass
 
-The exact-artifact marker requires local human self-attestation bound to the exact commit, packaged manifest SHA-256, and complete ZIP SHA-256, with every required predicate passing. Verify the actual marker schema against the latest runner and validator at integration; Task 16B expands the schema and remains pending review. The Linux-only marker must be a regular external file; terminal symlinks are rejected with `O_NOFOLLOW`, and `/proc/self/fd` binds the opened descriptor outside the repository. It is not cryptographic proof of a gesture. `npm run check:beta` validates the existing archive only, with no rebuild after attestation. It does not run the whole test/lint/build pipeline. Do not forge a marker; a missing marker fails closed. Expanded human coverage remains blocked on Task 16B, even if the existing marker schema validates.
+The exact-artifact marker requires local human self-attestation bound to the exact commit, packaged manifest SHA-256, and complete ZIP SHA-256, with every required predicate passing. The actual marker schema is 5, verified against the integrated runner and validator; Task 16B human execution remains pending. The Linux-only marker must be a regular external file; terminal symlinks are rejected with `O_NOFOLLOW`, and `/proc/self/fd` binds the opened descriptor outside the repository. It is not cryptographic proof of a gesture. `npm run check:beta` validates the existing archive only, with no rebuild after attestation. It does not run the whole test/lint/build pipeline. Do not forge a marker; a missing marker fails closed. Schema 5 explicitly requires the approved synthetic-expiry and human public-article/packaged-catalog evidence labels; it does not claim elapsed-time or provider-navigation coverage. Genuine human execution remains mandatory.
 
 ```sh
 npm ci

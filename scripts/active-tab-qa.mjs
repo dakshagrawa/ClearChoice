@@ -5,6 +5,10 @@ export function sha256(contents) {
 }
 
 export const LOCAL_HUMAN_ATTESTATION = 'local-human-attestation';
+export const MIXED_EVIDENCE = Object.freeze({
+  retentionEvidence: 'human-policy-and-isolated-synthetic-expiry',
+  cancellationHelpEvidence: 'human-public-articles-and-packaged-catalog-no-provider-navigation',
+});
 
 export const WORKFLOW_PREDICATES = Object.freeze([
   'cleanFixtureIntegrity', 'dynamicFixtureIntegrity', 'accessibility',
@@ -14,6 +18,7 @@ export const WORKFLOW_PREDICATES = Object.freeze([
 
 const REQUIRED_MARKER_FIELDS = new Set([
   ...WORKFLOW_PREDICATES,
+  ...Object.keys(MIXED_EVIDENCE),
   'schemaVersion',
   'outcome',
   'cleanFixtureIntegrity',
@@ -39,7 +44,10 @@ export function validateManualActiveTabMarker(marker, expected) {
     return { ok: false, error: 'marker must contain exactly the required attestation fields' };
   }
 
-  if (marker.schemaVersion !== 4) return { ok: false, error: 'marker schemaVersion must be 4' };
+  if (marker.schemaVersion !== 5) return { ok: false, error: 'marker schemaVersion must be 5' };
+  for (const [field, value] of Object.entries(MIXED_EVIDENCE)) {
+    if (marker[field] !== value) return { ok: false, error: `marker ${field} must declare the approved mixed-evidence contract` };
+  }
   for (const field of WORKFLOW_PREDICATES) {
     const passed = field === 'accessibility' ? true : 'passed';
     if (marker[field] !== passed) return { ok: false, error: `marker must attest that ${field} passed` };

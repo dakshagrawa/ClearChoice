@@ -1,9 +1,10 @@
 // @vitest-environment node
 /* global chrome */
-/* global window */
+/* global window, setTimeout */
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
+import { TextEncoder } from 'node:util';
 import { createServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
 import { createFixtureTls } from '../scripts/manual-qa-fixtures.mjs';
@@ -29,7 +30,8 @@ import {
   runSiteCheckpoints,
   runHistorySubscriptionCheckpoints,
   observeNativeHistoryDialog,
-  stopPendingHumanStages,
+  attestCompletedWorkflow,
+  runSyntheticEvidence,
   runCleanupSteps,
   recheckCandidateBinding,
   reviewedWorkerUrl,
@@ -60,6 +62,49 @@ test('permission cycle requires separate prompt self-attestation and rechecks af
 });
 
 const root = resolve(process.cwd());
+test('final attestation refuses incomplete predicates and requires fresh binding on both sides of ATTEST', async () => {
+  const { WORKFLOW_PREDICATES } = await import('../scripts/active-tab-qa.mjs');
+  const candidate = { commit: 'a'.repeat(40), manifestSha256: 'b'.repeat(64), archiveSha256: 'c'.repeat(64) };
+  const results = Object.fromEntries(WORKFLOW_PREDICATES.map(key => [key, key === 'accessibility' ? true : 'passed']));
+  for (const failure of ['missing', 'failed', 'ack', 'before', 'after', 'none']) {
+    const events = []; let checks = 0;
+    const supplied = { ...results };
+    if (failure === 'missing') delete supplied.retention;
+    if (failure === 'failed') supplied.cancellationHelp = 'pending';
+    const options = { instruct: () => {}, acknowledge: async () => { events.push('ack'); return failure === 'ack' ? '' : 'ATTEST'; },
+      recheck: async () => { checks++; events.push('check'); if (failure === 'before' || failure === 'after' && checks === 2) throw Error('candidate changed'); },
+      emit: value => events.push(JSON.parse(value)) };
+    const run = attestCompletedWorkflow(candidate, supplied, options);
+    if (failure !== 'none') { await expect(run).rejects.toThrow(); expect(events.some(value => typeof value === 'object')).toBe(false); }
+    else { await run; expect(events.slice(0, 3)).toEqual(['check', 'ack', 'check']); expect(events[3].schemaVersion).toBe(5); }
+    if (['missing', 'failed', 'before'].includes(failure)) expect(events).not.toContain('ack');
+  }
+});
+
+test.each([true, false])('fresh extracted runtime (headless=%s) executes isolated synthetic expiry and bundled catalog after native popup destruction without provider navigation', headless => archiveFixture(async ({ initial }) => {
+  const { build } = await import('esbuild');
+  const { runInNewContext } = await import('node:vm');
+  const bundle = await build({ entryPoints: ['src/shared/semantic-fingerprint.ts'], bundle: true, write: false, format: 'iife', globalName: 'Fingerprint' });
+  const fingerprint = await runInNewContext(`${bundle.outputFiles[0].text}; Fingerprint.semanticFingerprint`, { crypto: globalThis.crypto, TextEncoder })({ kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt: 'Local mock membership renews at $12.00 per month.' });
+  const instructions = [];
+  let originalPopup;
+  const result = await runSyntheticEvidence(initial, { opaqueFingerprint: fingerprint, kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt: 'Local mock membership renews at $12.00 per month.' }, {
+    headless, instruct: text => { instructions.push(text); },
+    // Test callbacks are synthetic, NOT human evidence or a saved marker.
+    selectPolicy: async popup => { originalPopup = popup; await popup.selectOption('[data-review-retention]', '7'); },
+    acknowledge: async token => {
+      if (token === 'SYNTHETIC_EXPIRY_REVIEWED') {
+        await originalPopup.evaluate(() => { setTimeout(() => window.close(), 0); return true; });
+        await expect.poll(async () => {
+          try { await originalPopup.evaluate(() => true); return false; } catch { return true; }
+        }, { timeout: 10_000 }).toBe(true);
+      }
+      return token;
+    },
+  });
+  expect(result).toEqual({ expiry: true, catalog: true, publicReview: true });
+  expect(instructions.join('\n')).toContain('NOT positive provider browser navigation');
+}, { runtime: true }), 30_000);
 const temporaryPaths = [];
 
 // Same real build-manifest/ZIP builder as exact-archive-gate, with no human marker.
@@ -314,10 +359,10 @@ test('synthetic human CRUD orchestration never advances without observable UI, s
   release('DONE');
   await expect(pending).resolves.toBeUndefined();
   expect(events).toEqual(['baseline', ...['history', 'reviewed', 'unchanged', 'unchanged', 'unchanged', 'confirmed', 'history-delete-cancelled', 'history-deleted', 'added', 'edited', 'unchanged', 'unchanged', 'unchanged', 'deleted'].flatMap((mode) => mode === 'history-delete-cancelled' ? ['history-delete-baseline', mode, mode] : [mode, mode])]);
-  expect(() => stopPendingHumanStages()).toThrow('no ATTEST or marker');
   const source = readFileSync(resolve(root, 'scripts/manual-active-tab-qa.mjs'), 'utf8');
   expect(source.indexOf('await runHistorySubscriptionCheckpoints({', source.indexOf('export async function reviewCandidate'))).toBeGreaterThan(source.indexOf('await runSiteCheckpoints({'));
-  expect(source).toContain('    stopPendingHumanStages();');
+  expect(source).not.toContain('stopPendingHumanStages');
+  expect(source).toContain('await attestCompletedWorkflow(');
 });
 
 test('synthetic acknowledgement-time drift aborts and each CRUD prompt fails closed on missing acknowledgement', async () => {

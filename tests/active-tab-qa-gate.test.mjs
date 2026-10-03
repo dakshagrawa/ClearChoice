@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { expect, test } from 'vitest';
 import { readManualActiveTabMarker } from '../scripts/check-beta.mjs';
-import { validateManualActiveTabMarker } from '../scripts/active-tab-qa.mjs';
+import { MIXED_EVIDENCE, validateManualActiveTabMarker } from '../scripts/active-tab-qa.mjs';
 
 const root = resolve(process.cwd());
 const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
@@ -16,7 +16,8 @@ const reviewer = 'local-human-attestation';
 
 function marker(overrides = {}) {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
+    ...MIXED_EVIDENCE,
     optInConsent: 'passed',
     optInDenial: 'passed',
     siteIsolation: 'passed',
@@ -38,11 +39,11 @@ function marker(overrides = {}) {
   };
 }
 
-test('schema 4 binds the complete archive and rejects old or changed archive attestations', () => {
+test('schema 5 binds the complete archive and rejects old or changed archive attestations', () => {
   const archiveSha256 = 'c'.repeat(64);
   const expected = { commit, manifestSha256, archiveSha256 };
   expect(validateManualActiveTabMarker(marker(), expected)).toEqual({ ok: true });
-  for (const schemaVersion of [1, 2, 3]) {
+  for (const schemaVersion of [1, 2, 3, 4]) {
     expect(validateManualActiveTabMarker(marker({ schemaVersion }), expected).ok).toBe(false);
   }
   expect(validateManualActiveTabMarker(marker({ archiveSha256: 'd'.repeat(64) }), expected).ok).toBe(false);
