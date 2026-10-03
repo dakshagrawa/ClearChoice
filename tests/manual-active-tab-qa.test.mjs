@@ -654,6 +654,7 @@ test('restricts review Chromium to only its 127.0.0.1 fixture and disables impli
   expect(reviewBrowserLaunchOptions(extensionPath)).toEqual({
     channel: 'chromium',
     headless: false,
+    viewport: null,
     ignoreDefaultArgs: ['--disable-extensions'],
     args: restrictedBrowserArgs(extensionPath),
   });

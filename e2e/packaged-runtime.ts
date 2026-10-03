@@ -20,6 +20,8 @@ export class PackagedRuntime {
   title = '';
   extension = resolve('dist');
   extensionId = '';
+  // Tests may opt into the human runner's native (non-emulated) viewport.
+  viewport: { width: number; height: number } | null | undefined;
   async wakeWorker() {
     const existing = this.context.serviceWorkers().find(worker => worker.url().startsWith(`chrome-extension://${this.extensionId}/`));
     if (existing) { this.worker = existing; return; }
@@ -37,6 +39,7 @@ export class PackagedRuntime {
   async launch(installExtension = false) {
     this.context = await chromium.launchPersistentContext(this.profile, {
       channel: 'chromium', headless: false,
+      ...(this.viewport !== undefined ? { viewport: this.viewport } : {}),
       ignoreDefaultArgs: ['--disable-extensions'],
       // Either command-line loading flag reinstalls unpacked extensions and clears
       // Chrome's dynamic_scripts StateStore. Install once, then reopen only the profile.

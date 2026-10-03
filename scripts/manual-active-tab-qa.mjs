@@ -69,6 +69,9 @@ export function reviewBrowserLaunchOptions(extensionDirectory, pin) {
   return {
     channel: 'chromium',
     headless: false,
+    // A human may tile/resize this window. Playwright's default 1280x720
+    // emulation otherwise leaves fixed panels outside the physically visible tab.
+    viewport: null,
     ignoreDefaultArgs: ['--disable-extensions'],
     args: [...restrictedBrowserArgs(extensionDirectory), ...(pin ? [`--ignore-certificate-errors-spki-list=${pin}`] : [])],
   };
@@ -215,8 +218,56 @@ async function assertIntegrity(page, phase) {
   if (!(await integrityPassed(page))) throw new Error(`manual ${phase} integrity predicate failed`);
 }
 
-async function waitForPanel(page, state) {
-  await page.locator('aside[data-clearchoice-panel]').waitFor({ state, timeout: 300_000 });
+// Passive, mock-only diagnostics: no text, URLs, finding IDs, records or input.
+// The shadow host itself has zero-sized bounds even when its fixed child renders.
+export function observeMockPanelGeometry() {
+  if (!/^https:\/\/checkout-a\.test:([1-9]\d{0,4})$/.test(location.origin)) throw new Error('panel diagnostics require the A mock fixture');
+  const panels = document.querySelectorAll('aside[data-clearchoice-panel]');
+  const host = panels.length === 1 ? panels[0] : null;
+  const root = host?.shadowRoot;
+  const section = root?.querySelector('.clearchoice-panel');
+  const dismiss = root?.querySelector('[data-clearchoice-dismiss]');
+  const bounds = (node) => {
+    if (!node) return null;
+    const rect = node.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  };
+  const rect = dismiss?.getBoundingClientRect();
+  const visible = dismiss?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) === true;
+  const enabled = !!dismiss && !dismiss.disabled;
+  const inViewport = !!rect && rect.width > 0 && rect.height > 0
+    && rect.left >= 0 && rect.top >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight;
+  const pointerHit = inViewport && document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2) === host
+    && root.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2) === dismiss;
+  return { uniquePanel: panels.length === 1, dismissPresent: !!dismiss, visible, enabled, inViewport, pointerHit,
+    reachable: visible && enabled && inViewport && pointerHit,
+    viewport: { width: window.innerWidth, height: window.innerHeight },
+    hostBounds: bounds(host), panelBounds: bounds(section), dismissBounds: bounds(dismiss) };
+}
+
+export async function waitForPanel(page, state, {
+  timeoutMs = 300_000,
+  report = (geometry) => { process.stdout.write(`Mock panel geometry (passive; not human evidence): ${JSON.stringify(geometry)}\n`); },
+} = {}) {
+  assertFixtureOrigin(new URL(page.url()).origin);
+  if (state === 'detached') {
+    await page.locator('aside[data-clearchoice-panel]').waitFor({ state, timeout: timeoutMs });
+    return;
+  }
+  if (state !== 'attached') throw new Error('unsupported manual panel state');
+  try {
+    await page.locator('aside[data-clearchoice-panel]').waitFor({ state, timeout: timeoutMs });
+    const geometry = await page.evaluate(observeMockPanelGeometry);
+    report(geometry);
+    if (!geometry.reachable) {
+      await page.waitForFunction(`(${observeMockPanelGeometry.toString()})().reachable`, undefined, { timeout: timeoutMs });
+      report(await page.evaluate(observeMockPanelGeometry));
+    }
+  } catch {
+    const geometry = await page.evaluate(observeMockPanelGeometry).catch(() => ({ diagnosticUnavailable: true }));
+    report(geometry);
+    throw new Error(`manual panel checkpoint failed: Dismiss is not visibly reachable; geometry=${JSON.stringify(geometry)}`);
+  }
 }
 
 // Gesture checkpoints are human-operated: this function never clicks the browser UI.
@@ -588,7 +639,7 @@ export async function reviewCandidate(candidate, {
 
     process.stdout.write('\nManual active-tab QA is waiting. In the runner-provided visible Chromium window:\n');
     process.stdout.write('That Chromium can access only the two HTTPS reserved .test fixtures mapped to 127.0.0.1 and the extension; its dead proxy blocks every other host including alternate loopback hosts, so it cannot validate real sites. This boundary applies only to Chromium launched by this runner, not other browser instances.\n');
-    process.stdout.write('The runner retains only SHA-256 integrity digests and panel/integrity pass-fail predicates; it never writes or prints page data.\n\n');
+    process.stdout.write('The runner retains only SHA-256 integrity digests, panel/integrity pass-fail predicates and passive mock panel viewport/element bounds; it never writes or prints page text or records.\n\n');
     terminal = createInterface({ input: process.stdin, output: process.stdout });
     let dynamicPage;
     const results = {};
