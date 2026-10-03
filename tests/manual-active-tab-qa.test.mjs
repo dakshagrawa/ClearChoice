@@ -1,6 +1,9 @@
 // @vitest-environment node
 /* global chrome */
-/* global window, setTimeout */
+/* global window, document, setTimeout */
+import { passiveNativePopup, readNativePopup, waitForNativePopup } from '../scripts/passive-native-popup.mjs';
+import { syntheticNativePopup } from '../scripts/synthetic-native-popup.mjs';
+import { observeFinalUi } from '../scripts/manual-qa-stages.mjs';
 import { execFileSync } from 'node:child_process';
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
@@ -104,6 +107,80 @@ test.each([true, false])('fresh extracted runtime (headless=%s) executes isolate
   });
   expect(result).toEqual({ expiry: true, catalog: true, publicReview: true });
   expect(instructions.join('\n')).toContain('NOT positive provider browser navigation');
+}, { runtime: true }), 30_000);
+test('AUTOMATED ONLY: real headful native popup without Playwright Page supports passive status, CRUD, final and fresh native dialog readbacks', () => archiveFixture(async ({ initial }) => {
+  const profile = await mkdtemp(resolve(tmpdir(), 'passive-native-regression-'));
+  let context;
+  let synthetic;
+  let popup;
+  try {
+    const launch = reviewBrowserLaunchOptions(initial.extensionPath);
+    context = await chromium.launchPersistentContext(profile, { ...launch, args: [...launch.args, '--ozone-platform=x11'] });
+    const { installReviewedExtension } = await import('../scripts/manual-active-tab-qa.mjs');
+    await installReviewedExtension(context, initial.extensionPath);
+    const worker = await waitForReviewedExtensionWorker(context, initial.extensionPath);
+    const url = new URL('/popup/index.html', worker.url()).href;
+    // Opening/focus and all DOM setup/input below belong ONLY to this disposable
+    // automated regression. They are not human gesture or consent evidence.
+    synthetic = await syntheticNativePopup(context, worker);
+    expect(context.pages().some(page => page.url() === url)).toBe(false);
+    popup = await passiveNativePopup(context, url);
+    expect(popup).not.toBeNull();
+    await expect.poll(() => readNativePopup(context, url, () => document.querySelector('[data-review-retention]')?.disabled === false)).toBe(true);
+    expect(await readNativePopup(context, url.replace(new URL(url).hostname, 'b'.repeat(32)), () => true)).toBe(false);
+
+    // Synthetic DOM in a REAL native extension target exercises the exact
+    // production boolean readers, without seeding the human profile or storage.
+    await synthetic.evaluate(() => {
+      document.body.innerHTML = '<main><p role="status">No matching signals found on this page.</p></main><p data-site-status>Access denied for https://checkout-b.test:123; detection remains off.</p><section aria-label="Subscriptions"><p role="status">Editor closed; no additional save requested.</p><div data-subscription-list></div><div data-subscription-editor></div></section>';
+    });
+    await waitForNativePopup(context, url, () => document.querySelector('main > p[role="status"]')?.textContent === 'No matching signals found on this page.', undefined, { timeoutMs: 1000 });
+    expect(await readNativePopup(context, url, expected => document.querySelector('[data-site-status]')?.textContent === expected, 'Access denied for https://checkout-b.test:123; detection remains off.')).toBe(true);
+    await synthetic.evaluate(() => { document.querySelector('[data-site-status]').textContent = 'Detection enabled for https://checkout-a.test:123; supported English checkout detection is enabled, not a completed scan.'; });
+    expect(await readNativePopup(context, url, expected => document.querySelector('[data-site-status]')?.textContent === expected, 'Detection enabled for https://checkout-a.test:123; supported English checkout detection is enabled, not a completed scan.')).toBe(true);
+    expect(await readNativePopup(context, url, `(${observeHistorySubscriptionUi.toString()})('cancelled', '')`)).toBe(true);
+    await synthetic.evaluate(() => {
+      document.querySelector('[data-subscription-list]').innerHTML = '<article>QA Finding Mock<p role="status">No known provider site; check your billing provider</p></article>';
+      document.querySelector('section').insertAdjacentHTML('beforeend', '<p>Delete removes the local record only; it does not cancel billing.</p><select data-review-retention><option value="7" selected>7 days</option></select><article data-review-id="source"><button data-action="review-mark" data-reviewed="true" disabled>Reviewed</button></article>');
+    });
+    for (const mode of ['retention', 'help', 'restart']) expect(await readNativePopup(context, url, `(${observeFinalUi.toString()})(${JSON.stringify(mode)}, 'https://checkout-a.test:123')`)).toBe(true);
+
+    const { sha256 } = await import('../scripts/active-tab-qa.mjs');
+    await synthetic.evaluate(() => {
+      document.body.innerHTML = '<article data-review-id="target"><button data-action="review-delete" style="position:fixed;left:10px;top:10px;width:100px;height:40px">Delete</button></article>';
+      document.querySelector('button').addEventListener('click', () => window.confirm('expected native confirmation'));
+    });
+    const observer = await observeNativeHistoryDialog(context, popup, sha256(JSON.stringify('target')), sha256(JSON.stringify('expected native confirmation')), false);
+    expect(await observer.passed()).toBe(false);
+    let opened = false;
+    popup.session.on('Page.javascriptDialogOpening', () => { opened = true; });
+    // Trusted OS keyboard input is bound to the exact isolated task window.
+    await synthetic.evaluate(() => document.querySelector('button').focus());
+    const focused = execFileSync('xdotool', ['getwindowfocus'], { encoding: 'utf8' }).trim();
+    const focusedName = execFileSync('xdotool', ['getwindowname', focused], { encoding: 'utf8' });
+    expect(focusedName).toContain(await context.pages()[0].title());
+    execFileSync('xdotool', ['key', '--window', focused, 'Return'], { timeout: 5000 });
+    await expect.poll(() => opened).toBe(true);
+    // OS Cancel here is automated evidence; the main runner never answers.
+    execFileSync('xdotool', ['key', '--window', focused, 'Escape'], { timeout: 5000 });
+    await expect.poll(() => observer.passed()).toBe(true);
+    await observer.close(); popup = undefined;
+    popup = await passiveNativePopup(context, url);
+    await synthetic.evaluate(() => { setTimeout(() => window.close(), 0); return true; });
+    await expect.poll(async () => { try { await popup.evaluate(() => true); return false; } catch { return true; } }).toBe(true);
+    expect(await readNativePopup(context, url, () => true)).toBe(false);
+    await popup.close(); popup = undefined;
+    // A same-URL extension tab is not a toolbar action popup.
+    const ordinaryTab = await context.newPage();
+    await ordinaryTab.goto(url);
+    expect(await readNativePopup(context, url, () => true)).toBe(false);
+    await ordinaryTab.close();
+    await synthetic.close(); synthetic = await syntheticNativePopup(context, worker);
+    expect(await readNativePopup(context, url, () => true)).toBe(true);
+  } finally {
+    await popup?.close(); await synthetic?.close(); await context?.close();
+    await rm(profile, { recursive: true, force: true });
+  }
 }, { runtime: true }), 30_000);
 const temporaryPaths = [];
 

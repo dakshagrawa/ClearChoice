@@ -7,6 +7,7 @@ import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { syntheticNativePopup } from './synthetic-native-popup.mjs';
+import { passiveNativePopup, readNativePopup, waitForNativePopup } from './passive-native-popup.mjs';
 import { createFixtureTls, mockCheckoutHtml } from './manual-qa-fixtures.mjs';
 import { LOCAL_HUMAN_ATTESTATION, MIXED_EVIDENCE, WORKFLOW_PREDICATES, validateManualActiveTabMarker, sha256 } from './active-tab-qa.mjs';
 import { storageValidatorSource, observePermissionCycle, observeAutomaticLifecycle, observeFinalState, observeFinalUi, observeCleanState, observeSiteState, observeHistorySubscriptions, observeHistorySubscriptionUi, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
@@ -362,7 +363,7 @@ export async function runHistorySubscriptionCheckpoints({ instruct, acknowledge,
 // to exactly one genuine popup; no confirm replacement or dialog response exists.
 export async function observeNativeHistoryDialog(context, popup, targetDigest, messageDigest, accepted) {
   if (!popup || popup.isClosed() || ![targetDigest, messageDigest].every((value) => /^[a-f0-9]{64}$/.test(value))) throw new Error('native history dialog target unavailable');
-  const session = await context.newCDPSession(popup);
+  const session = popup.session ?? await context.newCDPSession(popup);
   const state = { opening: 0, closed: 0, type: '', digest: '', accepted: null };
   const opening = (event) => {
     state.opening++;
@@ -599,10 +600,11 @@ export async function reviewCandidate(candidate, {
       assertIntegrity,
       confirmCleanAnalyze: async () => {
         // Observe the genuine popup outcome; a quiet page alone cannot prove Analyze.
-        const isPopup = (page) => page.url().startsWith('chrome-extension://') && page.url().endsWith('/popup/index.html');
-        const popup = context.pages().find(isPopup) ?? await context.waitForEvent('page', { predicate: isPopup, timeout: 300_000 });
-        await popup.locator('main > p[role="status"]').filter({ hasText: /^No matching signals found on this page\.$/ }).waitFor({ timeout: 300_000 });
-        if (await terminal.question('Leave the popup open. Type DONE only after the real Analyze reports no findings: ') !== 'DONE') throw new Error('clean Analyze not acknowledged');
+        await waitForNativePopup(context, new URL('/popup/index.html', worker.url()).href,
+          () => document.querySelector('main > p[role="status"]')?.textContent === 'No matching signals found on this page.');
+        // The outcome was observed before requesting acknowledgement. Moving to
+        // the terminal may close the native popup; zero-state readback follows.
+        if (await terminal.question('Observed real popup: No matching signals found on this page. Type DONE to acknowledge (terminal focus may close the popup): ', { signal: AbortSignal.timeout(300_000) }) !== 'DONE') throw new Error('clean Analyze not acknowledged');
       },
       assertCleanQuiet: async (page) => {
         if (await page.locator('aside[data-clearchoice-panel]').count() !== 0) throw new Error('clean zero displayed a panel');
@@ -698,10 +700,9 @@ export async function reviewCandidate(candidate, {
       },
       denied: async () => {
         // Exact production status, from the genuine action popup, precedes DONE.
-        const popup = context.pages().find((page) => page.url() === popupUrl)
-          ?? await context.waitForEvent('page', { predicate: (page) => page.url() === popupUrl, timeout: 300_000 });
-        await popup.locator('[data-site-status]').filter({ hasText: `Access denied for ${origins.b}; detection remains off.` }).waitFor({ timeout: 300_000 });
-        return await popup.locator('[data-site-status]').textContent() === `Access denied for ${origins.b}; detection remains off.`;
+        return waitForNativePopup(context, popupUrl,
+          expected => document.querySelector('[data-site-status]')?.textContent === expected,
+          `Access denied for ${origins.b}; detection remains off.`);
       },
       integrity: (site) => assertIntegrity(pages[site], 'site permission checkpoint'),
       mutate: async () => {
@@ -729,9 +730,10 @@ export async function reviewCandidate(candidate, {
       ui: async (mode) => {
         const panel = pages.a.locator('aside[data-clearchoice-panel]');
         if (mode === 'quiet') return await panel.count() === 0;
-        const popup = context.pages().find((page) => !page.isClosed() && page.url() === popupUrl);
-        return !!popup && await panel.count() === 1 && await panel.locator('article').count() === 1
-          && await popup.locator('[data-site-status]').textContent() === `Detection enabled for ${origins.a}; supported English checkout detection is enabled, not a completed scan.`;
+        return await panel.count() === 1 && await panel.locator('article').count() === 1
+          && await readNativePopup(context, popupUrl,
+            expected => document.querySelector('[data-site-status]')?.textContent === expected,
+            `Detection enabled for ${origins.a}; supported English checkout detection is enabled, not a completed scan.`);
       },
       integrity: () => assertIntegrity(pages.a, 'human reenable/Chrome Settings removal'),
     });
@@ -740,7 +742,11 @@ export async function reviewCandidate(candidate, {
     let deleteDigest;
     let dialogDigest;
     await runHistorySubscriptionCheckpoints({
-      nativeDialog: (accepted) => observeNativeHistoryDialog(context, context.pages().find((page) => !page.isClosed() && page.url() === popupUrl), deleteDigest, dialogDigest, accepted),
+      nativeDialog: async (accepted) => {
+        process.stdout.write('Native history checkpoint: human-open the toolbar popup if closed; do not click Delete until the numbered instruction appears.\n');
+        await waitForNativePopup(context, popupUrl, () => true);
+        return observeNativeHistoryDialog(context, await passiveNativePopup(context, popupUrl), deleteDigest, dialogDigest, accepted);
+      },
       instruct: (text) => process.stdout.write(`${text}\n`),
       acknowledge: () => terminal.question('Type DONE only after the requested human popup action and observed result: ', { signal: AbortSignal.timeout(300_000) }),
       read: async (mode) => {
@@ -750,9 +756,7 @@ export async function reviewCandidate(candidate, {
         return result.passed;
       },
       ui: async (mode) => {
-        const popup = context.pages().find((page) => !page.isClosed() && page.url() === popupUrl);
-        if (!popup) return false;
-        return popup.evaluate(`(${observeHistorySubscriptionUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(targetDigest)}, ${JSON.stringify(deleteDigest)})`);
+        return readNativePopup(context, popupUrl, `(${observeHistorySubscriptionUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(targetDigest)}, ${JSON.stringify(deleteDigest)})`);
       },
     });
     results.reviewHistory = 'passed';
@@ -761,8 +765,7 @@ export async function reviewCandidate(candidate, {
     let finalBaseline;
     const readFinal = async (mode) => worker.evaluate(`(${observeFinalState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, ${JSON.stringify(expectedWorkerUrl)}, ${JSON.stringify(finalBaseline)}, ${validateStorage})`);
     const uiFinal = async (mode) => {
-      const popup = context.pages().find((page) => !page.isClosed() && page.url() === popupUrl);
-      return popup ? popup.evaluate(`(${observeFinalUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(origins.a)})`) : false;
+      return readNativePopup(context, popupUrl, `(${observeFinalUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(origins.a)})`);
     };
     await runFinalCheckpoints({
       instruct: (text) => process.stdout.write(`${text}\n`),
