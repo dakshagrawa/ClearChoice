@@ -400,7 +400,17 @@ export async function observeCleanState(api, mode, targetUrl, host = globalThis)
     && (!has('version') || stored.version === 1)
     && (!has('subscriptions') || empty(stored.subscriptions))
     && (!has('reviewHistory') || empty(stored.reviewHistory))
-    && (!has('receipts') || empty(stored.receipts))
+    // Successful clean Analyze writes an idempotency receipt, not a finding.
+    // Keep pristine capture empty; compare permits only bounded, exact-schema
+    // receipts whose outcomes contain zero finding IDs.
+    && (!has('receipts') || (Array.isArray(stored.receipts) && stored.receipts.length <= 500
+      && (mode !== 'capture' || stored.receipts.length === 0)
+      && stored.receipts.every((item) => record(item) && Object.keys(item).length === 3
+        && ['requestId', 'digest', 'outcome'].every((key) => Object.hasOwn(item, key))
+        && typeof item.requestId === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(item.requestId)
+        && typeof item.digest === 'string' && /^[a-f0-9]{64}$/.test(item.digest)
+        && record(item.outcome) && Object.keys(item.outcome).length === 1 && empty(item.outcome.ids))
+      && new Set(stored.receipts.map((item) => item.requestId)).size === stored.receipts.length))
     && (!has('retentionPolicy') || [7, 30, 90, 'never'].includes(stored.retentionPolicy))
     && (has('version') ? has('subscriptions') && has('reviewHistory')
       : !['subscriptions', 'reviewHistory', 'retentionPolicy', 'receipts'].some(has))

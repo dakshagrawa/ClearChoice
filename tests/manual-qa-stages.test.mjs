@@ -69,6 +69,24 @@ test('exact clean readback rejects nested arrays and malformed storage rather th
   }
 });
 
+test('clean comparison accepts validated zero-finding receipts but never nonempty outcomes or malformed receipts', async () => {
+  const state = { version: 1, reviewHistory: [], subscriptions: [], receipts: [] };
+  const host = {};
+  const api = cleanApi(state);
+  const url = 'https://checkout-a.test:123/checkout/clean';
+  await observeCleanState(api, 'capture', url, host);
+  const receipt = { requestId: 'mock_clean_request', digest: 'a'.repeat(64), outcome: { ids: [] } };
+  state.receipts = [receipt];
+  await expect(observeCleanState(api, 'compare', url, host)).resolves.toMatchObject({ storageValid: true, unchanged: true, historyCount: 0, subscriptionCount: 0 });
+  await expect(observeCleanState(api, 'capture', url, {})).rejects.toThrow('clean storage schema');
+  for (const receipts of [[{}], [{ ...receipt, extra: true }], [{ ...receipt, digest: 'bad' }],
+    [{ ...receipt, requestId: '' }], [{ ...receipt, outcome: { ids: [], extra: true } }],
+    [{ ...receipt, outcome: { ids: ['f_' + 'b'.repeat(64)] } }], [receipt, receipt], Array(501).fill(receipt)]) {
+    state.receipts = receipts;
+    await expect(observeCleanState(api, 'compare', url, host)).rejects.toThrow('clean storage schema');
+  }
+});
+
 function cleanApi(state) {
   return {
     storage: { local: { get: async () => state } },
