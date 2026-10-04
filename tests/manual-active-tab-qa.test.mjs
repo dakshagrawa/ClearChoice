@@ -182,6 +182,83 @@ test('AUTOMATED ONLY: real headful native popup without Playwright Page supports
     await rm(profile, { recursive: true, force: true });
   }
 }, { runtime: true }), 30_000);
+test('AUTOMATED ONLY: built native popup Chrome denial status disappears on closure', () => archiveFixture(async ({ initial }) => {
+  // Synthetic-only URL visibility setup: native action.openPopup does not
+  // supply activeTab. Add tabs to THIS disposable manifest, never the release
+  // or human profile; host access is still absent and requested by real Chrome.
+  const manifestPath = resolve(initial.extensionPath, 'manifest.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  manifest.permissions.push('tabs');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  const profile = await mkdtemp(resolve(tmpdir(), 'native-denial-regression-'));
+  const tls = await createFixtureTls();
+  const title = `ClearChoiceDenial-${Date.now()}`;
+  const server = createHttpsServer({ key: tls.key, cert: tls.cert }, (_request, response) => response.end(`<title>${title}</title><h1>Fake checkout only</h1>`));
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const origin = `https://checkout-b.test:${server.address().port}`;
+  let context;
+  let synthetic;
+  let popup;
+  try {
+    const launch = reviewBrowserLaunchOptions(initial.extensionPath, tls.pin);
+    context = await chromium.launchPersistentContext(profile, { ...launch, args: [...launch.args, '--ozone-platform=x11'] });
+    const { installReviewedExtension } = await import('../scripts/manual-active-tab-qa.mjs');
+    await installReviewedExtension(context, initial.extensionPath);
+    const worker = await waitForReviewedExtensionWorker(context, initial.extensionPath);
+    synthetic = await syntheticNativePopup(context, worker);
+    await synthetic.evaluate(() => { setTimeout(() => window.close(), 0); return true; });
+    await synthetic.close(); synthetic = undefined;
+    const page = context.pages()[0];
+    await page.goto(`${origin}/checkout/clean`);
+    await page.bringToFront();
+    const windows = execFileSync('xdotool', ['search', '--sync', '--name', title], { encoding: 'utf8', timeout: 5000 }).trim().split('\n');
+    expect(windows).toHaveLength(1);
+    execFileSync('xdotool', ['windowfocus', '--sync', windows[0]], { timeout: 5000 });
+    await worker.evaluate(async () => {
+      const windows = await chrome.windows.getAll({ windowTypes: ['normal'] });
+      await chrome.action.openPopup({ windowId: windows[0].id });
+    });
+    const url = new URL('/popup/index.html', worker.url()).href;
+    await waitForNativePopup(context, url, () => document.querySelector('[data-action="site-enable"]')?.disabled === false, undefined, { timeoutMs: 5000 });
+    popup = await passiveNativePopup(context, url);
+    await popup.evaluate(() => document.querySelector('[data-action="site-enable"]').focus());
+    const focused = execFileSync('xdotool', ['getwindowfocus'], { encoding: 'utf8' }).trim();
+    expect(execFileSync('xdotool', ['getwindowname', focused], { encoding: 'utf8' })).toContain(title);
+    // Actual trusted OS input and Chrome prompt cancellation, but automated only.
+    execFileSync('xdotool', ['key', '--window', focused, 'Return'], { timeout: 5000 });
+    await waitForNativePopup(context, url, expected => document.querySelector('[data-site-status]')?.textContent === expected, `Requesting access to ${origin}…`, { timeoutMs: 5000 });
+    execFileSync('xdotool', ['key', 'Escape'], { timeout: 5000 });
+    const denied = `Access denied for ${origin}; detection remains off.`;
+    await waitForNativePopup(context, url, expected => document.querySelector('[data-site-status]')?.textContent === expected, denied, { timeoutMs: 5000 });
+    expect(await worker.evaluate(async origin => ({ permitted: await chrome.permissions.contains({ origins: [origin + '/*'] }), scripts: (await chrome.scripting.getRegisteredContentScripts()).length }), origin)).toEqual({ permitted: false, scripts: 0 });
+    let denialStage = false;
+    const observeDenial = vi.fn(() => waitForNativePopup(context, url, expected => document.querySelector('[data-site-status]')?.textContent === expected, denied, { timeoutMs: 100, intervalMs: 10 }));
+    await runSiteCheckpoints({
+      // Only denial is real-runtime here; other stages are synthetic callbacks.
+      instruct: text => { denialStage = text.startsWith('15.'); },
+      acknowledge: async () => {
+        if (denialStage) {
+          // Model terminal-focus destruction AFTER legitimate denial readback.
+          await popup.evaluate(() => { setTimeout(() => window.close(), 0); return true; }).catch(error => {
+            if (!/closed|No target with given id/.test(error.message)) throw error;
+          });
+          await expect.poll(() => readNativePopup(context, url, () => true)).toBe(false);
+        }
+        return 'DONE';
+      },
+      navigate: async () => {}, read: async () => true, quiet: async () => true,
+      positive: async () => true, denied: observeDenial, integrity: async () => {},
+      mutate: async () => {}, lifecycle: async () => {},
+    });
+    expect(observeDenial).toHaveBeenCalledOnce();
+    await expect(waitForNativePopup(context, url, expected => document.querySelector('[data-site-status]')?.textContent === expected, denied, { timeoutMs: 100, intervalMs: 10 })).rejects.toThrow('outcome not observed');
+  } finally {
+    await popup?.close(); await synthetic?.close(); await context?.close();
+    await new Promise(resolve => server.close(resolve)); await tls.cleanup();
+    await rm(profile, { recursive: true, force: true });
+  }
+}, { runtime: true }), 30_000);
+
 const temporaryPaths = [];
 
 // Same real build-manifest/ZIP builder as exact-archive-gate, with no human marker.
@@ -363,6 +440,32 @@ test('clean zero never waits for an empty panel and gates the next page on ackno
   await run;
   expect(events.indexOf('clean:ack')).toBeLessThan(events.indexOf('open:dynamic'));
   expect(wait.mock.calls.every(([page]) => page === 'dynamic')).toBe(true);
+});
+
+test('site denial is observed once before DONE; popup closure cannot strand acknowledgement', async () => {
+  let popupOpen = true;
+  let denialStage = false;
+  const denied = vi.fn(async () => popupOpen);
+  await runSiteCheckpoints({
+    instruct: text => { denialStage = text.startsWith('15.'); },
+    acknowledge: async () => { if (denialStage) popupOpen = false; return 'DONE'; },
+    navigate: async () => {}, read: async () => true, quiet: async () => true,
+    positive: async () => true, denied, integrity: async () => {},
+    mutate: async () => {}, lifecycle: async () => {},
+  });
+  expect(denied).toHaveBeenCalledOnce();
+});
+
+test('denial acknowledgement still rejects changed durable isolation', async () => {
+  let denialStage = false;
+  let changed = false;
+  await expect(runSiteCheckpoints({
+    instruct: text => { denialStage = text.startsWith('15.'); },
+    acknowledge: async () => { if (denialStage) changed = true; return 'DONE'; },
+    navigate: async () => {}, read: async (_mode, site) => site !== 'b' || !changed,
+    quiet: async () => true, positive: async () => true, denied: async () => true,
+    integrity: async () => {}, mutate: async () => {}, lifecycle: async () => {},
+  })).rejects.toThrow('site state changed during acknowledgement');
 });
 
 test('site workflow cannot treat quiet state as denial or advance before acknowledgement', async () => {

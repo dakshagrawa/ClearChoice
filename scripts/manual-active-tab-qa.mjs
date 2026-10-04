@@ -310,9 +310,9 @@ export async function runManualCheckpoints({ cleanPage, getDynamicPage, instruct
 
 // This slice deliberately returns no attestation predicates or marker.
 export async function runSiteCheckpoints({ instruct, acknowledge, navigate, read, quiet, positive, denied, integrity, mutate, lifecycle }) {
-  const stage = async (instruction, observe) => {
+  const stage = async (instruction, observe, recheck = observe) => {
     await runHumanStage({ instruction, instruct, observe, acknowledge });
-    if (!await observe()) throw new Error('site state changed during acknowledgement');
+    if (!await recheck()) throw new Error('site state changed during acknowledgement');
   };
   await navigate('a', false);
   await read('baseline', 'a');
@@ -325,7 +325,12 @@ export async function runSiteCheckpoints({ instruct, acknowledge, navigate, read
   await read('baseline', 'b');
   if (!await read('quiet', 'b') || !await quiet('b')) throw new Error('unopted B isolation predicate failed');
   await integrity('b');
-  await stage('15. B DENIAL: pointer-click toolbar, then Enable detection for this site. DENY the real Chrome permission prompt. Keep popup open with Access denied status. If Chrome offers no genuine prompt, abort; do not simulate it.', async () => await denied() && await read('quiet', 'b') && await quiet('b'));
+  // Start passive discovery before the human instruction. Denial text belongs
+  // to one popup lifetime: observe it before DONE, then recheck only durable
+  // isolation because terminal focus can destroy that already-observed target.
+  const denialOutcome = denied();
+  const deniedQuiet = async () => await read('quiet', 'b') && await quiet('b');
+  await stage('15. B DENIAL: pointer-click toolbar, then Enable detection for this site. DENY the real Chrome permission prompt. Keep popup open until the runner observes Access denied and asks for DONE; terminal focus may then close it. If Chrome offers no genuine prompt, abort; do not simulate it.', async () => await denialOutcome && await deniedQuiet(), deniedQuiet);
   await integrity('b');
   await navigate('a', true);
   if (!await read('positive', 'a') || !await positive('a')) throw new Error('automatic A revisit predicate failed');
