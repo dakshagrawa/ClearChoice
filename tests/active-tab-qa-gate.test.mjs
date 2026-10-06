@@ -16,7 +16,7 @@ const reviewer = 'local-human-attestation';
 
 function marker(overrides = {}) {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     ...MIXED_EVIDENCE,
     optInConsent: 'passed',
     optInDenial: 'passed',
@@ -39,14 +39,26 @@ function marker(overrides = {}) {
   };
 }
 
-test('schema 5 binds the complete archive and rejects old or changed archive attestations', () => {
+test('schema 6 binds the complete archive and rejects old or changed archive attestations', () => {
   const archiveSha256 = 'c'.repeat(64);
   const expected = { commit, manifestSha256, archiveSha256 };
   expect(validateManualActiveTabMarker(marker(), expected)).toEqual({ ok: true });
-  for (const schemaVersion of [1, 2, 3, 4]) {
+  for (const schemaVersion of [1, 2, 3, 4, 5]) {
     expect(validateManualActiveTabMarker(marker({ schemaVersion }), expected).ok).toBe(false);
   }
   expect(validateManualActiveTabMarker(marker({ archiveSha256: 'd'.repeat(64) }), expected).ok).toBe(false);
+});
+
+test('denial contract rejects absent labels, browser callback claims and genuine legacy schema 5 shapes', () => {
+  const expected = { commit, manifestSha256, archiveSha256: 'c'.repeat(64) };
+  for (const label of [undefined, 'browserObserved', 'browserObservedDenial', 'false-result-callback', 'humanReportedDenial']) {
+    const value = marker({ optInDenialEvidence: label });
+    if (label === undefined) delete value.optInDenialEvidence;
+    expect(validateManualActiveTabMarker(value, expected).ok).toBe(false);
+  }
+  const legacy = marker({ schemaVersion: 5 }); delete legacy.optInDenialEvidence;
+  expect(validateManualActiveTabMarker(legacy, expected).ok).toBe(false);
+  expect(validateManualActiveTabMarker(marker({ browserObservedDenial: true }), expected).ok).toBe(false);
 });
 
 test.each(['optInConsent', 'optInDenial', 'siteIsolation', 'automaticLifecycle', 'revocation', 'reviewHistory', 'subscriptions', 'retention', 'cancellationHelp'])('requires a concrete passed %s attestation', (field) => {

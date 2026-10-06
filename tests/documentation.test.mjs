@@ -83,7 +83,8 @@ test('candidate evidence and checklist separate current blocked gate from histor
     expect(document).toMatch(/existing archive.*no rebuild/i);
     expect(document).toMatch(/Task 16B.*pending/i);
     expect(document).toMatch(/not final-candidate proof/);
-    expect(document).toContain('Schema 5');
+    expect(document).toContain('Schema 6');
+    expect(document).toContain('humanReportedDenial-correlated-real-request-and-verified-isolation-not-browserObserved');
     expect(document).toContain('do not establish human toolbar access or permission consent');
     expect(document).toMatch(/permission hang[^.]*resolved[^.]*exact mock-port seed/i);
     expect(document).toMatch(/persistence now pass genuine browser restart checks/i);

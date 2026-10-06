@@ -471,7 +471,7 @@ test('marker constructor cannot manufacture passed workflow results', () => {
     expect(() => createManualActiveTabQaMarker(candidate, incomplete)).toThrow();
   }
   expect(() => createManualActiveTabQaMarker(candidate, { ...results(), url: 'https://fixture.test' })).toThrow();
-  expect(createManualActiveTabQaMarker(candidate, results()).schemaVersion).toBe(5);
+  expect(createManualActiveTabQaMarker(candidate, results()).schemaVersion).toBe(6);
 });
 
 test('stage does not advance until the observation and explicit acknowledgement both pass', async () => {

@@ -79,7 +79,7 @@ test('final attestation refuses incomplete predicates and requires fresh binding
       emit: value => events.push(JSON.parse(value)) };
     const run = attestCompletedWorkflow(candidate, supplied, options);
     if (failure !== 'none') { await expect(run).rejects.toThrow(); expect(events.some(value => typeof value === 'object')).toBe(false); }
-    else { await run; expect(events.slice(0, 3)).toEqual(['check', 'ack', 'check']); expect(events[3].schemaVersion).toBe(5); }
+    else { await run; expect(events.slice(0, 3)).toEqual(['check', 'ack', 'check']); expect(events[3].schemaVersion).toBe(6); }
     if (['missing', 'failed', 'before'].includes(failure)) expect(events).not.toContain('ack');
   }
 });
@@ -236,7 +236,7 @@ test('AUTOMATED ONLY: built native popup Chrome denial status disappears on clos
     await runSiteCheckpoints({
       // Only denial is real-runtime here; other stages are synthetic callbacks.
       instruct: text => { denialStage = text.startsWith('15.'); },
-      acknowledge: async () => {
+      acknowledge: async (token = 'DONE') => {
         if (denialStage) {
           // Model terminal-focus destruction AFTER legitimate denial readback.
           await popup.evaluate(() => { setTimeout(() => window.close(), 0); return true; }).catch(error => {
@@ -244,10 +244,10 @@ test('AUTOMATED ONLY: built native popup Chrome denial status disappears on clos
           });
           await expect.poll(() => readNativePopup(context, url, () => true)).toBe(false);
         }
-        return 'DONE';
+        return token;
       },
       navigate: async () => {}, read: async () => true, quiet: async () => true,
-      positive: async () => true, denied: observeDenial, integrity: async () => {},
+      positive: async () => true, denied: async () => ({ observed: observeDenial, passed: async () => true, close: async () => {} }), integrity: async () => {},
       mutate: async () => {}, lifecycle: async () => {},
     });
     expect(observeDenial).toHaveBeenCalledOnce();
@@ -442,15 +442,15 @@ test('clean zero never waits for an empty panel and gates the next page on ackno
   expect(wait.mock.calls.every(([page]) => page === 'dynamic')).toBe(true);
 });
 
-test('site denial is observed once before DONE; popup closure cannot strand acknowledgement', async () => {
+test('human DENIED follows request evidence; popup closure cannot strand acknowledgement', async () => {
   let popupOpen = true;
   let denialStage = false;
   const denied = vi.fn(async () => popupOpen);
   await runSiteCheckpoints({
     instruct: text => { denialStage = text.startsWith('15.'); },
-    acknowledge: async () => { if (denialStage) popupOpen = false; return 'DONE'; },
+    acknowledge: async (token = 'DONE') => { if (denialStage) popupOpen = false; return token; },
     navigate: async () => {}, read: async () => true, quiet: async () => true,
-    positive: async () => true, denied, integrity: async () => {},
+    positive: async () => true, denied: async () => ({ observed: denied, passed: async () => true, close: async () => {} }), integrity: async () => {},
     mutate: async () => {}, lifecycle: async () => {},
   });
   expect(denied).toHaveBeenCalledOnce();
@@ -461,9 +461,9 @@ test('denial acknowledgement still rejects changed durable isolation', async () 
   let changed = false;
   await expect(runSiteCheckpoints({
     instruct: text => { denialStage = text.startsWith('15.'); },
-    acknowledge: async () => { if (denialStage) changed = true; return 'DONE'; },
+    acknowledge: async (token = 'DONE') => { if (denialStage) changed = true; return token; },
     navigate: async () => {}, read: async (_mode, site) => site !== 'b' || !changed,
-    quiet: async () => true, positive: async () => true, denied: async () => true,
+    quiet: async () => true, positive: async () => true, denied: async () => ({ observed: async () => true, passed: async () => true, close: async () => {} }),
     integrity: async () => {}, mutate: async () => {}, lifecycle: async () => {},
   })).rejects.toThrow('site state changed during acknowledgement');
 });
@@ -472,14 +472,14 @@ test('site workflow cannot treat quiet state as denial or advance before acknowl
   const events = [];
   let denialObserved = false;
   const options = {
-    instruct: () => {}, acknowledge: async () => { events.push('ack'); return 'DONE'; },
+    instruct: () => {}, acknowledge: async (token = 'DONE') => { events.push('ack'); return token; },
     navigate: async (site, positive) => events.push(`visit:${site}:${positive}`),
     read: async (mode, site) => { events.push(`${mode}:${site}`); return true; },
     quiet: async () => true, positive: async () => true,
-    denied: async () => denialObserved,
+    denied: async () => ({ observed: async () => denialObserved, passed: async () => denialObserved, close: async () => {} }),
     integrity: async () => {}, mutate: async () => {}, lifecycle: async () => {},
   };
-  await expect(runSiteCheckpoints(options)).rejects.toThrow('observable');
+  await expect(runSiteCheckpoints(options)).rejects.toThrow('request');
   expect(events).not.toContain('before-revoke:a');
   expect(events.filter((event) => event === 'ack')).toHaveLength(2);
   denialObserved = true;

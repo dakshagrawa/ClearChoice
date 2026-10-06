@@ -27,7 +27,8 @@ Catalog metadata was reviewed September 29, 2026; official articles were recheck
 ## Uncompleted gates
 
 - [x] Integrate quality-approved Task 16A serialization; final archive binding still requires recheck
-- [x] Implement and independently review Task 16B mixed-evidence runner and schema 5
+- [x] Implement and independently review historical Task 16B mixed-evidence runner and schema 5
+- [ ] Review and integrate schema 6 correlated humanReportedDenial runner revision; no prior run is retrospectively passed
 - [ ] Complete genuine human opt-in/revoke, retention, CRUD, guide, keyboard, and integrity QA
 - [x] Resolve harness reinstall/restart loss and verify native persistence
 - [x] Rerun full native E2E after final runner integration: 17/17 passed
@@ -35,7 +36,7 @@ Catalog metadata was reviewed September 29, 2026; official articles were recheck
 - [ ] Obtain deliberate human evidence and validate existing archive without rebuilding
 - [ ] Record final-tag CI proof only after all private release gates pass
 
-The exact-artifact marker requires local human self-attestation bound to the exact commit, packaged manifest SHA-256, and complete ZIP SHA-256, with every required predicate passing. The actual marker schema is 5, verified against the integrated runner and validator; Task 16B human execution remains pending. The Linux-only marker must be a regular external file; terminal symlinks are rejected with `O_NOFOLLOW`, and `/proc/self/fd` binds the opened descriptor outside the repository. It is not cryptographic proof of a gesture. `npm run check:beta` validates the existing archive only, with no rebuild after attestation. It does not run the whole test/lint/build pipeline. Do not forge a marker; a missing marker fails closed. Schema 5 explicitly requires the approved synthetic-expiry and human public-article/packaged-catalog evidence labels; it does not claim elapsed-time or provider-navigation coverage. Genuine human execution remains mandatory.
+The exact-artifact marker requires local human self-attestation bound to the exact commit, packaged manifest SHA-256, and complete ZIP SHA-256, with every required predicate passing. The actual marker schema is 6; Task 16B human execution remains pending. The Linux-only marker must be a regular external file; terminal symlinks are rejected with `O_NOFOLLOW`, and `/proc/self/fd` binds the opened descriptor outside the repository. It is not cryptographic proof of a gesture. `npm run check:beta` validates the existing archive only, with no rebuild after attestation. It does not run the whole test/lint/build pipeline. Do not forge a marker; a missing marker fails closed. Schema 6 preserves the approved synthetic-expiry and human public-article/packaged-catalog evidence labels and adds `humanReportedDenial-correlated-real-request-and-verified-isolation-not-browserObserved`. Human `DENIED` is correlated with a fresh trusted B Enable/request and durable isolation, not a browser-observed Deny callback. It does not claim elapsed-time or provider-navigation coverage, and schema 5 or older markers are rejected. See the approved decision and limitations in [the QA protocol](beta-test-protocol.md). Genuine human execution remains mandatory.
 
 ```sh
 npm ci

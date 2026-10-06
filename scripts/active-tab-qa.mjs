@@ -6,6 +6,7 @@ export function sha256(contents) {
 
 export const LOCAL_HUMAN_ATTESTATION = 'local-human-attestation';
 export const MIXED_EVIDENCE = Object.freeze({
+  optInDenialEvidence: 'humanReportedDenial-correlated-real-request-and-verified-isolation-not-browserObserved',
   retentionEvidence: 'human-policy-and-isolated-synthetic-expiry',
   cancellationHelpEvidence: 'human-public-articles-and-packaged-catalog-no-provider-navigation',
 });
@@ -44,7 +45,7 @@ export function validateManualActiveTabMarker(marker, expected) {
     return { ok: false, error: 'marker must contain exactly the required attestation fields' };
   }
 
-  if (marker.schemaVersion !== 5) return { ok: false, error: 'marker schemaVersion must be 5' };
+  if (marker.schemaVersion !== 6) return { ok: false, error: 'marker schemaVersion must be 6' };
   for (const [field, value] of Object.entries(MIXED_EVIDENCE)) {
     if (marker[field] !== value) return { ok: false, error: `marker ${field} must declare the approved mixed-evidence contract` };
   }

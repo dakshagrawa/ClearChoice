@@ -11,6 +11,7 @@ import { passiveNativePopup, readNativePopup, waitForNativePopup } from './passi
 import { createFixtureTls, mockCheckoutHtml } from './manual-qa-fixtures.mjs';
 import { LOCAL_HUMAN_ATTESTATION, MIXED_EVIDENCE, WORKFLOW_PREDICATES, validateManualActiveTabMarker, sha256 } from './active-tab-qa.mjs';
 import { storageValidatorSource, observePermissionCycle, observeAutomaticLifecycle, observeFinalState, observeFinalUi, observeCleanState, observeSiteState, observeHistorySubscriptions, observeHistorySubscriptionUi, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
+import { armHumanDenial } from './human-denial-evidence.mjs';
 import { prepareCandidateArchive } from './release-artifact.mjs';
 
 const root = resolve(import.meta.dirname, '..');
@@ -340,13 +341,17 @@ export async function runSiteCheckpoints({ instruct, acknowledge, navigate, read
   await read('baseline', 'b');
   if (!await read('quiet', 'b') || !await quiet('b')) throw new Error('unopted B isolation predicate failed');
   await integrity('b');
-  // Start passive discovery before the human instruction. Denial text belongs
-  // to one popup lifetime: observe it before DONE, then recheck only durable
-  // isolation because terminal focus can destroy that already-observed target.
-  const denialOutcome = denied();
+  // Fresh real request evidence, NOT a browser-observed false-result callback.
+  const denial = await denied();
+  if (!denial || !['observed', 'passed', 'close'].every(key => typeof denial[key] === 'function')) throw new Error('correlated denial request observer unavailable');
   const deniedQuiet = async () => await read('quiet', 'b') && await quiet('b');
-  await stage('15. B DENIAL: pointer-click toolbar, then Enable detection for this site. DENY the real Chrome permission prompt. Keep popup open until the runner observes Access denied and asks for DONE; terminal focus may then close it. If Chrome offers no genuine prompt, abort; do not simulate it.', async () => await denialOutcome && await deniedQuiet(), deniedQuiet);
-  await integrity('b');
+  await runWithCleanup(async () => {
+    instruct('15. B DENIAL: pointer-click Enable detection for this site in the prepared B popup, then DENY the genuine Chrome permission prompt. The popup may disappear. After real Deny, type DENIED when asked. This is humanReportedDenial plus correlated request/isolation, NOT browserObserved denial or a false-result callback. If no real prompt appears, abort.');
+    if (!await denial.observed() || !await denial.passed() || !await deniedQuiet()) throw new Error('fresh B permission request/isolation not observed');
+    if (await acknowledge('DENIED') !== 'DENIED') throw new Error('human DENIED acknowledgement missing');
+    if (!await denial.passed() || !await deniedQuiet()) throw new Error('site state changed during acknowledgement');
+    await integrity('b');
+  }, [() => denial.close()]);
   await navigate('a', true);
   if (!await read('positive', 'a') || !await positive('a')) throw new Error('automatic A revisit predicate failed');
   await lifecycle();
@@ -586,7 +591,7 @@ export function createManualActiveTabQaMarker({ commit, manifestSha256, archiveS
       || WORKFLOW_PREDICATES.some((field) => !Object.hasOwn(results, field))) {
     throw new Error('complete validated workflow results are required; marker was not emitted');
   }
-  const marker = { schemaVersion: 5, ...MIXED_EVIDENCE, outcome: 'passed', ...results,
+  const marker = { schemaVersion: 6, ...MIXED_EVIDENCE, outcome: 'passed', ...results,
     commit, manifestSha256, archiveSha256, reviewer: LOCAL_HUMAN_ATTESTATION };
   const validation = validateManualActiveTabMarker(marker, { commit, manifestSha256, archiveSha256 });
   if (!validation.ok) throw new Error(validation.error);
@@ -729,7 +734,7 @@ export async function reviewCandidate(candidate, {
     };
     await runSiteCheckpoints({
       instruct: (text) => process.stdout.write(`${text}\n`),
-      acknowledge: () => terminal.question('Type DONE only after the requested real human action and observation (anything else aborts): ', { signal: AbortSignal.timeout(300_000) }),
+      acknowledge: (token = 'DONE') => terminal.question(`Type ${token} only after the requested real human action and observation (anything else aborts): `, { signal: AbortSignal.timeout(300_000) }),
       navigate: async (site, positive) => {
         pages[site] ??= await context.newPage();
         await pages[site].goto(`${origins[site]}/checkout/${positive ? 'dynamic-beta#checkout' : 'clean'}`);
@@ -769,12 +774,8 @@ export async function reviewCandidate(candidate, {
         await waitForPanel(pages[site], 'attached');
         return await pages[site].locator('aside[data-clearchoice-panel]').count() === 1;
       },
-      denied: async () => {
-        // Exact production status, from the genuine action popup, precedes DONE.
-        return waitForNativePopup(context, popupUrl,
-          expected => document.querySelector('[data-site-status]')?.textContent === expected,
-          `Access denied for ${origins.b}; detection remains off.`);
-      },
+      denied: () => armHumanDenial({ context, worker, popupUrl, origin: origins.b,
+        instruct: text => process.stdout.write(`${text}\n`) }),
       integrity: (site) => assertIntegrity(pages[site], 'site permission checkpoint'),
       mutate: async () => {
         await pages.a.waitForFunction(() => document.querySelector('#fake-order-summary')?.textContent?.includes('updated') === true, undefined, { timeout: 300_000 });
