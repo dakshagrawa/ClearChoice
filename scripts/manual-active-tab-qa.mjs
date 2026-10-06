@@ -175,7 +175,7 @@ export async function runCleanupSteps(steps) {
   await runWithCleanup(async () => {}, steps);
 }
 
-async function integrityDigest(page) {
+async function integrityDigests(page) {
   const snapshot = await page.evaluate(() => {
     const owned = (node) => node.closest('[data-clearchoice-panel]') !== null;
     return JSON.stringify({
@@ -189,33 +189,48 @@ async function integrityDigest(page) {
         .map((node) => node.outerHTML),
     });
   });
-  return sha256(snapshot);
+  // One coherent snapshot, transient raw data only. Retain digests, never values.
+  const { href, forms, controls, hostNodes } = JSON.parse(snapshot);
+  const components = { href, forms, controlIdentity: controls.map(row => row.slice(0, 3)),
+    controlValues: controls.map(row => row[3]), controlChecked: controls.map(row => row[4]),
+    controlDisabled: controls.map(row => row[5]), hostNodes };
+  return { digest: sha256(snapshot), componentDigests: Object.fromEntries(
+    Object.entries(components).map(([key, value]) => [key, sha256(JSON.stringify(value))])) };
 }
 
 export async function captureIntegrityBaseline(page, lifecycle = false) {
   await page.evaluate((value) => { window.__qaLifecycleIntegrity = value; }, lifecycle);
-  const digest = await integrityDigest(page);
+  const digests = await integrityDigests(page);
   await page.evaluate((value) => {
     window.__clearchoiceManualIntegrityBaseline = {
-      digest: value,
-      predicates: { integrity: true },
+      ...value,
+      predicates: { integrity: true, ...Object.fromEntries(Object.keys(value.componentDigests).map(key => [key, true])) },
     };
-  }, digest);
+  }, digests);
 }
 
 export async function integrityPassed(page) {
-  const digest = await integrityDigest(page);
+  const digests = await integrityDigests(page);
   return page.evaluate((value) => {
     const baseline = window.__clearchoiceManualIntegrityBaseline;
     if (!baseline) return false;
-    const passed = value === baseline.digest;
+    const passed = value.digest === baseline.digest;
     baseline.predicates.integrity &&= passed;
+    for (const [key, digest] of Object.entries(value.componentDigests)) {
+      baseline.predicates[key] &&= digest === baseline.componentDigests[key];
+    }
     return passed;
-  }, digest);
+  }, digests);
 }
 
-async function assertIntegrity(page, phase) {
-  if (!(await integrityPassed(page))) throw new Error(`manual ${phase} integrity predicate failed`);
+export async function assertIntegrity(page, phase) {
+  if (!(await integrityPassed(page))) {
+    // Bounded passive diagnostics only. No URLs, controls, text or records.
+    const predicates = await page.evaluate(() => Object.fromEntries(
+      ['integrity', 'href', 'forms', 'controlIdentity', 'controlValues', 'controlChecked', 'controlDisabled', 'hostNodes']
+        .map(key => [key, window.__clearchoiceManualIntegrityBaseline?.predicates?.[key] === true])));
+    throw new Error(`manual ${phase} integrity predicate failed; unchanged=${JSON.stringify(predicates)}`);
+  }
 }
 
 // Passive, mock-only diagnostics: no text, URLs, finding IDs, records or input.

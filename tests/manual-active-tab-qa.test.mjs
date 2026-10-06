@@ -778,9 +778,11 @@ test('retains digest and boolean predicates only, and detects a changed host fie
 
     await captureIntegrityBaseline(page);
     const retainedState = await page.evaluate(() => window.__clearchoiceManualIntegrityBaseline);
-    expect(Object.keys(retainedState).sort()).toEqual(['digest', 'predicates']);
-    expect(Object.keys(retainedState.predicates)).toEqual(['integrity']);
-    expect(retainedState.predicates.integrity).toBe(true);
+    expect(Object.keys(retainedState).sort()).toEqual(['componentDigests', 'digest', 'predicates']);
+    const componentKeys = ['href', 'forms', 'controlIdentity', 'controlValues', 'controlChecked', 'controlDisabled', 'hostNodes'];
+    expect(Object.keys(retainedState.componentDigests).sort()).toEqual([...componentKeys].sort());
+    expect(Object.keys(retainedState.predicates).sort()).toEqual(['integrity', ...componentKeys].sort());
+    expect(Object.values(retainedState.predicates).every(value => value === true)).toBe(true);
     expect(retainedState.digest).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(retainedState)).not.toContain('fixture@example.invalid');
     expect(JSON.stringify(retainedState)).not.toContain('fixture.invalid');
@@ -793,6 +795,52 @@ test('retains digest and boolean predicates only, and detects a changed host fie
   } finally {
     await browser.close();
   }
+});
+
+test('integrity failure identifies only changed predicates without retaining host data', async () => {
+  const browser = await chromium.launch({ channel: 'chromium', headless: true });
+  try {
+    const page = await browser.newPage();
+    await page.setContent('<form action="https://fixture.invalid/checkout"><input name="fake" value="synthetic-value"></form><button type="button">Continue</button>');
+    await captureIntegrityBaseline(page);
+    await page.locator('input').fill('synthetic-changed');
+    expect(await integrityPassed(page)).toBe(false);
+    const state = await page.evaluate(() => window.__clearchoiceManualIntegrityBaseline);
+    expect(state.predicates).toEqual({ integrity: false, href: true, forms: true, controlIdentity: true,
+      controlValues: false, controlChecked: true, controlDisabled: true, hostNodes: true });
+    expect(Object.values(state.componentDigests).every(value => /^[a-f0-9]{64}$/.test(value))).toBe(true);
+    expect(JSON.stringify(state)).not.toContain('synthetic');
+    expect(JSON.stringify(state)).not.toContain('fixture.invalid');
+    const { assertIntegrity } = await import('../scripts/manual-active-tab-qa.mjs');
+    await expect(assertIntegrity(page, 'synthetic checkpoint')).rejects.toThrow('unchanged={"integrity":false,"href":true,"forms":true,"controlIdentity":true,"controlValues":false,"controlChecked":true,"controlDisabled":true,"hostNodes":true}');
+  } finally { await browser.close(); }
+});
+
+test('integrity diagnostics distinguish URL, form and host-control changes without rebasing', async () => {
+  const browser = await chromium.launch({ channel: 'chromium', headless: true });
+  try {
+    const page = await browser.newPage();
+    for (const component of ['href', 'forms', 'controlIdentity', 'controlChecked', 'controlDisabled', 'hostNodes']) {
+      await page.setContent('<form action="https://fixture.invalid/checkout"><input name="fake" type="checkbox" value="synthetic"></form><button type="button">Continue</button>');
+      await captureIntegrityBaseline(page);
+      const before = await page.evaluate(() => window.__clearchoiceManualIntegrityBaseline.digest);
+      await page.evaluate(key => {
+        const input = document.querySelector('input');
+        if (key === 'href') window.history.replaceState({}, '', '#synthetic-change');
+        if (key === 'forms') document.querySelector('form').action = 'https://fixture.invalid/changed';
+        if (key === 'controlIdentity') input.name = 'synthetic-renamed';
+        if (key === 'controlChecked') input.checked = true;
+        if (key === 'controlDisabled') input.disabled = true;
+        if (key === 'hostNodes') document.querySelector('button').textContent = 'Synthetic changed';
+      }, component);
+      expect(await integrityPassed(page)).toBe(false);
+      const state = await page.evaluate(() => window.__clearchoiceManualIntegrityBaseline);
+      expect(state.digest).toBe(before);
+      expect(state.predicates[component]).toBe(false);
+      expect(JSON.stringify(state)).not.toContain('synthetic');
+      expect(JSON.stringify(state)).not.toContain('fixture.invalid');
+    }
+  } finally { await browser.close(); }
 });
 
 test('manual runner never writes a caller-provided marker below an external parent symlink to the repository', async () => {
