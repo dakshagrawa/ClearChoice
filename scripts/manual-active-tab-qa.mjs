@@ -1,4 +1,4 @@
-/* global window, location, document, chrome, setTimeout, clearTimeout, AbortSignal, crypto, TextEncoder */
+/* global window, location, document, chrome, setTimeout, clearTimeout, setInterval, clearInterval, AbortController, AbortSignal, crypto, TextEncoder */
 import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { createServer } from 'node:https';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,7 @@ import { LOCAL_HUMAN_ATTESTATION, MIXED_EVIDENCE, WORKFLOW_PREDICATES, validateM
 import { storageValidatorSource, observePermissionCycle, observeAutomaticLifecycle, observeFinalState, observeFinalUi, observeCleanState, observeSiteState, observeHistorySubscriptions, observeHistorySubscriptionUi, runHumanStage, waitForObservation, runWithCleanup } from './manual-qa-stages.mjs';
 import { armHumanDenial } from './human-denial-evidence.mjs';
 import { prepareCandidateArchive } from './release-artifact.mjs';
+import { createQaRunLog, createQaMismatchMonitor, checkpointId, acknowledgementToken } from './manual-qa-run-log.mjs';
 
 const root = resolve(import.meta.dirname, '..');
 
@@ -237,7 +238,7 @@ export async function assertIntegrity(page, phase) {
 // Passive, mock-only diagnostics: no text, URLs, finding IDs, records or input.
 // The shadow host itself has zero-sized bounds even when its fixed child renders.
 export function observeMockPanelGeometry() {
-  if (!/^https:\/\/checkout-a\.test:([1-9]\d{0,4})$/.test(location.origin)) throw new Error('panel diagnostics require the A mock fixture');
+  if (!/^https:\/\/checkout-[ab]\.test:([1-9]\d{0,4})$/.test(location.origin)) throw new Error('panel diagnostics require a controlled mock fixture');
   const panels = document.querySelectorAll('aside[data-clearchoice-panel]');
   const host = panels.length === 1 ? panels[0] : null;
   const root = host?.shadowRoot;
@@ -611,16 +612,73 @@ export async function recheckCandidateBinding(repositoryRoot, initial) {
   }, [() => current.cleanup()]);
 }
 
-export async function runManualActiveTabQa(argv = process.argv.slice(2), { prepare = prepareCandidateArchive, review = reviewCandidate } = {}) {
-  parseArguments(argv);
-  const candidate = prepare(root);
-  await runWithCleanup(() => review(candidate), [() => candidate.cleanup()]);
+export async function runManualActiveTabQa(argv = process.argv.slice(2), { prepare = prepareCandidateArchive, review = reviewCandidate, log = createQaRunLog() } = {}) {
+  let failure;
+  let failed = false;
+  let cancelled = false;
+  const onCancel = () => { cancelled = true; };
+  process.on('SIGINT', onCancel);
+  try {
+    parseArguments(argv);
+    const candidate = prepare(root);
+    log.record('binding', { binding: { commit: candidate.commit, manifestSha256: candidate.manifestSha256, archiveSha256: candidate.archiveSha256 } });
+    await runWithCleanup(() => review(candidate, { log }), [() => candidate.cleanup()]);
+  } catch (error) { failed = true; failure = error; throw error; }
+  finally {
+    process.off('SIGINT', onCancel);
+    try { log.finish(failure, { failed, interrupted: cancelled }); } catch { /* diagnostics cannot replace the QA outcome */ }
+  }
+}
+
+export async function observeQaSnapshot(page, context, expectedOrigin, classifier) {
+    // Never enumerate unrelated tabs or attach a native popup for diagnostics.
+    if (!page || page.isClosed() || page.context() !== context || !classifier) return { route: 'unknown' };
+    if (!/^https:\/\/checkout-[ab]\.test:[1-9]\d{0,4}$/.test(expectedOrigin ?? '') || new URL(expectedOrigin).port > 65535 || new URL(page.url()).origin !== expectedOrigin) return { route: 'unknown' };
+    let timeout;
+    try {
+      return await Promise.race([
+        page.evaluate(`(() => { if (location.origin !== ${JSON.stringify(expectedOrigin)}) return { route: 'unknown' };
+          const routes = { '/checkout/clean': 'clean', '/checkout/dynamic-beta': 'dynamic', '/checkout/identical': 'identical', '/information': 'information' };
+          const route = routes[location.pathname]; if (!route) return { route: 'unknown' };
+          ${classifier}
+          const geometry = (${observeMockPanelGeometry.toString()})();
+          const predicates = window.__clearchoiceManualIntegrityBaseline?.predicates;
+          const integrity = Object.fromEntries(['integrity', 'href', 'forms', 'controlIdentity', 'controlValues', 'controlChecked', 'controlDisabled', 'hostNodes'].map(key => [key, predicates?.[key] === true]));
+          return { route, site: location.hostname === 'checkout-a.test' ? 'a' : 'b', supported: QaContext.classifyCheckoutContext(document.body) === 'supported', panelCount: document.querySelectorAll('aside[data-clearchoice-panel]').length,
+            findingCount: Array.from(document.querySelectorAll('aside[data-clearchoice-panel]')).reduce((count, panel) => count + (panel.shadowRoot ?? panel).querySelectorAll('article').length, 0), ...geometry, ...integrity };
+        })()`),
+        new Promise(resolveSnapshot => { timeout = setTimeout(() => resolveSnapshot({ route: 'unknown' }), 2_000); }),
+      ]);
+    } catch { return { route: 'unknown' }; }
+    finally { clearTimeout(timeout); }
+}
+
+export async function observeQaWorkerCounts(worker, origin, targetUrl) {
+  if (!worker || !/^https:\/\/checkout-[ab]\.test:[1-9]\d{0,4}$/.test(origin ?? '') || new URL(origin).port > 65535) return {};
+  try {
+    if (new URL(targetUrl).origin !== origin) return {};
+    return await worker.evaluate(async ({ origin, targetUrl }) => {
+      const [stored, sitePermission, scripts, tabs] = await Promise.all([
+        chrome.storage.local.get(['reviewHistory', 'subscriptions', 'grantState']),
+        chrome.permissions.contains({ origins: [origin + '/*'] }),
+        chrome.scripting.getRegisteredContentScripts(), chrome.tabs.query({}),
+      ]);
+      // Only an exact controlled mock tab is queried for its badge, never popup UI.
+      const tab = tabs.find(item => item.url === targetUrl);
+      const badge = tab ? await chrome.action.getBadgeText({ tabId: tab.id }) : null;
+      return { historyCount: Math.min(10000, Array.isArray(stored.reviewHistory) ? stored.reviewHistory.length : 0),
+        subscriptionCount: Math.min(10000, Array.isArray(stored.subscriptions) ? stored.subscriptions.length : 0),
+        hasGrant: stored.grantState?.sites?.[origin]?.enabled === true, sitePermission: sitePermission === true,
+        registered: scripts.some(item => item.matches?.includes(origin + '/*')),
+        ...(badge === '' ? { badgeCount: 0 } : typeof badge === 'string' && /^\d{1,4}$/.test(badge) ? { badgeCount: Number(badge) } : {}) };
+    }, { origin, targetUrl });
+  } catch { return {}; }
 }
 
 export async function reviewCandidate(candidate, {
   createTls = createFixtureTls, makeServer = createServer, createProfile = mkdtemp,
   launchContext = (...args) => chromium.launchPersistentContext(...args), removeProfile = rm,
-  install = installReviewedExtension,
+  install = installReviewedExtension, log = { path: null, record: () => false },
 } = {}) {
   const { extensionPath } = candidate;
   let tls;
@@ -628,7 +686,57 @@ export async function reviewCandidate(candidate, {
   let profile;
   let context;
   let terminal;
+  let diagnosticPage;
+  let diagnosticOrigin;
+  let classifier;
+  let heartbeat;
+  let sampling = false;
+  let progressAt = Date.now();
+  let lastSnapshot;
+  let diagnosticWorker;
+  let diagnosticStage = 'setup';
+  const mismatch = createQaMismatchMonitor(log);
+  let lastObserved;
+  const waitForState = observe => waitForObservation(async () => {
+    const passed = await observe();
+    if (typeof passed === 'boolean' && passed !== lastObserved) {
+      if (lastObserved === true && passed === false) log.record('issue', { checkpoint: diagnosticStage, errorCode: 'observed_state_changed', snapshot: { observed: false, actionObserved: true } });
+      lastObserved = passed;
+      log.record('observation', { snapshot: { observed: passed } });
+    }
+    return passed;
+  });
+  const interrupt = new AbortController();
+  const onInterrupt = () => { interrupt.abort(); context?.close().catch(() => {}); };
+  const instruct = text => {
+    const checkpoint = checkpointId(text);
+    if (checkpoint) { diagnosticStage = checkpoint; mismatch.stage(checkpoint); lastObserved = undefined; progressAt = Date.now(); log.record('checkpoint', { checkpoint }); }
+    process.stdout.write(`${text}\n`);
+  };
+  const snapshot = () => observeQaSnapshot(diagnosticPage, context, diagnosticOrigin, classifier);
   await runWithCleanup(async () => {
+    process.on('SIGINT', onInterrupt);
+    heartbeat = setInterval(async () => {
+      if (sampling) return;
+      sampling = true;
+      const stage = diagnosticStage;
+      try {
+        const observed = await snapshot();
+        if (observed.route !== 'unknown' && diagnosticWorker) {
+          Object.assign(observed, await observeQaWorkerCounts(diagnosticWorker, diagnosticOrigin, diagnosticPage.url()));
+          observed.expectedHasGrant = observed.site === 'a' && ['14', '15a', '15b', '15c', '15d', '15e', '15f', '15g', '16', '17a', '17b'].includes(stage);
+        }
+        if (stage !== diagnosticStage || interrupt.signal.aborted) return;
+        mismatch.sample(observed);
+        const serialized = JSON.stringify(observed);
+        if (serialized !== lastSnapshot) { lastSnapshot = serialized; log.record('observation', { snapshot: observed }); }
+        if (Date.now() - progressAt >= 30000) { progressAt = Date.now(); log.record('stall', { snapshot: observed }); }
+      } finally { sampling = false; }
+    }, 1000);
+    heartbeat.unref();
+    try {
+    const { build } = await import('esbuild');
+    classifier = (await build({ entryPoints: [resolve(root, 'src/core/context.ts')], bundle: true, write: false, format: 'iife', globalName: 'QaContext' })).outputFiles[0].text;
     tls = await createTls();
     const fixtures = { clean: mockCheckoutHtml(), dynamic: mockCheckoutHtml(true), identical: mockCheckoutHtml('identical') };
     server = makeServer({ key: tls.key, cert: tls.cert }, (request, response) => {
@@ -652,6 +760,7 @@ export async function reviewCandidate(candidate, {
     await captureIntegrityBaseline(cleanPage);
     await cleanPage.bringToFront();
     let worker = await waitForReviewedExtensionWorker(context, extensionPath);
+    diagnosticWorker = worker;
     const cleanUrl = `${fixtureOrigin}/checkout/clean`;
     const readClean = async (mode) => {
       const predicates = await worker.evaluate(`(${observeCleanState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(cleanUrl)})`);
@@ -666,12 +775,24 @@ export async function reviewCandidate(candidate, {
     process.stdout.write('That Chromium can access only the two HTTPS reserved .test fixtures mapped to 127.0.0.1 and the extension; its dead proxy blocks every other host including alternate loopback hosts, so it cannot validate real sites. This boundary applies only to Chromium launched by this runner, not other browser instances.\n');
     process.stdout.write('The runner retains only SHA-256 integrity digests, panel/integrity pass-fail predicates and passive mock panel viewport/element bounds; it never writes or prints page text or records.\n\n');
     terminal = createInterface({ input: process.stdin, output: process.stdout });
+    if (log.path) process.stdout.write(`Local diagnostic JSON (not a marker): ${log.path}\n`);
+    const question = terminal.question.bind(terminal);
+    terminal.question = async (prompt, options = {}) => {
+      const token = acknowledgementToken(prompt);
+      log.record('ack_wait', token ? { token } : {});
+      const answer = await question(prompt, { ...options, signal: options.signal ? AbortSignal.any([options.signal, interrupt.signal]) : interrupt.signal });
+      log.record('ack', { ...(token ? { token } : {}), snapshot: { acknowledged: token ? answer === token : answer === 'ATTEST' } });
+      progressAt = Date.now();
+      return answer; // Never retain the human's raw input.
+    };
+    diagnosticPage = cleanPage;
+    diagnosticOrigin = fixtureOrigin;
     let dynamicPage;
     const results = {};
     await runManualCheckpoints({
       cleanPage,
       getDynamicPage: () => dynamicPage,
-      instruct: (text) => process.stdout.write(`${text}\n`),
+      instruct,
       waitForPanel,
       assertIntegrity,
       confirmCleanAnalyze: async () => {
@@ -693,6 +814,7 @@ export async function reviewCandidate(candidate, {
       },
       openDynamic: async () => {
         dynamicPage = await context.newPage();
+        diagnosticPage = dynamicPage;
         await dynamicPage.goto(`${fixtureOrigin}/checkout/dynamic-beta#checkout`);
         await captureIntegrityBaseline(dynamicPage);
         await dynamicPage.bringToFront();
@@ -722,7 +844,7 @@ export async function reviewCandidate(candidate, {
       if (new URL(pages[site].url()).origin !== origins[site]) throw new Error('mock page origin changed');
       const observe = async () => (await worker.evaluate(`(${observeSiteState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins[site])}, globalThis, ${validateStorage})`)).passed;
       if (['baseline', 'before-revoke'].includes(mode)) return observe();
-      await waitForObservation(observe);
+      await waitForState(observe);
       if (['quiet', 'revoked'].includes(mode)) {
         // Observe a bounded quiet interval, not merely a single early sample.
         for (let sample = 0; sample < 5; sample++) {
@@ -733,16 +855,18 @@ export async function reviewCandidate(candidate, {
       return true;
     };
     await runSiteCheckpoints({
-      instruct: (text) => process.stdout.write(`${text}\n`),
+      instruct,
       acknowledge: (token = 'DONE') => terminal.question(`Type ${token} only after the requested real human action and observation (anything else aborts): `, { signal: AbortSignal.timeout(300_000) }),
       navigate: async (site, positive) => {
         pages[site] ??= await context.newPage();
+        diagnosticPage = pages[site];
+        diagnosticOrigin = origins[site];
         await pages[site].goto(`${origins[site]}/checkout/${positive ? 'dynamic-beta#checkout' : 'clean'}`);
         await captureIntegrityBaseline(pages[site]);
         await pages[site].bringToFront();
       },
       lifecycle: () => runAutomaticLifecycleCheckpoints({
-        instruct: (text) => process.stdout.write(`${text}\n`),
+        instruct, waitForState,
         acknowledge: () => terminal.question('Type DONE after the requested automatic lifecycle observation: ', { signal: AbortSignal.timeout(300_000) }),
         read: async (mode) => {
           const observe = async () => {
@@ -758,7 +882,7 @@ export async function reviewCandidate(candidate, {
           }
           return true;
         },
-        navigate: async () => { await pages.a.goto(`${origins.a}/checkout/identical`); await captureIntegrityBaseline(pages.a, true); },
+        navigate: async () => { diagnosticPage = pages.a; diagnosticOrigin = origins.a; await pages.a.goto(`${origins.a}/checkout/identical`); await captureIntegrityBaseline(pages.a, true); },
         reload: async () => { await pages.a.reload(); await captureIntegrityBaseline(pages.a, true); },
         integrity: () => assertIntegrity(pages.a, 'automatic lifecycle'),
         ui: async (mode) => {
@@ -775,7 +899,7 @@ export async function reviewCandidate(candidate, {
         return await pages[site].locator('aside[data-clearchoice-panel]').count() === 1;
       },
       denied: () => armHumanDenial({ context, worker, popupUrl, origin: origins.b,
-        instruct: text => process.stdout.write(`${text}\n`) }),
+        instruct }),
       integrity: (site) => assertIntegrity(pages[site], 'site permission checkpoint'),
       mutate: async () => {
         await pages.a.waitForFunction(() => document.querySelector('#fake-order-summary')?.textContent?.includes('updated') === true, undefined, { timeout: 300_000 });
@@ -786,7 +910,7 @@ export async function reviewCandidate(candidate, {
     results.siteIsolation = 'passed';
     results.automaticLifecycle = 'passed';
     await runPermissionCycleCheckpoints({
-      instruct: (text) => process.stdout.write(`${text}\n`),
+      instruct, waitForState,
       acknowledge: (token) => terminal.question(`Type ${token} only after the specified real human action (anything else aborts): `, { signal: AbortSignal.timeout(300_000) }),
       read: async (mode) => {
         const observe = async () => (await worker.evaluate(`(${observePermissionCycle.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, globalThis, ${validateStorage}, (${observeSiteState.toString()}))`)).passed;
@@ -814,12 +938,13 @@ export async function reviewCandidate(candidate, {
     let deleteDigest;
     let dialogDigest;
     await runHistorySubscriptionCheckpoints({
+      waitForState,
       nativeDialog: async (accepted) => {
         process.stdout.write('Native history checkpoint: human-open the toolbar popup if closed; do not click Delete until the numbered instruction appears.\n');
         await waitForNativePopup(context, popupUrl, () => true);
         return observeNativeHistoryDialog(context, await passiveNativePopup(context, popupUrl), deleteDigest, dialogDigest, accepted);
       },
-      instruct: (text) => process.stdout.write(`${text}\n`),
+      instruct,
       acknowledge: () => terminal.question('Type DONE only after the requested human popup action and observed result: ', { signal: AbortSignal.timeout(300_000) }),
       read: async (mode) => {
         const result = await worker.evaluate(`(${observeHistorySubscriptions.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, globalThis, ${validateStorage})`);
@@ -840,7 +965,7 @@ export async function reviewCandidate(candidate, {
       return readNativePopup(context, popupUrl, `(${observeFinalUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(origins.a)})`);
     };
     await runFinalCheckpoints({
-      instruct: (text) => process.stdout.write(`${text}\n`),
+      instruct, waitForState,
       acknowledge: () => terminal.question('Type DONE after the requested human action/observation: ', { signal: AbortSignal.timeout(300_000) }),
       read: async (mode) => {
         if (mode === 'baseline') { finalBaseline = await readFinal(mode); return true; }
@@ -855,11 +980,14 @@ export async function reviewCandidate(candidate, {
         context = await launchContext(profile, reviewBrowserLaunchOptions(extensionPath, tls.pin));
         // Same profile, no extension reinstall, same servers and pinned certificate.
         pages.a = await context.newPage();
+        diagnosticPage = pages.a;
+        diagnosticOrigin = origins.a;
         await pages.a.goto(`${origins.a}/checkout/dynamic-beta#checkout`);
         await captureIntegrityBaseline(pages.a);
         await pages.a.bringToFront();
         await wakeReviewedExtension(context, extensionPath);
         worker = await waitForReviewedExtensionWorker(context, extensionPath);
+        diagnosticWorker = worker;
       },
       quiet: async () => await pages.a.locator('aside[data-clearchoice-panel]').count() === 0,
     });
@@ -871,7 +999,7 @@ export async function reviewCandidate(candidate, {
       return { kind: source.kind, reason: source.reason, screenedExcerpt: source.screenedExcerpt, opaqueFingerprint: source.opaqueFingerprint };
     });
     const mixed = await runSyntheticEvidence(candidate, template, {
-      instruct: text => process.stdout.write(`${text}\n`),
+      instruct,
       acknowledge: token => terminal.question(`Type ${token} only after the explicitly labeled review: `, { signal: AbortSignal.timeout(300_000) }),
     });
     if (mixed.expiry !== true || mixed.catalog !== true || mixed.publicReview !== true) throw new Error('mixed evidence acceptance incomplete');
@@ -879,13 +1007,18 @@ export async function reviewCandidate(candidate, {
     results.retention = 'passed';
     results.cancellationHelp = 'passed';
     await attestCompletedWorkflow(candidate, results, {
-      instruct: text => process.stdout.write(`${text}\n`),
+      instruct,
       acknowledge: () => terminal.question('Final acknowledgement: ', { signal: AbortSignal.timeout(300_000) }),
       recheck: () => recheckCandidateBinding(root, candidate),
       emit: text => process.stdout.write(text),
     });
     process.stdout.write('Save ONLY the emitted JSON outside this repository and supply its path in CLEARCHOICE_ACTIVE_TAB_QA_MARKER to npm run check:beta. Do not rebuild or repackage after attestation.\n');
+    } catch (error) {
+      try { log.record('observation', { snapshot: await snapshot() }); } catch { /* preserve the primary QA failure */ }
+      throw error;
+    }
   }, [
+    () => { clearInterval(heartbeat); process.off('SIGINT', onInterrupt); },
     () => terminal?.close(),
     () => context?.close(),
     () => server && closeServer(server),
