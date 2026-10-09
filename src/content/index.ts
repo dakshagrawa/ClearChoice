@@ -31,6 +31,8 @@ const contentSentinel = '__clearchoiceContentListenerInstalled__';
 const automaticRequestIds = new Map<string, symbol>();
 const automaticStatusIds = new Map<string, { live: () => boolean }>();
 const maxPendingAutomaticRequests = 2;
+// Shared with manual Analyze: a queued SPA/DOM revision invalidates old display work.
+let documentRevision = 0;
 
 export async function submitAutomaticStatus(generation: number, status: AutomaticDocumentStatus['status'], signal?: AbortSignal, live: () => boolean = () => true): Promise<void> {
   const requestId = createScanRequestId();
@@ -157,6 +159,7 @@ function startAutomaticObserver(): { stop: () => void; currentGeneration: () => 
     if (!valid()) { stop(); return; }
     dirty = true;
     revision++;
+    documentRevision++;
     if (!firstChange) firstChange = Date.now();
     if (running) return;
     if (timer) clearTimeout(timer);
@@ -169,7 +172,10 @@ function startAutomaticObserver(): { stop: () => void; currentGeneration: () => 
     firstChange = 0;
     const scanRevision = revision;
     const reportStatus = async (status: AutomaticDocumentStatus['status']) => {
-      removeAutomaticPanel();
+      // This live document is no longer displayable, regardless of whether
+      // Analyze replaced the automatic panel and detached its saved reference.
+      removePanel();
+      autoPanel = undefined;
       if (lastSignature === status) return;
       // The worker may clear its count before this receipt arrives. A newer DOM
       // revision must republish even identical findings, not dedupe against them.
@@ -264,6 +270,7 @@ if (!pageWindow[contentSentinel]) {
   // BFCache retains the sentinel and listener; reauthorize before reinstalling one observer.
   const onPageShow = (event: PageTransitionEvent) => { if (event.persisted) restartAutomatic(); };
   const onPageHide = (event: PageTransitionEvent) => {
+    documentRevision++;
     if (!event.persisted) {
       window.removeEventListener('pageshow', onPageShow);
       window.removeEventListener('pagehide', onPageHide);
@@ -298,6 +305,7 @@ if (!pageWindow[contentSentinel]) {
         return;
       }
       if (request.type === CLEARCHOICE_DISABLE) {
+        documentRevision++;
         automatic.stop();
         removePanel();
         sendResponse({ ok: true });
@@ -316,11 +324,15 @@ if (!pageWindow[contentSentinel]) {
         return;
       }
 
+      const manualRevision = documentRevision;
+      const stillCurrent = () => manualRevision === documentRevision
+        && classifyCheckoutContext(document.documentElement) === 'supported';
       const result = analyzePage();
       let displayResult = result;
       let findingCount = result.findings.length;
       if (request.requestId && request.nonce) {
         const { batch, eligibleFindings } = await buildFindingBatchWithSources(result.findings, request.requestId);
+        if (!stillCurrent()) throw new Error('Analysis superseded');
         displayResult = { findings: eligibleFindings };
         findingCount = batch.findings.length;
         const receipt: unknown = await chrome.runtime.sendMessage({ type: CLEARCHOICE_SUBMIT, nonce: request.nonce, batch });
@@ -328,8 +340,11 @@ if (!pageWindow[contentSentinel]) {
           || !('ok' in receipt) || receipt.ok !== true || !('findingCount' in receipt)
           || receipt.findingCount !== batch.findings.length) throw new Error('Batch receipt refused');
       }
+      if (!stillCurrent()) throw new Error('Analysis superseded');
+      const dismissed = await getDismissed();
+      if (!stillCurrent()) throw new Error('Analysis superseded');
       if (!displayResult.findings.length) removePanel();
-      if (!(await getDismissed()) && displayResult.findings.length > 0) {
+      if (!dismissed && displayResult.findings.length > 0) {
         renderPanel(displayResult, () => {
           void setDismissed(true).catch(() => undefined);
         });

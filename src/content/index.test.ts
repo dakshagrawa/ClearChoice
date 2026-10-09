@@ -41,6 +41,51 @@ const betaCheckout = '<main><aside>Order summary — Subtotal: $24</aside><secti
 const automaticSubmits = (sendMessage: ReturnType<typeof vi.fn>) => sendMessage.mock.calls.filter(([message]) => message.type === 'CLEARCHOICE_AUTO_SUBMIT');
 const ownedPanel = () => Array.from(document.querySelectorAll<HTMLElement>('[data-clearchoice-panel]')).find((panel) => panel.shadowRoot?.querySelector('.clearchoice-panel'));
 
+it('SPA exit clears a manual replacement of an automatic panel without resubmitting hidden findings', async () => {
+  const { addListener, sendMessage } = autoChrome();
+  document.body.innerHTML = `<section id="checkout-view">${betaCheckout}</section><section id="information-view" hidden>Mock information</section>`;
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  const automaticPanel = ownedPanel();
+  const reply = vi.fn();
+  addListener.mock.calls[0][0]({ type: 'CLEARCHOICE_ANALYZE' }, {}, reply);
+  await vi.waitFor(() => expect(reply).toHaveBeenCalledWith(expect.objectContaining({ ok: true })));
+  expect(ownedPanel()).not.toBe(automaticPanel);
+  (document.querySelector('#checkout-view') as HTMLElement).hidden = true;
+  (document.querySelector('#information-view') as HTMLElement).hidden = false;
+  window.dispatchEvent(new PopStateEvent('popstate'));
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_AUTO_DOCUMENT_STATUS', status: 'unsupported-context' })));
+  expect(ownedPanel()).toBeUndefined();
+  expect(automaticSubmits(sendMessage)).toHaveLength(1);
+});
+
+it('a manual Analyze receipt arriving after unsupported SPA exit cannot resurrect findings', async () => {
+  const { addListener, sendMessage } = autoChrome();
+  let finish!: (value: unknown) => void;
+  sendMessage.mockImplementation((message: { type: string; batch?: { findings: unknown[] } }) => {
+    if (message.type === 'CLEARCHOICE_SUBMIT') return new Promise((resolve) => { finish = resolve; });
+    if (message.type === 'CLEARCHOICE_AUTO_STATUS') return Promise.resolve({ ok: true, generation: 3 });
+    if (message.type === 'CLEARCHOICE_AUTO_SUBMIT') return Promise.resolve({ ok: true, findingCount: message.batch?.findings.length });
+    if (message.type === 'CLEARCHOICE_AUTO_DOCUMENT_STATUS') return Promise.resolve({ ok: true });
+    return Promise.resolve({ ok: true, dismissed: false });
+  });
+  document.body.innerHTML = `<section id="checkout-view">${betaCheckout}</section><section id="information-view" hidden>Mock information</section>`;
+  await import('./index');
+  await vi.waitFor(() => expect(ownedPanel()).toBeDefined());
+  const reply = vi.fn();
+  addListener.mock.calls[0][0]({ type: 'CLEARCHOICE_ANALYZE', requestId: 'manual-spa-request', nonce: 'manual-spa-nonce' }, {}, reply);
+  await vi.waitFor(() => expect(finish).toBeDefined());
+  (document.querySelector('#checkout-view') as HTMLElement).hidden = true;
+  (document.querySelector('#information-view') as HTMLElement).hidden = false;
+  window.dispatchEvent(new PopStateEvent('popstate'));
+  await vi.waitFor(() => expect(ownedPanel()).toBeUndefined());
+  finish({ ok: true, findingCount: 1 });
+  await vi.waitFor(() => expect(reply).toHaveBeenCalled());
+  expect(ownedPanel()).toBeUndefined();
+  expect(reply).toHaveBeenCalledWith({ ok: false, error: 'request-failed' });
+  expect(automaticSubmits(sendMessage)).toHaveLength(1);
+});
+
 it('reports mutation zero and SPA exit without transporting page evidence', async () => {
   const { sendMessage } = autoChrome();
   sendMessage.mockImplementation(async (message: { type: string; batch?: { findings: unknown[] } }) => {
