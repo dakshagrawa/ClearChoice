@@ -1,5 +1,5 @@
 import { dedupeNestedTextFindings, makeFinding } from './dedupe';
-import { cssPath, hasContentEditableAncestor, isElementVisible, normalizeVisibleText } from './normalize';
+import { cssPath, hasContentEditableAncestor, hasHiddenAncestor, isElementVisible, normalizeVisibleText } from './normalize';
 import { hasSensitiveDisplayData } from './sensitive';
 import type { Finding, FindingReason, Severity } from './types';
 
@@ -16,24 +16,13 @@ const addonTitle = 'Preselected paid option';
 const addonExplanation =
   'This option is already selected and may add a cost. Review it before continuing.';
 
-function hasHiddenAncestor(element: Element): boolean {
-  if (element.closest('[hidden], [aria-hidden="true"]')) return true;
-
-  for (let current: Element | null = element; current; current = current.parentElement) {
-    const style = window.getComputedStyle(current);
-    if (style.display === 'none' || style.visibility === 'hidden') return true;
-  }
-
-  return false;
-}
-
 function visibleText(element: Element): string {
-  if (hasContentEditableAncestor(element)) return '';
+  if (hasContentEditableAncestor(element) || hasHiddenAncestor(element)) return '';
 
   const text = Array.from(element.childNodes)
     .map((node) => {
       if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
-      if (node instanceof Element && !isExcludedTextElement(node) && !hasHiddenAncestor(node)) return visibleText(node);
+      if (node instanceof Element && !isExcludedTextElement(node)) return visibleText(node);
       return '';
     })
     .join(' ');

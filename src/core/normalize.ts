@@ -6,19 +6,26 @@ export function hasContentEditableAncestor(element: Element): boolean {
   return element.closest('[contenteditable]') !== null;
 }
 
+export function hasHiddenAncestor(element: Element): boolean {
+  if (element.closest('[hidden], [aria-hidden="true"]')) return true;
+
+  // Conservatively exclude hidden ancestors even when a child overrides visibility.
+  try {
+    for (let current: Element | null = element; current; current = current.parentElement) {
+      const style = window.getComputedStyle(current);
+      if (style.display === 'none' || style.visibility === 'hidden'
+        || style.visibility === 'collapse' || style.opacity === '0') return true;
+    }
+  } catch {
+    // Unavailable computed styles must not turn unreadable page text into evidence.
+    return true;
+  }
+
+  return false;
+}
+
 export function isElementVisible(element: Element): boolean {
-  if (hasContentEditableAncestor(element)) {
-    return false;
-  }
-
-  if (element.closest('[hidden], [aria-hidden="true"]')) {
-    return false;
-  }
-
-  const style = window.getComputedStyle(element);
-  if (style.display === 'none' || style.visibility === 'hidden') {
-    return false;
-  }
+  if (hasContentEditableAncestor(element) || hasHiddenAncestor(element)) return false;
 
   return normalizeVisibleText(element.textContent ?? '') !== '';
 }

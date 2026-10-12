@@ -41,7 +41,11 @@ test('attached but hidden Dismiss cannot pass the manual panel checkpoint', asyn
     await syntheticPanel(page, 'hidden');
     const reports = [];
     await expect(waitForPanel(page, 'attached', { timeoutMs: 50, report: value => reports.push(value) })).rejects.toThrow('Dismiss is not visibly reachable');
-    expect(reports).toHaveLength(2);
+    // A slow first locator wait may consume the tiny deadline before the
+    // initial sample; the rejection path still guarantees a final diagnostic.
+    expect(reports.length).toBeGreaterThanOrEqual(1);
+    expect(reports.length).toBeLessThanOrEqual(2);
+    expect(reports.at(-1).reachable).toBe(false);
     expect(reports.every(value => !value.reachable)).toBe(true);
   } finally { await browser.close(); }
 });

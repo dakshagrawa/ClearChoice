@@ -29,7 +29,15 @@ async function contentProbe(runtime: PackagedRuntime) {
     if (result.exceptionDetails) throw Error('Packaged diagnostic locals unavailable: ' + JSON.stringify(result.exceptionDetails));
     return result.result.value;
   };
-  return { session, breakpoint, next, close: async () => {
+  const protocolBranch = (messageType: string) => {
+    // Resolve the minifier's alias from the real bundled protocol literal.
+    // Never substitute a guessed name or silently skip the adverse checkpoint.
+    const aliases = [...source.matchAll(/(?:const|,)([A-Za-z_$][\w$]*)="(CLEARCHOICE_[A-Z_]+)"/g)]
+      .filter(match => match[2] === messageType);
+    if (aliases.length !== 1) throw Error('Packaged protocol constant unavailable: ' + messageType);
+    return `if(a.type===${aliases[0][1]}){`;
+  };
+  return { session, breakpoint, protocolBranch, next, close: async () => {
     await session.send('Debugger.disable');
     await session.detach();
   } };
@@ -65,7 +73,7 @@ test('packaged in-flight real challenge is vetoed by native-popup revoke before 
     const enabled = await runtime.storage();
     const probe = await contentProbe(runtime);
     try {
-      const challenge = await probe.breakpoint('if(a.type===ie){', 'S.has(a.requestId)');
+      const challenge = await probe.breakpoint(probe.protocolBranch('CLEARCHOICE_FINDINGS_CHALLENGE'), 'S.has(a.requestId)');
       const settlement = await probe.breakpoint(settlementStatement, 'r.type === "CLEARCHOICE_AUTO_SUBMIT"');
       await positiveMutation(runtime);
       const inFlight = await probe.next(challenge.breakpointId,
