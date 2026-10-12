@@ -146,8 +146,10 @@ export async function runFinalCheckpoints({ instruct, acknowledge, read, ui, int
   if (!await read('baseline')) throw new Error('final baseline predicate failed');
   const stage = async (instruction, mode, visible) => {
     const observe = async () => await ui(visible) && await read(mode);
-    await runHumanStage({ instruction, instruct, acknowledge, observe: () => waitForState(observe) });
-    if (!await observe()) throw new Error('final state changed during acknowledgement');
+    await runHumanStage({ instruction: instruction + ' If closed after the previous DONE, human-open the toolbar popup for this new step.', instruct, acknowledge, observe: () => waitForState(observe) });
+    // This action popup may be destroyed by terminal focus. Its exact transient
+    // UI is mandatory before DONE; only durable state is read again afterwards.
+    if (!await read(mode)) throw new Error('final state changed during acknowledgement');
     await integrity();
   };
   await stage('30. RETENTION: human-select 7 days in Keep local observations. Leave popup open. Confirmed subscription and fresh history must stay unchanged; this does NOT prove elapsed expiry.', 'retention', 'retention');
@@ -368,20 +370,22 @@ export async function runSiteCheckpoints({ instruct, acknowledge, navigate, read
   await integrity('a');
 }
 
-// No prompt automation: the OS permission dialog is human self-attestation only.
+// Human re-enable action plus verified state, not a claim of fresh Chrome consent.
+// Initial genuine Allow remains mandatory in step 13; no prompt/input automation.
 export async function runPermissionCycleCheckpoints({ instruct, acknowledge, read, ui, integrity, waitForState = waitForObservation }) {
   if (!await read('baseline')) throw new Error('permission cycle baseline failed');
   const stage = async (instruction, mode, visible, token) => {
     instruct(instruction);
-    const observe = async () => await ui(visible) && await read(mode);
+    const observe = async (afterAcknowledgement = false) => await ui(visible, { afterAcknowledgement }) && await read(mode);
     if (!await waitForState(observe)) throw new Error('permission cycle observable predicate failed');
     if (await acknowledge(token) !== token) throw new Error('permission cycle human acknowledgement missing');
-    if (!await observe()) throw new Error('permission cycle changed during acknowledgement');
+    if (!await observe(true)) throw new Error('permission cycle changed during acknowledgement');
     await integrity();
   };
-  await stage('17a. REENABLE A: human-open the real toolbar popup, click Enable detection for this site and Allow a NEW actual Chrome permission dialog. Do not Analyze or Save. Leave popup open and observe enabled status, automatic panel and badge 1. OS permission-dialog automation is unavailable: NEW_CHROME_ALLOW_SEEN is your self-attestation, not automated proof. If no new dialog appears, abort; do not simulate or seed permission.', 'reenabled', 'enabled', 'NEW_CHROME_ALLOW_SEEN');
+  await stage('17a. REENABLE A: human-open the real toolbar popup and pointer-click Enable detection for this site. Chrome usually restores previously approved access without prompting after permissions.remove(); a new dialog is NOT required. Click Allow only if Chrome actually shows a permission dialog. Do not Analyze or Save. Leave popup open and observe enabled status, automatic panel and badge 1. Type REENABLE_CONFIRMED only after your real Enable click and those observations. This is human re-enable action plus verified state, NOT a new Chrome Allow attestation or automated proof of your click. Do not simulate or seed permission.', 'reenabled', 'enabled', 'REENABLE_CONFIRMED');
   if (!await read('before-settings')) throw new Error('Settings removal baseline failed');
   await stage('17b. CHROME SETTINGS REMOVE A: in THIS runner window only, human-open a separate chrome://extensions tab, find ClearChoice > Details > Site access. Chrome versions may show On specific sites with a site menu/Remove, or a Site access dropdown. Remove the A mock site permission through Chrome controls; never use the production popup Disable button. Do not uninstall/reload the extension or remove B instead. If this Chrome cannot remove this specific port-bearing mock origin, STOP with Ctrl+C, report the limitation, close the disposable runner and rerun only after a compatible Chrome/site-access remedy; do not broaden access or use permissions.remove automation. Return to the original A mock tab (do not reload), leave Settings, and observe panel gone and blank badge. Type CHROME_SETTINGS_A_REMOVED only after that actual Chrome Settings action.', 'settings-removed', 'quiet', 'CHROME_SETTINGS_A_REMOVED');
+  return { reenableEvidence: MIXED_EVIDENCE.reenableEvidence };
 }
 
 export async function runAutomaticLifecycleCheckpoints({ instruct, acknowledge, read, ui, navigate, reload, integrity, waitForState = waitForObservation }) {
@@ -407,16 +411,48 @@ export async function runAutomaticLifecycleCheckpoints({ instruct, acknowledge, 
 }
 
 // No workflow result/attestation is produced by this bounded human-only slice.
-export async function runHistorySubscriptionCheckpoints({ instruct, acknowledge, read, ui, nativeDialog, waitForState = waitForObservation }) {
+export async function runHistorySubscriptionCheckpoints({ instruct, acknowledge, read, ui, nativeDialog, prepareNativePopup, integrity, waitForState = waitForObservation }) {
   if (!await read('baseline')) throw new Error('human CRUD baseline predicate failed');
+  const pendingAcknowledgements = [];
+  let pairedIdentity;
   const stage = async (instruction, mode, visible) => {
     const deletion = ['history-delete-cancelled', 'history-deleted'].includes(mode);
     if (deletion && typeof nativeDialog !== 'function') throw new Error('native history dialog observer unavailable');
+    if (deletion) await prepareNativePopup?.();
     const dialog = deletion ? await nativeDialog(mode === 'history-deleted') : undefined;
     await runWithCleanup(async () => {
-      const observe = async () => (!dialog || await dialog.passed()) && await ui(visible) && await read(mode);
-      await runHumanStage({ instruction, instruct, acknowledge, observe: () => waitForState(observe) });
-      if (!await observe()) throw new Error('human CRUD state changed during acknowledgement');
+      const observe = async () => {
+        if (dialog && !await dialog.passed()) return false;
+        let identity;
+        const passed = await ui(visible, { onIdentity: value => { identity = value; } });
+        const paired = pendingAcknowledgements.length > 0 || ['draft', 'delete-prompt'].includes(visible);
+        if (paired && passed) {
+          if (!identity || (pairedIdentity && identity !== pairedIdentity)) throw new Error('paired popup document changed or unavailable');
+          pairedIdentity = identity;
+        }
+        return passed && await read(mode);
+      };
+      instruct(instruction + (pendingAcknowledgements.length === 0 ? ' If closed after the previous DONE, human-open the toolbar popup for this new step.' : ' Keep this same popup open; follow this next action before returning to the terminal.')
+        + (['draft', 'delete-prompt'].includes(visible) ? ' Stay in the popup: the next numbered action follows automatically; both separate DONE acknowledgements come after that action.' : ''));
+      if (await waitForState(observe) !== true) throw new Error('human stage observable predicate failed');
+      pendingAcknowledgements.push(instruction);
+      // Release the observer before terminal focus: a live CDP attachment can
+      // itself pin Chromium's native popup and distort the human lifecycle.
+      if (dialog) await dialog.seal();
+      // Draft/delete-prompt UI cannot survive terminal focus. Observe its next
+      // numbered action before asking for either separate human DONE. No popup
+      // is reopened or reconstructed by the runner, and no click is repeated.
+      if (['draft', 'delete-prompt'].includes(visible)) return;
+      while (pendingAcknowledgements.length > 0) {
+        if (await acknowledge(pendingAcknowledgements[0]) !== 'DONE') throw new Error('human stage acknowledgement missing');
+        // The latest stage's exact durable state includes the legitimate next
+        // action in the same editor. Rechecking an earlier draft's storage here
+        // would incorrectly reject its subsequent explicit Save.
+        if ((dialog && !await dialog.passed({ afterAcknowledgement: true })) || !await read(mode)) throw new Error('human CRUD state changed during acknowledgement');
+        await integrity();
+        pendingAcknowledgements.shift();
+        if (!pendingAcknowledgements.length) pairedIdentity = undefined;
+      }
     }, [() => dialog?.close()]);
   };
   await stage('18. HISTORY: human-open the toolbar popup and click Refresh history. Confirm retained A recurring observations remain usable after revoke; subscriptions must still be empty. Leave popup open.', 'history', 'history');
@@ -442,6 +478,7 @@ export async function observeNativeHistoryDialog(context, popup, targetDigest, m
   if (!popup || popup.isClosed() || ![targetDigest, messageDigest].every((value) => /^[a-f0-9]{64}$/.test(value))) throw new Error('native history dialog target unavailable');
   const session = popup.session ?? await context.newCDPSession(popup);
   const state = { opening: 0, closed: 0, type: '', digest: '', accepted: null };
+  let evidence;
   const opening = (event) => {
     state.opening++;
     state.type = event.type;
@@ -466,21 +503,39 @@ export async function observeNativeHistoryDialog(context, popup, targetDigest, m
     await session.detach();
     throw error;
   }
+  let sealed = false;
+  let released = false;
+  const release = async () => {
+    if (released) return;
+    released = true;
+    session.off('Page.javascriptDialogOpening', opening);
+    session.off('Page.javascriptDialogClosed', closed);
+    await session.detach();
+  };
   return {
-    passed: async () => {
-      if (popup.isClosed()) throw new Error('native history dialog popup changed');
+    seal: async () => {
+      if (sealed) return;
+      if (!evidence || popup.isClosed() || JSON.stringify(state) !== evidence.events) throw new Error('native history dialog pre-acknowledgement evidence unavailable');
+      await release();
+      sealed = true;
+    },
+    passed: async ({ afterAcknowledgement = false } = {}) => {
       if (state.opening > 1 || state.closed > 1 || state.closed > state.opening) throw new Error('native history dialog event sequence invalid');
+      if (afterAcknowledgement) {
+        // A snapshot can only originate from the complete, freshly validated
+        // native event + trusted click below, while the exact target is alive.
+        // Late/mutated events cannot rehabilitate invalid or missing evidence.
+        return sealed && evidence !== undefined && JSON.stringify(state) === evidence.events;
+      }
+      if (popup.isClosed()) throw new Error('native history dialog popup changed');
       if (state.opening === 0 || state.closed === 0) return false;
       if (state.type !== 'confirm' || state.digest !== messageDigest || state.accepted !== accepted) throw new Error('native history dialog confirmation mismatch');
       const click = await popup.evaluate(() => window.__qaNativeDelete);
       if (click?.counter !== 1 || click.digest !== targetDigest) throw new Error('native history dialog clicked record mismatch');
+      evidence ??= Object.freeze({ events: JSON.stringify(state), targetDigest, messageDigest, accepted });
       return true;
     },
-    close: async () => {
-      session.off('Page.javascriptDialogOpening', opening);
-      session.off('Page.javascriptDialogClosed', closed);
-      await session.detach();
-    },
+    close: release,
   };
 }
 
@@ -588,11 +643,11 @@ export async function attestCompletedWorkflow(candidate, results, { instruct, ac
 
 export function createManualActiveTabQaMarker({ commit, manifestSha256, archiveSha256 }, results) {
   if (!results || Object.getPrototypeOf(results) !== Object.prototype
-      || Reflect.ownKeys(results).length !== WORKFLOW_PREDICATES.length
-      || WORKFLOW_PREDICATES.some((field) => !Object.hasOwn(results, field))) {
+      || Reflect.ownKeys(results).length !== WORKFLOW_PREDICATES.length + 1
+      || [...WORKFLOW_PREDICATES, 'reenableEvidence'].some((field) => !Object.hasOwn(results, field))) {
     throw new Error('complete validated workflow results are required; marker was not emitted');
   }
-  const marker = { schemaVersion: 6, ...MIXED_EVIDENCE, outcome: 'passed', ...results,
+  const marker = { schemaVersion: 7, ...MIXED_EVIDENCE, outcome: 'passed', ...results,
     commit, manifestSha256, archiveSha256, reviewer: LOCAL_HUMAN_ATTESTATION };
   const validation = validateManualActiveTabMarker(marker, { commit, manifestSha256, archiveSha256 });
   if (!validation.ok) throw new Error(validation.error);
@@ -909,7 +964,7 @@ export async function reviewCandidate(candidate, {
     results.optInDenial = 'passed';
     results.siteIsolation = 'passed';
     results.automaticLifecycle = 'passed';
-    await runPermissionCycleCheckpoints({
+    const permissionCycle = await runPermissionCycleCheckpoints({
       instruct, waitForState,
       acknowledge: (token) => terminal.question(`Type ${token} only after the specified real human action (anything else aborts): `, { signal: AbortSignal.timeout(300_000) }),
       read: async (mode) => {
@@ -923,42 +978,76 @@ export async function reviewCandidate(candidate, {
         }
         return true;
       },
-      ui: async (mode) => {
+      ui: async (mode, { afterAcknowledgement = false } = {}) => {
         const panel = pages.a.locator('aside[data-clearchoice-panel]');
         if (mode === 'quiet') return await panel.count() === 0;
-        return await panel.count() === 1 && await panel.locator('article').count() === 1
-          && await readNativePopup(context, popupUrl,
-            expected => document.querySelector('[data-site-status]')?.textContent === expected,
-            `Detection enabled for ${origins.a}; supported English checkout detection is enabled, not a completed scan.`);
+        const pageVisible = await panel.count() === 1 && await panel.locator('article').count() === 1;
+        if (!pageVisible) return false;
+        // The exact enabled popup status was observed before acknowledgement.
+        // Terminal focus may destroy it; recheck the page and full durable
+        // permission/grant/storage/badge state, never reopen or pin that popup.
+        if (afterAcknowledgement) return true;
+        return await readNativePopup(context, popupUrl,
+          expected => document.querySelector('[data-site-status]')?.textContent === expected,
+          `Detection enabled for ${origins.a}; supported English checkout detection is enabled, not a completed scan.`);
       },
       integrity: () => assertIntegrity(pages.a, 'human reenable/Chrome Settings removal'),
     });
+    results.reenableEvidence = permissionCycle.reenableEvidence;
     results.revocation = 'passed';
+    const expectedWorkerUrl = await reviewedWorkerUrl(extensionPath);
+    const bindLaterTab = () => worker.evaluate(async () => {
+      const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tabs.length !== 1 || !Number.isInteger(tabs[0].id)) throw new Error('later checkpoint active tab unavailable');
+      return tabs[0].id;
+    });
+    let laterTabId = await bindLaterTab();
+    const laterIntegrity = async (checkpoint) => {
+      await assertIntegrity(pages.a, checkpoint);
+      await recheckCandidateBinding(root, candidate);
+      const valid = await worker.evaluate(async ({ origin, expectedWorkerUrl, tabId }) => {
+        const [permissions, scripts, stored, tabs] = await Promise.all([
+          chrome.permissions.getAll(), chrome.scripting.getRegisteredContentScripts(), chrome.storage.local.get('grantState'),
+          chrome.tabs.query({ active: true, currentWindow: true }),
+        ]);
+        const grant = stored.grantState?.sites?.[origin];
+        return tabs.length === 1 && tabs[0].id === tabId
+          && (tabs[0].url === undefined || new URL(tabs[0].url).origin === origin)
+          && chrome.runtime.getURL('worker.js') === expectedWorkerUrl
+          && chrome.runtime.id === new URL(expectedWorkerUrl).hostname
+          && Array.isArray(permissions.origins) && permissions.origins.length === 0
+          && scripts.length === 0 && !await chrome.permissions.contains({ origins: [origin + '/*'] })
+          && grant?.enabled === false && grant.generation > 0;
+      }, { origin: origins.a, expectedWorkerUrl, tabId: laterTabId });
+      if (!valid) throw new Error('later checkpoint worker identity or revoked browser state changed');
+    };
     let targetDigest;
     let deleteDigest;
     let dialogDigest;
     await runHistorySubscriptionCheckpoints({
       waitForState,
-      nativeDialog: async (accepted) => {
+      prepareNativePopup: async () => {
         process.stdout.write('Native history checkpoint: human-open the toolbar popup if closed; do not click Delete until the numbered instruction appears.\n');
         await waitForNativePopup(context, popupUrl, () => true);
+      },
+      nativeDialog: async (accepted) => {
         return observeNativeHistoryDialog(context, await passiveNativePopup(context, popupUrl), deleteDigest, dialogDigest, accepted);
       },
       instruct,
-      acknowledge: () => terminal.question('Type DONE only after the requested human popup action and observed result: ', { signal: AbortSignal.timeout(300_000) }),
+      acknowledge: (instruction) => terminal.question(`Type DONE to acknowledge the observed stage ${instruction.slice(0, instruction.indexOf('.'))} human action/result (each stage needs its own DONE): `, { signal: AbortSignal.timeout(300_000) }),
       read: async (mode) => {
         const result = await worker.evaluate(`(${observeHistorySubscriptions.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, globalThis, ${validateStorage})`);
         if (mode === 'baseline') targetDigest = result.targetDigest;
         if (mode === 'history-delete-baseline') { deleteDigest = result.deleteDigest; dialogDigest = result.dialogDigest; }
         return result.passed;
       },
-      ui: async (mode) => {
-        return readNativePopup(context, popupUrl, `(${observeHistorySubscriptionUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(targetDigest)}, ${JSON.stringify(deleteDigest)})`);
+      ui: async (mode, options) => {
+        return readNativePopup(context, popupUrl, `(${observeHistorySubscriptionUi.toString()})(${JSON.stringify(mode)}, ${JSON.stringify(targetDigest)}, ${JSON.stringify(deleteDigest)})`, undefined, options);
       },
+      integrity: () => laterIntegrity('history/subscription checkpoint'),
     });
     results.reviewHistory = 'passed';
     results.subscriptions = 'passed';
-    const expectedWorkerUrl = await reviewedWorkerUrl(extensionPath);
     let finalBaseline;
     const readFinal = async (mode) => worker.evaluate(`(${observeFinalState.toString()})(chrome, ${JSON.stringify(mode)}, ${JSON.stringify(origins.a)}, ${JSON.stringify(expectedWorkerUrl)}, ${JSON.stringify(finalBaseline)}, ${validateStorage})`);
     const uiFinal = async (mode) => {
@@ -974,7 +1063,7 @@ export async function reviewCandidate(candidate, {
         return passed;
       },
       ui: uiFinal,
-      integrity: () => assertIntegrity(pages.a, 'final checkpoint'),
+      integrity: () => laterIntegrity('final checkpoint'),
       restart: async () => {
         await context.close();
         context = await launchContext(profile, reviewBrowserLaunchOptions(extensionPath, tls.pin));
@@ -988,6 +1077,7 @@ export async function reviewCandidate(candidate, {
         await wakeReviewedExtension(context, extensionPath);
         worker = await waitForReviewedExtensionWorker(context, extensionPath);
         diagnosticWorker = worker;
+        laterTabId = await bindLaterTab();
       },
       quiet: async () => await pages.a.locator('aside[data-clearchoice-panel]').count() === 0,
     });

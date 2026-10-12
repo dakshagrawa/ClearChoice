@@ -31,7 +31,8 @@ import {
   runManualCheckpoints,
   runPermissionCycleCheckpoints,
   runSiteCheckpoints,
-  runHistorySubscriptionCheckpoints,
+  runHistorySubscriptionCheckpoints as rawHistoryCheckpoints,
+  runFinalCheckpoints,
   observeNativeHistoryDialog,
   attestCompletedWorkflow,
   runSyntheticEvidence,
@@ -43,32 +44,70 @@ import {
   serveFixture,
 } from '../scripts/manual-active-tab-qa.mjs';
 
-test('permission cycle requires separate prompt self-attestation and rechecks after acknowledgement', async () => {
+// Existing synthetic orchestration fixtures model one stable document per pair.
+const runHistorySubscriptionCheckpoints = options => rawHistoryCheckpoints({ ...options, ui: async (mode, sampling) => {
+  sampling?.onIdentity?.('synthetic-stable-document');
+  return options.ui(mode, sampling);
+} });
+
+test('permission cycle requires human re-enable confirmation without requiring a new dialog and rechecks after acknowledgement', async () => {
   const events = [];
   const run = (overrides = {}) => runPermissionCycleCheckpoints({
     instruct: (text) => events.push(text), read: async (mode) => { events.push(mode); return true; },
     ui: async () => true, integrity: async () => events.push('integrity'),
     acknowledge: async (token) => { events.push(token); return token; }, waitForState: (observe) => observe(), ...overrides,
   });
-  await run();
+  expect(await run()).toEqual({ reenableEvidence: 'human-reenable-action-and-verified-state-no-new-dialog-required' });
   expect(events.filter((event) => event === 'reenabled')).toHaveLength(2);
   expect(events.filter((event) => event === 'settings-removed')).toHaveLength(2);
-  expect(events.indexOf('NEW_CHROME_ALLOW_SEEN')).toBeLessThan(events.indexOf('before-settings'));
-  expect(events.some((event) => event.includes('OS permission-dialog automation is unavailable'))).toBe(true);
+  expect(events.indexOf('REENABLE_CONFIRMED')).toBeLessThan(events.indexOf('before-settings'));
+  expect(events.some((event) => event.includes('usually restores previously approved access without prompting'))).toBe(true);
+  expect(events.some((event) => event.includes('only if Chrome actually shows'))).toBe(true);
   expect(events.some((event) => event.includes('never use the production popup Disable'))).toBe(true);
   let ack = false;
-  await expect(run({ ui: async () => false, acknowledge: async () => { ack = true; return 'NEW_CHROME_ALLOW_SEEN'; } })).rejects.toThrow('observable');
+  await expect(run({ ui: async () => false, acknowledge: async () => { ack = true; return 'REENABLE_CONFIRMED'; } })).rejects.toThrow('observable');
   expect(ack).toBe(false);
   await expect(run({ acknowledge: async () => 'DONE' })).rejects.toThrow('acknowledgement');
+  for (const token of ['', 'NEW_CHROME_ALLOW_SEEN', 'NEW_CHROME_ALLOW_NOT_SEEN']) {
+    await expect(run({ acknowledge: async () => token })).rejects.toThrow('acknowledgement');
+  }
+  await expect(run({ read: async mode => mode !== 'reenabled' })).rejects.toThrow('observable');
+  await expect(run({ read: async mode => { if (mode === 'reenabled') throw Error('read failed'); return true; } })).rejects.toThrow('read failed');
+  let storageChanged = false;
+  await expect(run({ acknowledge: async token => { storageChanged = true; return token; }, read: async mode => mode !== 'reenabled' || !storageChanged })).rejects.toThrow('changed during acknowledgement');
   let changed = false;
   await expect(run({ acknowledge: async (token) => { changed = true; return token; }, ui: async () => !changed })).rejects.toThrow('changed during acknowledgement');
+});
+
+test('re-enable retains observed native status across acknowledgement focus loss but still rechecks page and durable state', async () => {
+  let popupClosed = false;
+  const phases = [];
+  const run = (overrides = {}) => runPermissionCycleCheckpoints({
+    instruct: () => {},
+    read: async () => true,
+    ui: async (mode, { afterAcknowledgement = false } = {}) => {
+      if (mode === 'quiet') return true;
+      phases.push(afterAcknowledgement);
+      return !popupClosed || afterAcknowledgement;
+    },
+    acknowledge: async token => { popupClosed = true; return token; },
+    integrity: async () => {},
+    waitForState: observe => observe(),
+    ...overrides,
+  });
+  await expect(run()).resolves.toEqual({ reenableEvidence: 'human-reenable-action-and-verified-state-no-new-dialog-required' });
+  expect(phases).toEqual([false, true]);
+  popupClosed = false;
+  await expect(run({ read: async mode => mode !== 'reenabled' || !popupClosed })).rejects.toThrow('changed during acknowledgement');
+  popupClosed = false;
+  await expect(run({ ui: async mode => mode === 'quiet' || !popupClosed })).rejects.toThrow('changed during acknowledgement');
 });
 
 const root = resolve(process.cwd());
 test('final attestation refuses incomplete predicates and requires fresh binding on both sides of ATTEST', async () => {
   const { WORKFLOW_PREDICATES } = await import('../scripts/active-tab-qa.mjs');
   const candidate = { commit: 'a'.repeat(40), manifestSha256: 'b'.repeat(64), archiveSha256: 'c'.repeat(64) };
-  const results = Object.fromEntries(WORKFLOW_PREDICATES.map(key => [key, key === 'accessibility' ? true : 'passed']));
+  const results = { ...Object.fromEntries(WORKFLOW_PREDICATES.map(key => [key, key === 'accessibility' ? true : 'passed'])), reenableEvidence: 'human-reenable-action-and-verified-state-no-new-dialog-required' };
   for (const failure of ['missing', 'failed', 'ack', 'before', 'after', 'none']) {
     const events = []; let checks = 0;
     const supplied = { ...results };
@@ -79,7 +118,7 @@ test('final attestation refuses incomplete predicates and requires fresh binding
       emit: value => events.push(JSON.parse(value)) };
     const run = attestCompletedWorkflow(candidate, supplied, options);
     if (failure !== 'none') { await expect(run).rejects.toThrow(); expect(events.some(value => typeof value === 'object')).toBe(false); }
-    else { await run; expect(events.slice(0, 3)).toEqual(['check', 'ack', 'check']); expect(events[3].schemaVersion).toBe(6); }
+    else { await run; expect(events.slice(0, 3)).toEqual(['check', 'ack', 'check']); expect(events[3].schemaVersion).toBe(7); }
     if (['missing', 'failed', 'before'].includes(failure)) expect(events).not.toContain('ack');
   }
 });
@@ -164,18 +203,29 @@ test('AUTOMATED ONLY: real headful native popup without Playwright Page supports
     // OS Cancel here is automated evidence; the main runner never answers.
     execFileSync('xdotool', ['key', '--window', focused, 'Escape'], { timeout: 5000 });
     await expect.poll(() => observer.passed()).toBe(true);
+    await observer.seal(); popup = undefined; // released CDP handle, not closed UI
+    await synthetic.close(); synthetic = undefined; // release fixture setup attachment too
+    expect(await readNativePopup(context, url, () => true)).toBe(true);
+    // Administrative target destruction is AUTOMATED fault injection for the
+    // post-DONE focus-loss lifecycle, not a human acknowledgement or consent.
+    // First prove no observer/setup attachment pins the real native target.
+    const destroy = await context.browser().newBrowserCDPSession();
+    try {
+      const targets = (await destroy.send('Target.getTargets')).targetInfos.filter(item => item.url === url && item.type === 'page');
+      expect(targets).toHaveLength(1);
+      expect(targets[0].attached).toBe(false);
+      expect((await destroy.send('Target.closeTarget', { targetId: targets[0].targetId })).success).toBe(true);
+    } finally { await destroy.detach(); }
+    await expect.poll(() => readNativePopup(context, url, () => true)).toBe(false);
+    expect(await observer.passed({ afterAcknowledgement: true })).toBe(true);
     await observer.close(); popup = undefined;
-    popup = await passiveNativePopup(context, url);
-    await synthetic.evaluate(() => { setTimeout(() => window.close(), 0); return true; });
-    await expect.poll(async () => { try { await popup.evaluate(() => true); return false; } catch { return true; } }).toBe(true);
     expect(await readNativePopup(context, url, () => true)).toBe(false);
-    await popup.close(); popup = undefined;
     // A same-URL extension tab is not a toolbar action popup.
     const ordinaryTab = await context.newPage();
     await ordinaryTab.goto(url);
     expect(await readNativePopup(context, url, () => true)).toBe(false);
     await ordinaryTab.close();
-    await synthetic.close(); synthetic = await syntheticNativePopup(context, worker);
+    synthetic = await syntheticNativePopup(context, worker);
     expect(await readNativePopup(context, url, () => true)).toBe(true);
   } finally {
     await popup?.close(); await synthetic?.close(); await context?.close();
@@ -509,9 +559,96 @@ test('synthetic native dialog events require fresh exact popup, record, message 
   }
 });
 
+test('native history evidence survives closure only after fresh complete validation, and cannot be rehabilitated by late events', async () => {
+  const { sha256 } = await import('../scripts/active-tab-qa.mjs');
+  const hash = value => sha256(JSON.stringify(value));
+  for (const failure of ['none', 'no-before-ack', 'unresolved', 'untrusted', 'wrong-record', 'wrong-message', 'wrong-type', 'wrong-result', 'late-extra']) {
+    const session = new EventEmitter(); session.send = async () => {}; session.detach = async () => {};
+    let closed = false;
+    let calls = 0;
+    const popup = { isClosed: () => closed, evaluate: async () => {
+      if (closed) throw Error('destroyed target must not be read');
+      if (++calls === 1) return undefined;
+      return { counter: failure === 'untrusted' ? 0 : 1, digest: hash(failure === 'wrong-record' ? 'other' : 'target') };
+    } };
+    const observer = await observeNativeHistoryDialog({ newCDPSession: async () => session }, popup, hash('target'), hash('expected'), false);
+    session.emit('Page.javascriptDialogOpening', { type: failure === 'wrong-type' ? 'alert' : 'confirm', message: failure === 'wrong-message' ? 'other' : 'expected' });
+    if (failure !== 'unresolved') session.emit('Page.javascriptDialogClosed', { result: failure === 'wrong-result' });
+    if (!['no-before-ack', 'unresolved'].includes(failure)) {
+      if (['untrusted', 'wrong-record', 'wrong-message', 'wrong-type', 'wrong-result'].includes(failure)) await expect(observer.passed()).rejects.toThrow('mismatch');
+      else expect(await observer.passed()).toBe(true);
+    }
+    if (failure === 'none') await observer.seal();
+    closed = true;
+    const before = calls;
+    if (failure === 'unresolved') session.emit('Page.javascriptDialogClosed', { result: false });
+    if (failure === 'late-extra') session.emit('Page.javascriptDialogOpening', { type: 'confirm', message: 'expected' });
+    if (failure === 'late-extra') await expect(observer.passed({ afterAcknowledgement: true })).rejects.toThrow('sequence invalid');
+    else expect(await observer.passed({ afterAcknowledgement: true })).toBe(failure === 'none');
+    expect(calls).toBe(before);
+    await observer.close();
+  }
+});
+
+test.each(['history', 'final'])('%s checkpoints validate transient UI before acknowledgement, then durable state and integrity after popup loss', async (kind) => {
+  for (const failure of ['none', 'ui', 'durable', 'integrity']) {
+    let closed = false;
+    let acknowledgements = 0;
+    let integrityChecks = 0;
+    let observations = 0;
+    const options = {
+      instruct: () => { closed = false; }, // model each fresh human-opened popup
+      ui: async (_mode, { afterAcknowledgement = false } = {}) => {
+        expect(afterAcknowledgement).toBe(false);
+        observations++;
+        return !closed && failure !== 'ui';
+      },
+      read: async mode => mode === 'baseline' || failure !== 'durable' || !closed,
+      acknowledge: async () => { acknowledgements++; closed = true; return 'DONE'; },
+      integrity: async () => { integrityChecks++; if (failure === 'integrity') throw Error('checkpoint integrity drift'); },
+      waitForState: observe => observe(),
+      nativeDialog: async () => ({ passed: async () => true, seal: async () => {}, close: async () => {} }),
+      restart: async () => {}, quiet: async () => true,
+    };
+    const run = kind === 'history' ? runHistorySubscriptionCheckpoints : runFinalCheckpoints;
+    if (failure === 'none') {
+      await expect(run(options)).resolves.toBeUndefined();
+      expect(observations).toBe(kind === 'history' ? 14 : 3);
+      expect(integrityChecks).toBe(kind === 'history' ? 14 : 4);
+    } else await expect(run(options)).rejects.toThrow(failure === 'integrity' ? 'integrity drift' : failure === 'ui' ? 'observable' : 'changed during acknowledgement');
+    if (failure === 'ui') expect(acknowledgements).toBe(0);
+  }
+});
+
+test('history keeps transient draft/delete editors alive until the next explicit action and still demands every numbered DONE', async () => {
+  const acknowledgements = [];
+  const observed = [];
+  let popupClosed = true;
+  let lastVisible;
+  await runHistorySubscriptionCheckpoints({
+    instruct: () => {
+      if (['draft', 'delete-prompt'].includes(lastVisible)) expect(popupClosed).toBe(false);
+      else popupClosed = false; // separate human open for the new persisted stage
+    },
+    ui: async mode => { expect(popupClosed).toBe(false); lastVisible = mode; observed.push(mode); return true; },
+    read: async () => true,
+    waitForState: observe => observe(),
+    acknowledge: async instruction => {
+      expect(['draft', 'delete-prompt']).not.toContain(lastVisible);
+      acknowledgements.push(instruction.slice(0, instruction.indexOf('.')));
+      popupClosed = true;
+      return 'DONE';
+    },
+    integrity: async () => {},
+    nativeDialog: async () => ({ passed: async () => true, seal: async () => {}, close: async () => {} }),
+  });
+  expect(acknowledgements).toEqual(['18', '19', '20', '21', '22', '23', '23a', '23b', '24', '25', '26', '27', '28', '29']);
+  expect(observed).toEqual(['history', 'reviewed', 'draft', 'cancelled', 'draft', 'saved-one', 'history-delete-cancelled', 'history-deleted', 'saved-two', 'saved-two', 'delete-prompt', 'closed-two', 'delete-prompt', 'deleted-one']);
+});
+
 test('history native Cancel cannot pass with unchanged pre-click state and DONE alone', async () => {
   const prompts = [];
-  await expect(runHistorySubscriptionCheckpoints({ instruct: (text) => prompts.push(text),
+  await expect(runHistorySubscriptionCheckpoints({ integrity: async () => {}, instruct: (text) => prompts.push(text),
     read: async () => true, ui: async () => true, waitForState: (observe) => observe(),
     acknowledge: async () => 'DONE',
   })).rejects.toThrow('native history dialog observer unavailable');
@@ -521,7 +658,7 @@ test('history native Cancel cannot pass with unchanged pre-click state and DONE 
 test('synthetic human CRUD orchestration never advances without observable UI, storage and separate DONE', async () => {
   for (const failure of ['ui', 'storage', 'ack']) {
     const events = [];
-    await expect(runHistorySubscriptionCheckpoints({ nativeDialog: async () => ({ passed: async () => true, close: async () => {} }),
+    await expect(runHistorySubscriptionCheckpoints({ integrity: async () => {}, nativeDialog: async () => ({ passed: async () => true, seal: async () => {}, close: async () => {} }),
       instruct: () => {}, waitForState: (observe) => observe(),
       read: async (mode) => { events.push(mode); return mode === 'baseline' || failure !== 'storage'; },
       ui: async () => failure !== 'ui',
@@ -532,13 +669,14 @@ test('synthetic human CRUD orchestration never advances without observable UI, s
   }
   let release;
   const events = [];
-  const pending = runHistorySubscriptionCheckpoints({ nativeDialog: async () => ({ passed: async () => true, close: async () => {} }), instruct: () => {}, read: async (mode) => { events.push(mode); return true; }, ui: async () => true,
+  const pending = runHistorySubscriptionCheckpoints({ integrity: async () => {}, nativeDialog: async () => ({ passed: async () => true, seal: async () => {}, close: async () => {} }), instruct: () => {}, read: async (mode) => { events.push(mode); return true; }, ui: async () => true,
     acknowledge: () => events.filter((value) => value === 'history').length === 1 && !release ? new Promise((resolveAck) => { release = resolveAck; }) : Promise.resolve('DONE') });
   await vi.waitFor(() => expect(release).toBeTypeOf('function'));
   expect(events).toEqual(['baseline', 'history']);
   release('DONE');
   await expect(pending).resolves.toBeUndefined();
-  expect(events).toEqual(['baseline', ...['history', 'reviewed', 'unchanged', 'unchanged', 'unchanged', 'confirmed', 'history-delete-cancelled', 'history-deleted', 'added', 'edited', 'unchanged', 'unchanged', 'unchanged', 'deleted'].flatMap((mode) => mode === 'history-delete-cancelled' ? ['history-delete-baseline', mode, mode] : [mode, mode])]);
+  const groups = [['history'], ['reviewed'], ['unchanged', 'unchanged'], ['unchanged', 'confirmed'], ['history-delete-baseline', 'history-delete-cancelled'], ['history-deleted'], ['added'], ['edited'], ['unchanged', 'unchanged'], ['unchanged', 'deleted']];
+  expect(events).toEqual(['baseline', ...groups.flatMap(modes => [...modes, ...Array(modes[0] === 'history-delete-baseline' ? 1 : modes.length).fill(modes.at(-1))])]);
   const source = readFileSync(resolve(root, 'scripts/manual-active-tab-qa.mjs'), 'utf8');
   expect(source.indexOf('await runHistorySubscriptionCheckpoints({', source.indexOf('export async function reviewCandidate'))).toBeGreaterThan(source.indexOf('await runSiteCheckpoints({'));
   expect(source).not.toContain('stopPendingHumanStages');
@@ -547,18 +685,20 @@ test('synthetic human CRUD orchestration never advances without observable UI, s
 
 test('synthetic acknowledgement-time drift aborts and each CRUD prompt fails closed on missing acknowledgement', async () => {
   let current = true;
-  await expect(runHistorySubscriptionCheckpoints({ nativeDialog: async () => ({ passed: async () => true, close: async () => {} }),
-    instruct: () => {}, ui: async () => current, read: async () => true,
+  await expect(runHistorySubscriptionCheckpoints({ integrity: async () => {}, nativeDialog: async () => ({ passed: async () => true, seal: async () => {}, close: async () => {} }),
+    instruct: () => {}, ui: async () => true, read: async () => current,
     acknowledge: async () => { current = false; return 'DONE'; },
   })).rejects.toThrow('changed during acknowledgement');
   for (let rejectedStage = 1; rejectedStage <= 14; rejectedStage++) {
     let prompts = 0;
     let acknowledgements = 0;
-    await expect(runHistorySubscriptionCheckpoints({ nativeDialog: async () => ({ passed: async () => true, close: async () => {} }),
+    await expect(runHistorySubscriptionCheckpoints({ integrity: async () => {}, nativeDialog: async () => ({ passed: async () => true, seal: async () => {}, close: async () => {} }),
       instruct: () => { prompts++; }, ui: async () => true, read: async () => true,
       acknowledge: async () => ++acknowledgements === rejectedStage ? '' : 'DONE',
     })).rejects.toThrow('acknowledgement');
-    expect(prompts).toBe(rejectedStage);
+    // A transient prompt and its completion are both observed before either
+    // separate DONE; a rejection never advances beyond that paired boundary.
+    expect(prompts).toBe([1, 2, 4, 4, 6, 6, 7, 8, 9, 10, 12, 12, 14, 14][rejectedStage - 1]);
     expect(acknowledgements).toBe(rejectedStage);
   }
 });
@@ -892,4 +1032,61 @@ test('Chromium reaches the pinned HTTPS fixture but cannot reach 127.0.0.2 or a 
     await browser?.close();
     await runCleanupSteps([() => close(fixture.server), () => close(alternate.server), () => tls.cleanup()]);
   }
+});
+
+// Synthetic orchestration only: never human consent.
+test.each(['same', 'reopened', 'reloaded', 'missing'].flatMap(failure => [21, 23, 27, 29].map(stage => [failure, stage])))('paired popup document identity: %s at stage %s', async (failure, stage) => {
+  let currentStage;
+  const run = rawHistoryCheckpoints({
+    instruct: text => { currentStage = Number.parseInt(text, 10); }, acknowledge: async () => 'DONE', read: async () => true,
+    integrity: async () => {}, waitForState: observe => observe(),
+    nativeDialog: async () => ({ passed: async () => true, seal: async () => {}, close: async () => {} }),
+    ui: async (visible, options) => {
+      const second = currentStage === stage;
+      options?.onIdentity?.(second && failure !== 'same' ? failure === 'missing' ? undefined : failure : 'original');
+      return true;
+    },
+  });
+  if (failure === 'same') await expect(run).resolves.toBeUndefined();
+  else await expect(run).rejects.toThrow('popup document');
+});
+
+test.each([false, true])('native preparation after DONE waits for human reopen (timeout=%s)', async timeout => {
+  const events = [];
+  let open = true;
+  const run = runHistorySubscriptionCheckpoints({
+    instruct: text => events.push(text.startsWith('23a.') || text.startsWith('23b.') ? 'Delete' : 'instruction'),
+    acknowledge: async () => { open = false; return 'DONE'; },
+    read: async () => true, ui: async () => true, integrity: async () => {}, waitForState: observe => observe(),
+    prepareNativePopup: async () => {
+      expect(open).toBe(false); events.push('prepare');
+      if (timeout) throw Error('human reopen timeout');
+      open = true; events.push('discovered');
+    },
+    nativeDialog: async () => {
+      if (!open) throw Error('popup absent');
+      events.push('collector');
+      return { passed: async () => true, seal: async () => {}, close: async () => {} };
+    },
+  });
+  if (timeout) { await expect(run).rejects.toThrow('human reopen timeout'); expect(events).not.toContain('Delete'); }
+  else { await expect(run).resolves.toBeUndefined(); expect(events.filter(e => ['prepare', 'discovered', 'collector', 'Delete'].includes(e))).toEqual(Array(2).fill(['prepare', 'discovered', 'collector', 'Delete']).flat()); }
+});
+
+test.each([21, 23, 27, 29])('paired observation timeout rejects before DONE at stage %s', async stage => {
+  let currentStage;
+  const acknowledged = [];
+  await expect(rawHistoryCheckpoints({
+    instruct: text => { currentStage = Number.parseInt(text, 10); },
+    acknowledge: async text => { acknowledged.push(Number.parseInt(text, 10)); return 'DONE'; },
+    read: async () => true, integrity: async () => {},
+    ui: async (_mode, options) => { options.onIdentity('stable'); return currentStage !== stage; },
+    waitForState: async observe => {
+      if (await observe()) return true;
+      throw Error('bounded paired observation timeout');
+    },
+    nativeDialog: async () => ({ passed: async () => true, seal: async () => {}, close: async () => {} }),
+  })).rejects.toThrow('bounded paired observation timeout');
+  expect(acknowledged).not.toContain(stage - 1);
+  expect(acknowledged).not.toContain(stage);
 });

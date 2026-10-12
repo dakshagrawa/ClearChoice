@@ -54,7 +54,7 @@ export async function passiveNativePopup(context, url, { commandTimeoutMs = 5_00
     const targetId = targets[0].targetId;
     ({ sessionId } = await cdp.send('Target.attachToTarget', { targetId, flatten: false }));
     const send = async (method, params = {}) => {
-      if (!['Runtime.evaluate', 'Page.enable'].includes(method)) throw new Error('non-observation popup command refused');
+      if (!['Runtime.evaluate', 'Page.enable', 'Page.getFrameTree'].includes(method)) throw new Error('non-observation popup command refused');
       if (closed) throw new Error('native popup target closed');
       const id = ++next;
       const response = new Promise((resolve, reject) => {
@@ -88,8 +88,16 @@ export async function passiveNativePopup(context, url, { commandTimeoutMs = 5_00
     if (await evaluate(async expected => location.href === expected && chrome.runtime.getURL('popup/index.html') === expected && await chrome.tabs.getCurrent() === undefined, url) !== true) {
       await close(); return null;
     }
+    const identity = async () => {
+      await assertTarget();
+      const { frameTree } = await send('Page.getFrameTree');
+      await assertTarget();
+      const frame = frameTree?.frame;
+      if (!frame?.id || !frame.loaderId || frame.url !== url) throw new Error('native popup document identity unavailable');
+      return JSON.stringify([contextId, targetId, frame.id, frame.loaderId]);
+    };
     const session = { send, on: (...args) => events.on(...args), off: (...args) => events.off(...args), detach: close };
-    return { evaluate, session, isClosed: () => closed, close };
+    return { evaluate, identity, session, isClosed: () => closed, close };
   } catch (error) {
     await close().catch(() => {});
     throw error;
@@ -98,10 +106,18 @@ export async function passiveNativePopup(context, url, { commandTimeoutMs = 5_00
 
 // Reacquire only for independent UI samples. A dialog observer retains its exact
 // target/session instead, so reopening cannot satisfy an old click checkpoint.
-export async function readNativePopup(context, url, predicate, arg) {
+export async function readNativePopup(context, url, predicate, arg, { onIdentity } = {}) {
   const popup = await passiveNativePopup(context, url);
   if (!popup) return false;
-  try { return await popup.evaluate(predicate, arg) === true; }
+  try {
+    const before = onIdentity ? await popup.identity() : undefined;
+    const passed = await popup.evaluate(predicate, arg) === true;
+    if (onIdentity) {
+      if (before !== await popup.identity()) throw new Error('native popup document changed during observation');
+      onIdentity(before);
+    }
+    return passed;
+  }
   finally { await popup.close(); }
 }
 

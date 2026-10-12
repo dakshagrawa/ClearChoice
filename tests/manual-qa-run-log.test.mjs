@@ -56,6 +56,8 @@ test('only structured checkpoint IDs and known acknowledgement tokens are retain
   expect(checkpointId('15f. SPA EXIT: private instruction text')).toBe('15f');
   expect(checkpointId('999. PRIVATE')).toBe(null);
   expect(acknowledgementToken('Type DENIED after private text')).toBe('DENIED');
+  expect(acknowledgementToken('Type REENABLE_CONFIRMED after real Enable')).toBe('REENABLE_CONFIRMED');
+  expect(acknowledgementToken('Type NEW_CHROME_ALLOW_SEEN')).toBe(null);
   expect(acknowledgementToken('Type SECRET')).toBe(null);
 });
 test('entrypoint records setup failures and original failure survives rejecting cleanup', async () => {

@@ -5,7 +5,7 @@ import { expect, test, vi } from 'vitest';
 import { passiveNativePopup, readNativePopup, waitForNativePopup } from '../scripts/passive-native-popup.mjs';
 
 const url = `chrome-extension://${'a'.repeat(32)}/popup/index.html`;
-function fixture({ targets, native = true, stall = false } = {}) {
+function fixture({ targets, native = true, stall = false, loaderId = 'document-one' } = {}) {
   const target = { targetId: 'native', type: 'page', browserContextId: 'owned', url };
   const cdp = new EventEmitter();
   cdp.detach = vi.fn(async () => {});
@@ -18,6 +18,7 @@ function fixture({ targets, native = true, stall = false } = {}) {
     if (method === 'Target.attachToTarget') return { sessionId: 'exact' };
     if (method === 'Target.sendMessageToTarget') {
       const message = JSON.parse(params.message);
+      if (message.method === 'Page.getFrameTree') { queueMicrotask(() => cdp.emit('Target.receivedMessageFromTarget', { sessionId: params.sessionId, message: JSON.stringify({ id: message.id, result: { frameTree: { frame: { id: 'frame', loaderId, url } } } }) })); return; }
       if (!stall) queueMicrotask(() => cdp.emit('Target.receivedMessageFromTarget', { sessionId: params.sessionId, message: JSON.stringify({ id: message.id, result: { result: { value: message.params.expression.includes('chrome.tabs.getCurrent') ? native : true } } }) }));
     }
   });
@@ -61,4 +62,18 @@ test('missing human outcome and stalled command abort within scoped deadlines', 
   const f = fixture({ stall: true });
   await expect(passiveNativePopup(f.context, url, { commandTimeoutMs: 20 })).rejects.toThrow('timed out');
   expect(f.cdp.detach).toHaveBeenCalledOnce();
+});
+
+test('non-content identity is stable across detached samples and changes for reload/replacement', async () => {
+  const sample = async f => {
+    let identity;
+    expect(await readNativePopup(f.context, url, 'true', undefined, { onIdentity: value => { identity = value; } })).toBe(true);
+    expect(f.cdp.detach).toHaveBeenCalledOnce();
+    return identity;
+  };
+  const original = await sample(fixture());
+  expect(await sample(fixture())).toBe(original);
+  expect(await sample(fixture({ loaderId: 'document-two' }))).not.toBe(original);
+  const replaced = fixture(); replaced.target.targetId = 'replacement';
+  expect(await sample(replaced)).not.toBe(original);
 });

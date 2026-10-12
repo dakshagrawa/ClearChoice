@@ -2,11 +2,11 @@
 import { expect, test } from 'vitest';
 import { runInNewContext } from 'node:vm';
 const validate = runInNewContext(await storageValidatorSource(), { Intl, URL });
-import { WORKFLOW_PREDICATES } from '../scripts/active-tab-qa.mjs';
+import { MIXED_EVIDENCE, WORKFLOW_PREDICATES } from '../scripts/active-tab-qa.mjs';
 import { createManualActiveTabQaMarker, runFinalCheckpoints } from '../scripts/manual-active-tab-qa.mjs';
 import { storageValidatorSource, observePermissionCycle, observeFinalState, observeFinalUi, observeHistorySubscriptions, runHumanStage, runWithCleanup, observeCleanState, observeSiteState, waitForObservation } from '../scripts/manual-qa-stages.mjs';
 
-test('second consent derives generations and Settings observer rejects partial cleanup and identity changes', async () => {
+test('re-enable derives generations and Settings observer rejects partial cleanup and identity changes', async () => {
   const { state, finding, confirmed } = crudFixture();
   const origin = finding.origin;
   state.subscriptions = [confirmed]; // Also prove linked subscriptions survive.
@@ -382,7 +382,7 @@ test('automatic duplicate lifecycle binds canonical IDs, ordinals and stable pro
   expect(Object.values(host).every((v) => typeof v === 'number' || /^[a-f0-9]{64}$/.test(v))).toBe(true);
 });
 
-const results = () => Object.fromEntries(WORKFLOW_PREDICATES.map((name) => [name, name === 'accessibility' ? true : 'passed']));
+const results = () => ({ ...Object.fromEntries(WORKFLOW_PREDICATES.map((name) => [name, name === 'accessibility' ? true : 'passed'])), reenableEvidence: MIXED_EVIDENCE.reenableEvidence });
 
 test('synthetic final readbacks preserve exact source, subscriptions, retention and revoked generation through restart', async () => {
   const { state, finding, confirmed } = crudFixture();
@@ -471,7 +471,14 @@ test('marker constructor cannot manufacture passed workflow results', () => {
     expect(() => createManualActiveTabQaMarker(candidate, incomplete)).toThrow();
   }
   expect(() => createManualActiveTabQaMarker(candidate, { ...results(), url: 'https://fixture.test' })).toThrow();
-  expect(createManualActiveTabQaMarker(candidate, results()).schemaVersion).toBe(6);
+  for (const label of [undefined, 'NEW_CHROME_ALLOW_SEEN', 'browserObserved']) {
+    const supplied = { ...results(), reenableEvidence: label };
+    if (label === undefined) delete supplied.reenableEvidence;
+    expect(() => createManualActiveTabQaMarker(candidate, supplied)).toThrow();
+  }
+  const marker = createManualActiveTabQaMarker(candidate, results());
+  expect(marker.schemaVersion).toBe(7);
+  expect(marker.reenableEvidence).toBe('human-reenable-action-and-verified-state-no-new-dialog-required');
 });
 
 test('stage does not advance until the observation and explicit acknowledgement both pass', async () => {

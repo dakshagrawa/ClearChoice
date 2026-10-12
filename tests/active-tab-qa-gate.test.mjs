@@ -16,7 +16,7 @@ const reviewer = 'local-human-attestation';
 
 function marker(overrides = {}) {
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     ...MIXED_EVIDENCE,
     optInConsent: 'passed',
     optInDenial: 'passed',
@@ -39,14 +39,26 @@ function marker(overrides = {}) {
   };
 }
 
-test('schema 6 binds the complete archive and rejects old or changed archive attestations', () => {
+test('schema 7 binds the complete archive and rejects old or changed archive attestations', () => {
   const archiveSha256 = 'c'.repeat(64);
   const expected = { commit, manifestSha256, archiveSha256 };
   expect(validateManualActiveTabMarker(marker(), expected)).toEqual({ ok: true });
-  for (const schemaVersion of [1, 2, 3, 4, 5]) {
+  for (const schemaVersion of [1, 2, 3, 4, 5, 6]) {
     expect(validateManualActiveTabMarker(marker({ schemaVersion }), expected).ok).toBe(false);
   }
   expect(validateManualActiveTabMarker(marker({ archiveSha256: 'd'.repeat(64) }), expected).ok).toBe(false);
+});
+
+test('re-enable evidence rejects absent, mislabeled and genuine schema 6 shapes', () => {
+  const expected = { commit, manifestSha256, archiveSha256: 'c'.repeat(64) };
+  expect(marker().reenableEvidence).toBe('human-reenable-action-and-verified-state-no-new-dialog-required');
+  for (const label of [undefined, 'NEW_CHROME_ALLOW_SEEN', 'browserObserved', 'human-reenable-action']) {
+    const value = marker({ reenableEvidence: label });
+    if (label === undefined) delete value.reenableEvidence;
+    expect(validateManualActiveTabMarker(value, expected).ok).toBe(false);
+  }
+  const legacy = marker({ schemaVersion: 6 }); delete legacy.reenableEvidence;
+  expect(validateManualActiveTabMarker(legacy, expected).ok).toBe(false);
 });
 
 test('denial contract rejects absent labels, browser callback claims and genuine legacy schema 5 shapes', () => {

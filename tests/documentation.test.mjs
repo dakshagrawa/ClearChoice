@@ -83,7 +83,8 @@ test('candidate evidence and checklist separate current blocked gate from histor
     expect(document).toMatch(/existing archive.*no rebuild/i);
     expect(document).toMatch(/Task 16B.*pending/i);
     expect(document).toMatch(/not final-candidate proof/);
-    expect(document).toContain('Schema 6');
+    expect(document).toContain('Schema 7');
+    expect(document).toContain('human-reenable-action-and-verified-state-no-new-dialog-required');
     expect(document).toContain('humanReportedDenial-correlated-real-request-and-verified-isolation-not-browserObserved');
     expect(document).toContain('do not establish human toolbar access or permission consent');
     expect(document).toMatch(/permission hang[^.]*resolved[^.]*exact mock-port seed/i);
@@ -114,7 +115,7 @@ test('tester protocol limits voluntary sanitized external feedback', () => {
   expect(protocol).toMatch(/mock-only human QA protocol/i);
   expect(protocol).toMatch(/only the disposable Chromium profile and mock pages/i);
   expect(protocol).toMatch(/Never use your personal profile, real checkout, purchase, payment, cancellation or account page/i);
-  expect(protocol).toMatch(/no human QA has been performed/i);
+  expect(protocol).toMatch(/no complete human QA pass is available/i);
   expect(protocol).toMatch(/must not.*seed permissions to imitate consent/i);
   expect(template).toMatch(/voluntary and external/i);
   expect(template).toMatch(/no feedback collection by the extension/i);

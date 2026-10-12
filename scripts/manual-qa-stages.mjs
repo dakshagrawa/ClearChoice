@@ -144,7 +144,7 @@ export async function observeSiteState(api, mode, origin, host = globalThis, val
   return { passed, historyCount: history.length, subscriptionCount: subscriptions.length };
 }
 
-// Human-only second consent/Settings cycle. Retain digests/counts, not records.
+// Human-only re-enable action/Settings cycle; no new Chrome dialog required. Retain digests/counts, not records.
 export async function observePermissionCycle(api, mode, origin, host = globalThis, validate, siteObserve = observeSiteState) {
   if (!/^https:\/\/checkout-a\.test:[1-9]\d{0,4}$/.test(origin) || Number(new URL(origin).port) > 65535) throw new Error('invalid cycle origin');
   const stored = await api.storage.local.get(null);

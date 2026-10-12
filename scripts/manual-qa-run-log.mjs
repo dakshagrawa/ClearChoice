@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 const checkpoints = new Set(['setup', ...Array.from({ length: 37 }, (_, i) => String(i + 1)), '15a', '15b', '15c', '15d', '15e', '15f', '15g', '17a', '17b', '23a', '23b']);
-const acknowledgements = new Set(['DONE', 'RESTORED', 'ANALYZED', 'DENIED', 'KEYBOARD_AND_POINTER_REVIEWED', 'NEW_CHROME_ALLOW_SEEN', 'CHROME_SETTINGS_A_REMOVED', 'SYNTHETIC_EXPIRY_REVIEWED', 'PUBLIC_GUIDES_AND_CATALOG_REVIEWED', 'ATTEST']);
+const acknowledgements = new Set(['DONE', 'RESTORED', 'ANALYZED', 'DENIED', 'KEYBOARD_AND_POINTER_REVIEWED', 'REENABLE_CONFIRMED', 'CHROME_SETTINGS_A_REMOVED', 'SYNTHETIC_EXPIRY_REVIEWED', 'PUBLIC_GUIDES_AND_CATALOG_REVIEWED', 'ATTEST']);
 const eventCodes = { start: 'run_started', binding: 'artifact_bound', checkpoint: 'stage_started', ack_wait: 'ack_wait', ack: 'ack_observed', observation: 'observation', stall: 'waiting', issue: 'issue', failure: 'run_failed', cancellation: 'run_cancelled', end: 'run_completed' };
 const bools = new Set(['supported', 'uniquePanel', 'dismissPresent', 'visible', 'enabled', 'inViewport', 'pointerHit', 'reachable', 'integrity', 'href', 'forms', 'controlIdentity', 'controlValues', 'controlChecked', 'controlDisabled', 'hostNodes', 'observed', 'acknowledged', 'actionObserved', 'hasGrant', 'sitePermission', 'registered', 'expectedHasGrant']);
 const counts = new Set(['panelCount', 'findingCount', 'badgeCount', 'historyCount', 'subscriptionCount', 'permissionCount', 'scriptCount', 'grantCount']);
