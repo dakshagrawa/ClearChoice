@@ -24,6 +24,8 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/clearchoice-scratch"
           printf 'TMPDIR=%s\n' "$RUNNER_TEMP/clearchoice-scratch" >> "$GITHUB_ENV"
+          # The immutable QA snapshot has legacy tests pinned to this scratch path.
+          sudo install -d -o "$(id -u)" -g "$(id -g)" /home/daksh/.hermes/cache/scratch
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - name: Native test prerequisites
