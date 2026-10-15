@@ -5,8 +5,8 @@ import { expect, test } from 'vitest';
 import { generateManifest } from '../scripts/build-manifest.mjs';
 
 const repositoryRoot = resolve(process.cwd());
-const candidatePackageVersion = '0.4.0-beta.1';
-const candidateChromeVersion = '0.4.0';
+const candidatePackageVersion = '1.0.0-rc.1';
+const candidateChromeVersion = '1.0.0';
 const chromeVersionPattern = /^\d+(?:\.\d+){0,3}$/;
 const betaPermissions = ['activeTab', 'scripting', 'storage'];
 const betaCommands = { _execute_action: { suggested_key: { default: 'Ctrl+Shift+Y' } } };

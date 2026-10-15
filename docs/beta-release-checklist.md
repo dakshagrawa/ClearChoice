@@ -1,3 +1,9 @@
+# ClearChoice 1.0.0-rc.1 production acceptance checklist
+
+This is the unreleased `1.0.0-rc.1` production release candidate, not release-ready or published. Chrome numeric version is `1.0.0`. Production acceptance remains blocked; human QA is stopped. Existing privacy and permission requirements and all uncompleted gates below apply to promotion. See [production readiness](../production-readiness.md).
+
+The beta identity and execution results below are historical baseline evidence.
+
 # ClearChoice 0.4.0-beta.1 release checklist
 
 This is the unreleased `0.4.0-beta.1` private opt-in beta candidate, not release-ready or published. Notices are advisory-only; false positives and false negatives remain possible. ClearChoice makes no legal, compliance, safety, or deceptive-site conclusion and does not automate purchases, payments, account actions, cancellations, refunds, or form submission. Chrome Web Store review and submission are future separate work, not complete.

@@ -1,3 +1,7 @@
+# 1.0.0-rc.1 (unreleased)
+
+Production candidate identity; existing local subscription and checkout functionality preserved. Automated validation and unresolved acceptance are recorded in production-readiness.md. No stable promotion, publication, or human approval is claimed.
+
 # Changelog
 
 ## 0.4.0-beta.1 (unreleased private opt-in beta candidate)

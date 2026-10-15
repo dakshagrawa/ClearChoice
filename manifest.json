@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "ClearChoice",
-  "version": "0.4.0",
-  "version_name": "0.4.0-beta.1",
-  "description": "A Linux Chromium private-beta extension popup for checkout analysis.",
+  "version": "1.0.0",
+  "version_name": "1.0.0-rc.1",
+  "description": "A local Linux Chromium extension for checkout analysis and subscription tracking.",
   "action": {
     "default_popup": "popup/index.html"
   },

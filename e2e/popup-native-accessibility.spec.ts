@@ -5,6 +5,62 @@ import { PackagedRuntime } from './packaged-runtime';
 
 type Popup = Awaited<ReturnType<PackagedRuntime['popup']>>;
 
+// Shared rendered geometry checks. Only runtime.popup() supplies evidence for
+// native action-popup width; static payload snapshots below test reflow only.
+const layoutMeasurements = `(() => {
+  const width = document.documentElement.clientWidth;
+  const visible = e => e.getClientRects().length && !e.closest('[hidden]');
+  return {
+    width,
+    bodyWidth: document.body.getBoundingClientRect().width,
+    scrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
+    clippedControls: [...document.querySelectorAll('button,select,input,textarea,a[href]')]
+      .filter(visible).filter(e => {
+        const r = e.getBoundingClientRect();
+        return r.left < -1 || r.right > width + 1 || e.scrollWidth > e.clientWidth + 1;
+      }).map(e => e.outerHTML),
+  };
+})()`;
+
+type Layout = { width: number; bodyWidth: number; scrollWidth: number; clippedControls: string[] };
+
+async function auditLayout(popup: Pick<Popup, 'evaluate'>, state: string, native: boolean) {
+  const layout = await popup.evaluate<Layout>(layoutMeasurements);
+  await test.info().attach(`${state}-layout`, { body: JSON.stringify(layout, null, 2), contentType: 'application/json' });
+  if (native) {
+    expect.soft(layout.width, `${state} native action-popup viewport`).toBeGreaterThanOrEqual(500);
+    expect.soft(layout.width, `${state} native action-popup viewport`).toBeLessThanOrEqual(540);
+    expect.soft(layout.bodyWidth, `${state} native popup body`).toBeGreaterThanOrEqual(500);
+    expect.soft(layout.bodyWidth, `${state} native popup body`).toBeLessThanOrEqual(540);
+  }
+  expect.soft(layout.scrollWidth, `${state} horizontal overflow`).toBeLessThanOrEqual(layout.width + 1);
+  expect.soft(layout.clippedControls, `${state} controls fit without clipping`).toEqual([]);
+}
+
+// Capture only rendered payload and the actual loaded built CSS while the genuine
+// popup is open. The replay has no application scripts, extension APIs or RPC.
+async function capturePayloadLayout(popup: Popup) {
+  return popup.evaluate<{ html: string; css: string }>(`(() => {
+    const css = [...document.styleSheets].map(sheet => [...sheet.cssRules].map(rule => rule.cssText).join('\\n')).join('\\n');
+    const clone = document.documentElement.cloneNode(true);
+    const originals = document.querySelectorAll('input,textarea,select');
+    clone.querySelectorAll('input,textarea,select').forEach((e,i) => {
+      const original = originals[i];
+      if(e.tagName === 'TEXTAREA') e.textContent = original.value;
+      else if(e.tagName === 'SELECT') [...e.options].forEach((option,j) => option.toggleAttribute('selected', original.options[j].selected));
+      else {
+        e.setAttribute('value', original.value);
+        e.toggleAttribute('checked', original.checked);
+      }
+    });
+    clone.querySelectorAll('script,link,style,iframe,object,embed,base,meta').forEach(e => e.remove());
+    clone.querySelectorAll('*').forEach(e => [...e.attributes].forEach(attribute => {
+      if(/^on/i.test(attribute.name) || ['src','srcset','action','formaction'].includes(attribute.name)) e.removeAttribute(attribute.name);
+    }));
+    return {html: '<!doctype html>' + clone.outerHTML, css};
+  })()`);
+}
+
 // Rendered measurements, not token/CSS inspection. Chrome setup pregrants the
 // reserved, form-free HTTPS fixture; CDP trusted input is NOT human consent QA.
 const measurements = `(() => {
@@ -99,6 +155,7 @@ async function keyboardCancel(popup: Popup) {
 }
 
 async function audit(popup: Popup, theme: string, state: string) {
+  await auditLayout(popup, `${theme}-${state}`, true);
   const measured = await popup.evaluate<Measures>(measurements);
   await test.info().attach(`${theme}-${state}-computed`, { body: JSON.stringify(measured, null, 2), contentType: 'application/json' });
   expect.soft(measured.theme).toBe(theme);
@@ -180,6 +237,7 @@ for (const theme of ['light', 'dark'] as const) {
       await popup.evaluate(await readFile('node_modules/axe-core/axe.min.js', 'utf8'));
       await popup.wait(`document.querySelectorAll('[data-review-id]').length === 1`);
       await popup.click('[data-action="review-as-subscription"]');
+      await auditLayout(popup, `${theme}-review-editor`, true);
       for (const [name, value] of Object.entries({ merchant: 'Fake local membership', amount: '12.00', currency: 'USD', cadence: 'monthly' })) await popup.fill(name, value);
       await popup.click('[data-subscription-editor] [type="submit"]');
       await popup.wait(`document.querySelector('[aria-label="Subscriptions"] > [role="status"]').textContent === 'Subscription saved locally.'`);
@@ -190,10 +248,12 @@ for (const theme of ['light', 'dark'] as const) {
       // Reserved mock origins are deliberately not provider sites. Exercise the
       // genuine no-link help fallback without forging a provider or opening one.
       expect(await popup.evaluate(`document.querySelectorAll('[data-subscription-list] a').length`)).toBe(0);
+      const reviewHelpPayload = await capturePayloadLayout(popup);
       await audit(popup, theme, 'review-help');
       await keyboardReview(popup, theme, 'review-help');
 
       await popup.click('[data-subscription-action="add"]');
+      const manualEditorPayload = await capturePayloadLayout(popup);
       await audit(popup, theme, 'manual-editor');
       await keyboardReview(popup, theme, 'manual-editor');
       await keyboardCancel(popup);
@@ -214,6 +274,29 @@ for (const theme of ['light', 'dark'] as const) {
       expect(await popup.evaluate(`document.activeElement.isConnected && document.activeElement.dataset.subscriptionAction === 'delete'`)).toBe(true);
       expect((await runtime.storage()).subscriptions).toEqual(saved);
       await popup.close();
+
+      // Payload-layout ONLY: synthetic static DOM from genuine native states,
+      // reflowed with the actual built CSS. This is not privileged integration
+      // or native-popup sizing evidence. Never navigate to the extension here.
+      const narrow = await runtime.context.newPage();
+      await narrow.setViewportSize({ width: 320, height: 720 });
+      await narrow.emulateMedia({ colorScheme: theme });
+      const narrowPopup = { evaluate: <T>(expression: string) => narrow.evaluate<T, never>(expression) };
+      for (const [state, payload] of [['review-help', reviewHelpPayload], ['manual-editor', manualEditorPayload]] as const) {
+        expect(payload.css, `${state} actual built popup CSS`).not.toBe('');
+        await narrow.setContent(payload.html);
+        await narrow.addStyleTag({ content: payload.css });
+        await expect(narrow.locator('[data-subscription-action="help"]')).toHaveCount(1);
+        await expect(narrow.locator('[data-subscription-list]')).toContainText('No known provider site');
+        if (state === 'manual-editor') await expect(narrow.locator('[data-subscription-editor]')).toBeVisible();
+        expect(await narrow.evaluate(() => window.innerWidth)).toBe(320);
+        const rootClientWidth = await narrow.evaluate(() => document.documentElement.clientWidth);
+        expect(rootClientWidth).toBeGreaterThan(0);
+        expect(rootClientWidth).toBeLessThanOrEqual(320);
+        await auditLayout(narrowPopup, `${theme}-320px-${state}-payload-layout-ONLY`, false);
+        expect(await narrow.evaluate(() => document.body.getBoundingClientRect().width)).toBeLessThanOrEqual(320);
+      }
+      await narrow.close();
     } finally {
       expect(await runtime.inventory(), 'approved dist must remain byte-identical').toEqual(before);
       await runtime.stop();

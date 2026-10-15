@@ -7,7 +7,7 @@ import { expect, test } from 'vitest';
 const root = resolve(import.meta.dirname, '..');
 const read = (path) => readFileSync(resolve(root, path), 'utf8');
 
-const currentBetaDocuments = ['README.md', 'PRIVACY.md', 'docs/architecture.md', 'docs/beta-scope.md', 'docs/threat-model.md', 'docs/beta-release-checklist.md'];
+const currentCandidateDocuments = ['README.md', 'PRIVACY.md', 'docs/architecture.md', 'docs/beta-scope.md', 'docs/threat-model.md', 'docs/beta-release-checklist.md'];
 
 const officialChromeReferences = [
   'https://developer.chrome.com/docs/extensions/develop/concepts/activeTab',
@@ -16,14 +16,14 @@ const officialChromeReferences = [
   'https://developer.chrome.com/docs/webstore/program-policies',
 ];
 
-test('current beta documents exact opt-in permissions and screened local persistence', () => {
-  for (const path of currentBetaDocuments) {
+test('current production candidate documents exact opt-in permissions and screened local persistence', () => {
+  for (const path of currentCandidateDocuments) {
     const document = read(path);
-    for (const term of ['0.4.0-beta.1', 'https://*/*', 'activeTab', 'Needs review', '30']) expect(document).toContain(term);
+    for (const term of ['1.0.0-rc.1', 'https://*/*', 'activeTab', 'Needs review', '30']) expect(document).toContain(term);
     expect(document).toMatch(/exact HTTPS origin/i);
     expect(document).toMatch(/no telemetry, accounts, or uploads/i);
     expect(document).toMatch(/never automatically confirms/i);
-    expect(document).toMatch(/unreleased.*private opt-in beta.*not release-ready/i);
+    expect(document).toMatch(/unreleased.*production release candidate.*not release-ready/i);
     expect(document).toMatch(/advisory-only/);
     expect(document).toMatch(/false positives and false negatives/);
     expect(document).not.toMatch(/does not automatically scan pages|popup receives only typed status|no automatic page scanning/i);
@@ -31,7 +31,7 @@ test('current beta documents exact opt-in permissions and screened local persist
 });
 
 test('transport, worker-owned records and popup DTOs have distinct responsibilities', () => {
-  for (const path of currentBetaDocuments) {
+  for (const path of currentCandidateDocuments) {
     const document = read(path);
     expect(document).toMatch(/transport[^.]*screened excerpt[^.]*kind[^.]*reason[^.]*opaque fingerprint[^.]*occurrence ordinal/i);
     expect(document).toMatch(/version[^.]*request[^.]*authorization metadata/i);
@@ -56,7 +56,7 @@ test('automatic and manual authorization differ and receipts replay without anot
 });
 
 test('current control labels and explicit subscription confirmation match the popup', () => {
-  for (const path of currentBetaDocuments) {
+  for (const path of currentCandidateDocuments) {
     const document = read(path);
     for (const label of ['**Analyze**', '**Enable detection for this site**', '**Review as subscription**', '**Save subscription**', '**Mark reviewed**']) expect(document).toContain(label);
     expect(document).toMatch(/Review as subscription\*\* opens a draft/i);

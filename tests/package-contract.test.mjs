@@ -8,8 +8,8 @@ import { readCandidateVersionMapping } from '../scripts/release-artifact.mjs';
 
 const verifier = resolve(process.cwd(), 'scripts/verify-package.mjs');
 const repositoryRoot = process.cwd();
-const candidatePackageVersion = '0.4.0-beta.1';
-const candidateChromeVersion = '0.4.0';
+const candidatePackageVersion = '1.0.0-rc.1';
+const candidateChromeVersion = '1.0.0';
 const candidateArchive = `ClearChoice-v${candidatePackageVersion}-unpacked.zip`;
 
 const safeManifest = {
@@ -111,7 +111,7 @@ test('repository manifest satisfies package validation', () => {
   expect(result.status, result.stderr).toBe(0);
 });
 
-test('source package and manifest map the untagged beta identity to a Chrome-valid manifest version and derived archive name', () => {
+test('source package and manifest map the untagged RC identity to a Chrome-valid manifest version and derived archive name', () => {
   const sourceManifest = JSON.parse(readFileSync(resolve(repositoryRoot, 'manifest.json'), 'utf8'));
   const sourcePackage = JSON.parse(readFileSync(resolve(repositoryRoot, 'package.json'), 'utf8'));
 

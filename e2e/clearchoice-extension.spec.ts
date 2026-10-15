@@ -52,7 +52,7 @@ async function closeExtension(context: BrowserContext, userDataDir: string): Pro
   await rm(userDataDir, { recursive: true, force: true });
 }
 
-test('built extension path loads in Chromium with the Chrome numeric beta manifest version', async () => {
+test('built extension path loads in Chromium with the Chrome numeric candidate manifest version', async () => {
   const userDataDir = await mkdtemp(resolve(tmpdir(), 'clearchoice-version-load-'));
   const context = await chromium.launchPersistentContext(userDataDir, {
     channel: 'chromium',
@@ -76,13 +76,13 @@ test('Chromium rejects a built extension whose manifest version is a prerelease 
   const manifestPath = resolve(invalidExtensionPath, 'manifest.json');
   const originalManifest = await readFile(manifestPath);
   const originalManifestText = originalManifest.toString('utf8');
-  const numericVersion = /("version"\s*:\s*")0\.4\.0(")/g;
+  const numericVersion = /("version"\s*:\s*")1\.0\.0(")/g;
   const numericVersionMatches = [...originalManifestText.matchAll(numericVersion)];
   expect(numericVersionMatches).toHaveLength(1);
   const [numericVersionMatch] = numericVersionMatches;
   const versionStart = numericVersionMatch.index! + numericVersionMatch[1].length;
-  const originalVersion = '0.4.0';
-  const invalidVersion = '0.4.0-beta.1';
+  const originalVersion = '1.0.0';
+  const invalidVersion = '1.0.0-rc.1';
   const originalVersionEnd = versionStart + originalVersion.length;
   const invalidVersionEnd = versionStart + invalidVersion.length;
   const invalidManifest = Buffer.from(`${originalManifestText.slice(0, versionStart)}${invalidVersion}${originalManifestText.slice(originalVersionEnd)}`);
