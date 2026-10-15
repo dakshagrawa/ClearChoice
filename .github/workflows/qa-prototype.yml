@@ -1,0 +1,38 @@
+name: QA prototype source verification
+on:
+  push:
+    branches: [qa/prototype-verification]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 5bbeee7cd11d4fa1dc0a27a0c3dc4466ee7afa6e
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.21.0
+          cache: npm
+      - name: Verify exact source
+        run: test "$(git rev-parse HEAD)" = 5bbeee7cd11d4fa1dc0a27a0c3dc4466ee7afa6e
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Native test prerequisites
+        run: sudo apt-get update && sudo apt-get install -y xvfb xdotool xfwm4 dbus-x11
+      - name: Automated tests and package checks (not human acceptance)
+        run: |
+          xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- bash -euc '
+            xfwm4 --compositor=off >/dev/null 2>&1 & wm=$!
+            trap "kill $wm 2>/dev/null || true" EXIT
+            npm test -- --run --maxWorkers=1
+            npm run lint
+            npx tsc --noEmit
+            npm run package:unpacked
+            npm run verify:archive
+            npm run e2e -- --workers=1
+          '
+      - name: Dependency audit
+        run: npm audit --omit=dev && npm audit
