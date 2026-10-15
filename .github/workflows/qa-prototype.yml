@@ -12,12 +12,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: 5bbeee7cd11d4fa1dc0a27a0c3dc4466ee7afa6e
+          fetch-depth: 0
+          fetch-tags: true
       - uses: actions/setup-node@v4
         with:
           node-version: 24.21.0
           cache: npm
       - name: Verify exact source
         run: test "$(git rev-parse HEAD)" = 5bbeee7cd11d4fa1dc0a27a0c3dc4466ee7afa6e
+      - name: Set runner-owned scratch directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/clearchoice-scratch"
+          printf 'TMPDIR=%s\n' "$RUNNER_TEMP/clearchoice-scratch" >> "$GITHUB_ENV"
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - name: Native test prerequisites
