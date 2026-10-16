@@ -13,7 +13,7 @@ async function install() {
   vi.stubGlobal('chrome', {
     runtime: { id: 'extension', sendMessage, onMessage: { addListener: (fn: typeof listener) => { listener = fn; } } },
     storage: { local: { get, set, setAccessLevel: vi.fn().mockResolvedValue(undefined) }, session: { setAccessLevel: vi.fn().mockResolvedValue(undefined) } },
-    tabs: { query: vi.fn().mockResolvedValue([]), onUpdated: event, onRemoved: event },
+    tabs: { query: vi.fn().mockResolvedValue([]), onUpdated: event, onRemoved: event, onActivated: event },
     action: { setBadgeText: vi.fn().mockResolvedValue(undefined) },
     permissions: { contains: vi.fn().mockResolvedValue(false), onRemoved: event },
     scripting: { getRegisteredContentScripts: vi.fn().mockResolvedValue([]), unregisterContentScripts: vi.fn().mockResolvedValue(undefined) },

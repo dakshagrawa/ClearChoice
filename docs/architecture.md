@@ -1,10 +1,16 @@
-# ClearChoice 1.0.0-rc.2 architecture
+# ClearChoice 1.0.0-rc.3 architecture
 
-This is the unreleased `1.0.0-rc.2` production release candidate candidate, not release-ready or published. Notices are advisory-only; false positives and false negatives remain possible. ClearChoice makes no legal, compliance, safety, or deceptive-site conclusion and does not automate purchases, payments, account actions, cancellations, refunds, or form submission. Chrome Web Store review and submission are future separate work, not complete. Production acceptance remains blocked; human QA is stopped. See [production readiness](../production-readiness.md).
+This is the unreleased `1.0.0-rc.3` production release candidate, not release-ready or published. Notices are advisory-only; false positives and false negatives remain possible. ClearChoice makes no legal, compliance, safety, or deceptive-site conclusion and does not automate purchases, payments, account actions, cancellations, refunds, or form submission. Chrome Web Store review and submission are future separate work, not complete. Production acceptance remains blocked; human QA is stopped. See [production readiness](../production-readiness.md).
+
+The popup is 520px wide, uses light/dark design tokens, and makes **Analyze** the primary action. Subscriptions appear before history; explanations expand through a keyboard-focusable summary. These changes refine existing behavior and do not establish final polish or stable approval.
 
 ## Access and worker boundary
 
 Manual **Analyze** uses temporary `activeTab` access and needs no automatic-scanning opt-in. Required permissions are `activeTab`, `scripting`, and `storage`; `host_permissions` is empty by default. Optional `https://*/*` declares the ability to request access, not broad granted access. **Enable detection for this site** requests one exact HTTPS origin through Chrome on your click. That revocable grant permits automatic observation on supported English consumer checkout pages at that origin. Account, login, payment-sensitive, restricted, and unsupported pages are skipped. No static content scripts run by default; the worker registers exact-origin scripts after permission checks.
+
+One extension **Enable detection for this site** click starts a worker-owned operation; native Chrome **Allow** lets that operation complete. Popup disappearance does not own completion. The popup calls `sendMessage` synchronously before awaiting, and the worker calls `permissions.request` synchronously before awaiting. Completion is bound to the exact sender, origin, and tab through a cancelable in-memory operation that expires after 120 seconds. Arbitrary `permissions.onAdded` events and persisted pending consent cannot enable detection.
+
+Unexpected worker termination or lost operation state can leave browser access without detection. Reopen the popup to inspect status, or remove site access in Chrome Settings. Recovery must report an unknown outcome truthfully; permission presence alone must not replay Enable or be treated as an application grant. Permission, registration, and storage steps are not an atomic transaction.
 
 The Manifest V3 worker serializes store mutations and checks strict popup message schemas. Local/session storage access is restricted to `TRUSTED_CONTEXTS`; content scripts cannot read the store directly.
 
@@ -35,5 +41,9 @@ Catalog metadata was reviewed September 29, 2026; official articles were recheck
 Browser permission, focus, revocation, registration, and storage checks are not atomic with the final write. A switch or revocation after the last check can remain a race. Revocation invalidates the generation and independently unregisters the script, with best-effort badge/panel cleanup. If storage and unregister both fail, durable cleanup cannot be guaranteed across worker/browser restart. Remove the site's extension access in Chrome Settings before restarting; in-memory denial alone is not durable. Corrupt grant storage triggers best-effort cleanup of ClearChoice-owned scripts, but browser failures can block it.
 
 Identical findings reordered on a page can change ordinal-based identity. Sensitive-text screening is conservative, not proof that all sensitive content is detectable. The emitted-asset network policy is a static check, not runtime network proof. Explicit provider anchors are a narrow user-navigation exception, not permission for extension uploads or remote executable code. A hostile page controls its own DOM; the extension owns only its panel.
+
+Current automated native evidence is limited to Chromium 141 on Linux; other platforms and Chrome versions are unverified. Published RC2's native Allow diagnostic left browser permission true, the application grant absent, and zero registered scripts. A working diagnostic artifact before M1 acknowledgement-recovery metadata revision 3 verified fresh Allow → application grant true with the correct isolated script, and Deny → no access, application grant, or script. The popup closed and reopened without a second Enable click. This used synthetic automated native OS input, not human attestation, a final RC3 artifact binding, or a full gate pass.
+
+The parent broad run had 918 unit tests green before M1; M1's focused parent run had 36 green. The E2E run passed 20/22, with two brittle capacity-probe aliases being fixed by another owner. M1 source is complete but re-review and full final verification remain pending. Fresh RC3 CI, final artifact verification, and final human acceptance are unresolved. The user stopped human QA; no stable approval or publication is claimed.
 
 See [release gates](beta-release-checklist.md).

@@ -1,4 +1,4 @@
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_STATUS, CLEARCHOICE_AUTO_DOCUMENT_STATUS, isAutomaticDocumentStatus, CLEARCHOICE_AUTO_SUBMIT, CLEARCHOICE_AUTO_START, CLEARCHOICE_REVIEW_LIST, CLEARCHOICE_REVIEW_MARK, CLEARCHOICE_REVIEW_DELETE, CLEARCHOICE_REVIEW_RETENTION, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_DISMISSED_GET, CLEARCHOICE_DISMISSED_SET, CLEARCHOICE_RESTORE, CLEARCHOICE_SUBMIT, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION, CLEARCHOICE_SITE_REVOKE, CLEARCHOICE_FINDINGS_CHALLENGE, CLEARCHOICE_AUTO_STATUS, CLEARCHOICE_AUTO_DOCUMENT_STATUS, isAutomaticDocumentStatus, CLEARCHOICE_AUTO_SUBMIT, CLEARCHOICE_AUTO_START, CLEARCHOICE_REVIEW_LIST, CLEARCHOICE_REVIEW_MARK, CLEARCHOICE_REVIEW_DELETE, CLEARCHOICE_REVIEW_RETENTION, isAnalyzeResponse, isAutomaticObservation, isFindingsChallengeResponse, isRestoreResponse, isWorkerRequest } from '../shared/messages';
 import { resolveCancellationGuide } from '../shared/guide-catalog';
 import { CLEARCHOICE_SUBSCRIPTION_HELP, CLEARCHOICE_SUBSCRIPTION_CONFIRM_FINDING, CLEARCHOICE_SUBSCRIPTION_LIST, CLEARCHOICE_SUBSCRIPTION_CREATE, CLEARCHOICE_SUBSCRIPTION_UPDATE, CLEARCHOICE_SUBSCRIPTION_DELETE } from '../shared/messages';
 import { canonicalOrigin } from '../shared/models';
@@ -12,7 +12,19 @@ const badges = createTabBadges();
 
 const store = createWorkerStore();
 const grants = createGrantManager(store);
+// In-memory consent only: no startup replay, and at most 32 live attempts.
+const enableOperations = new Map<number, { origin: string; epoch: number; expires: number }>();
+function cancelEnable(tabId: number): void {
+  const operation = enableOperations.get(tabId);
+  if (operation) operation.epoch++;
+  enableOperations.delete(tabId);
+}
+function cancelOrigin(origin?: string): void {
+  for (const [tabId, operation] of enableOperations) if (!origin || operation.origin === origin) cancelEnable(tabId);
+}
 chrome.permissions.onRemoved.addListener((removed) => {
+  // Invalidate before any asynchronous permission inspection or queue work.
+  cancelOrigin();
   void (async () => {
     // Chrome's event may remove a broader pattern. Check each tracked origin;
     // do not blank unrelated sites, and do not wait behind a blocked scan.
@@ -47,6 +59,7 @@ void ensureReady();
 const pending = new Map<string, { tabId: number; documentId: string; nonce: string; requestId: string; origin: string; count?: number }>();
 const revoking = new Set<string>();
 function retireTab(tabId: number): void {
+  cancelEnable(tabId);
   for (const [id, scan] of pending) if (scan.tabId === tabId) pending.delete(id);
   void badges.clearTab(tabId).catch(() => undefined);
 }
@@ -54,6 +67,9 @@ chrome.tabs.onUpdated.addListener((tabId, change) => {
   if (change.status === 'loading' || change.url !== undefined) retireTab(tabId);
 });
 chrome.tabs.onRemoved.addListener(retireTab);
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  for (const pendingTab of enableOperations.keys()) if (pendingTab !== tabId) cancelEnable(pendingTab);
+});
 const authorizationKey = (tabId: number): string => `clearchoice.document.${tabId}`;
 async function authorizedDocument(tabId: number, documentId: string, origin: string): Promise<boolean> {
   const key = authorizationKey(tabId);
@@ -95,6 +111,42 @@ async function liveChallenge(tabId: number, documentId: string, requestId: strin
     }
     return true;
   } catch { return false; }
+}
+// Keep rollback and bootstrap in one per-origin sequence. Otherwise a newer
+// attempt could reuse a generation which an older bootstrap is about to undo.
+const enabling = new Map<string, Promise<unknown>>();
+function enableSite(origin: string, tabId: number, currentSite: () => Promise<boolean>): Promise<unknown> {
+  const previous = enabling.get(origin) ?? Promise.resolve();
+  const completion = previous.catch(() => undefined).then(() => enableSiteNow(origin, tabId, currentSite));
+  enabling.set(origin, completion);
+  void completion.finally(() => { if (enabling.get(origin) === completion) enabling.delete(origin); }).catch(() => undefined);
+  return completion;
+}
+async function enableSiteNow(origin: string, tabId: number, currentSite: () => Promise<boolean>): Promise<unknown> {
+  const { generation, newlyEnabled } = await grants.enable(origin, currentSite);
+  try {
+    if (!await currentSite() || !await grants.isEnabled(origin, generation) || !await currentSite()) throw new Error('Bootstrap site changed');
+    // An inert top-frame probe supplies the document ID; tabs.Tab has none.
+    const probe = await chrome.scripting.executeScript({ target: { tabId }, func: () => undefined });
+    const top = probe.find((entry) => entry.frameId === 0 && typeof entry.documentId === 'string' && entry.documentId.length > 0);
+    if (!top || !await currentSite() || !await grants.isEnabled(origin, generation) || !await currentSite()) throw new Error('Bootstrap document unavailable');
+    await chrome.scripting.executeScript({ target: { tabId, documentIds: [top.documentId!] }, files: ['content.js'] });
+    if (!await currentSite() || !await grants.isEnabled(origin, generation) || !await currentSite()) throw new Error('Bootstrap site changed');
+    const started: unknown = await chrome.tabs.sendMessage(tabId, { type: CLEARCHOICE_AUTO_START, version: 1, generation }, { documentId: top.documentId! });
+    if (typeof started !== 'object' || started === null || Object.keys(started).length !== 1
+      || !('ok' in started) || started.ok !== true || !await currentSite()
+      || !await grants.isEnabled(origin, generation) || !await currentSite()) throw new Error('Bootstrap start refused');
+  } catch {
+    if (newlyEnabled) {
+      try { await grants.rollbackEnable(origin, generation); }
+      catch { return { ok: false, error: 'revocation-unsafe' }; }
+      return { ok: false, error: 'request-failed' };
+    }
+    // A prior opt-in remains in force: report its actual state, not a revoked grant.
+    if (!await currentSite() || !await grants.isEnabled(origin, generation) || !await currentSite()) return { ok: false, error: 'request-failed' };
+    return { ok: true, enabled: true, permitted: true };
+  }
+  return { ok: true, enabled: true, permitted: true };
 }
 async function handle(message: unknown, sender: chrome.runtime.MessageSender): Promise<unknown> {
   try {
@@ -267,29 +319,7 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
       if (request.type === CLEARCHOICE_SITE_ENABLE) {
         const currentSite = async () => await isCurrentActiveTab(active.id!)
           && senderOrigin((await chrome.tabs.get(active.id!)).url) === origin;
-        const { generation, newlyEnabled } = await grants.enable(origin, currentSite);
-        try {
-          if (!await currentSite() || !await grants.isEnabled(origin, generation)) throw new Error('Bootstrap site changed');
-          // An inert top-frame probe supplies the document ID; tabs.Tab has none.
-          const probe = await chrome.scripting.executeScript({ target: { tabId: active.id }, func: () => undefined });
-          const top = probe.find((entry) => entry.frameId === 0 && typeof entry.documentId === 'string' && entry.documentId.length > 0);
-          if (!top || !await currentSite() || !await grants.isEnabled(origin, generation)) throw new Error('Bootstrap document unavailable');
-          await chrome.scripting.executeScript({ target: { tabId: active.id, documentIds: [top.documentId!] }, files: ['content.js'] });
-          if (!await currentSite() || !await grants.isEnabled(origin, generation)) throw new Error('Bootstrap site changed');
-          const started: unknown = await chrome.tabs.sendMessage(active.id, { type: CLEARCHOICE_AUTO_START, version: 1, generation }, { documentId: top.documentId! });
-          if (typeof started !== 'object' || started === null || Object.keys(started).length !== 1
-            || !('ok' in started) || started.ok !== true || !await currentSite()
-            || !await grants.isEnabled(origin, generation)) throw new Error('Bootstrap start refused');
-        } catch {
-          if (newlyEnabled) {
-            try { await grants.rollbackEnable(origin, generation); }
-            catch { return { ok: false, error: 'revocation-unsafe' }; }
-            return { ok: false, error: 'request-failed' };
-          }
-          // A prior opt-in remains in force: report its actual state, not a revoked grant.
-          if (!await currentSite() || !await grants.isEnabled(origin, generation)) return { ok: false, error: 'request-failed' };
-          return { ok: true, enabled: true, permitted: true };
-        }
+        return await enableSite(origin, active.id, currentSite);
       }
       if (request.type === CLEARCHOICE_SITE_REVOKE) {
         revoking.add(origin);
@@ -365,6 +395,48 @@ async function handle(message: unknown, sender: chrome.runtime.MessageSender): P
   } catch { return { ok: false, error: isAutomaticDocumentStatus(message) && contentSender(sender) ? 'retryable-failure' : 'request-failed' }; }
 }
 chrome.runtime.onMessage.addListener((message: unknown, sender, reply) => {
-  void handle(message, sender).then(reply);
+  const respond = (value: unknown): void => {
+    try { reply(value); } catch { /* Popup lifetime does not own the operation. */ }
+  };
+  // Schema and the existing exact popup sender boundary are checked on this turn.
+  // Do not await readiness/tab lookup here: sendMessage propagates the click gesture
+  // only into the listener's synchronous turn.
+  if (isWorkerRequest(message) && popupSender(sender)) {
+    const request = message as Record<string, unknown>;
+    if (request.type === CLEARCHOICE_SITE_REVOKE) cancelOrigin(request.origin as string);
+    if (request.type === CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION) {
+      const origin = request.origin as string;
+      const tabId = request.tabId as number;
+      for (const [id, operation] of enableOperations) if (operation.expires <= Date.now()) cancelEnable(id);
+      cancelEnable(tabId);
+      if (enableOperations.size >= 32) cancelEnable(enableOperations.keys().next().value!);
+      const operation = { origin, epoch: 0, expires: Date.now() + 120_000 };
+      const epoch = operation.epoch;
+      enableOperations.set(tabId, operation);
+      const current = () => enableOperations.get(tabId) === operation && operation.epoch === epoch
+        && Date.now() < operation.expires && !revoking.has(origin);
+      let permission: Promise<boolean>;
+      try { permission = chrome.permissions.request({ origins: [`${origin}/*`] }); }
+      catch { permission = Promise.reject(new Error('Permission request failed')); }
+      void (async () => {
+        try {
+          if (!await permission) return { ok: false, error: 'permission-denied' };
+          if (!current()) return { ok: false, error: 'operation-expired' };
+          if (!await ensureReady()) return { ok: false, error: 'request-failed' };
+          const checkpoint = async (): Promise<boolean> => {
+            if (!current() || !await isCurrentActiveTab(tabId)) return false;
+            const tab = await chrome.tabs.get(tabId);
+            return tab.id === tabId && senderOrigin(tab.url) === origin
+              && await chrome.permissions.contains({ origins: [`${origin}/*`] }) && current();
+          };
+          if (!await checkpoint()) return { ok: false, error: 'operation-expired' };
+          return await enableSite(origin, tabId, checkpoint);
+        } catch { return { ok: false, error: 'request-failed' }; }
+        finally { if (enableOperations.get(tabId) === operation) cancelEnable(tabId); }
+      })().then(respond);
+      return true;
+    }
+  }
+  void handle(message, sender).then(respond);
   return true;
 });

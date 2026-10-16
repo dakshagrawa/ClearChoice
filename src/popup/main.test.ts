@@ -17,6 +17,36 @@ it('mounts manual subscriptions separately from history without an active site a
   expect(document.querySelector('[name="merchant"]')).not.toBeNull(); expect(request).not.toHaveBeenCalled();
 });
 
+it('keeps an explicit analysis live region directly under main', async () => {
+  const { app } = await renderPopupBeforeResponse();
+  const status = app.querySelector('[data-analysis-status]');
+  expect(status).not.toBeNull();
+  expect(status?.parentElement).toBe(app.querySelector('main'));
+  expect(status?.getAttribute('role')).toBe('status');
+  expect(status?.getAttribute('aria-live')).toBe('polite');
+  expect(app.querySelector('main > [role="status"]')).toBe(status);
+  expect(status?.textContent).toContain('Analyzing');
+});
+
+it('places subscriptions before history and keeps site controls outside the disclosure', async () => {
+  const { app } = await renderPopupBeforeResponse();
+  const subscriptions = app.querySelector('section[aria-label="Subscriptions"]')!;
+  const review = app.querySelector('#review-heading')!.closest('section')!;
+  expect(subscriptions).not.toBeNull();
+  expect(review).not.toBeNull();
+  expect(subscriptions.compareDocumentPosition(review) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const site = app.querySelector('section[aria-label="Site detection"]')!;
+  const details = site.querySelector('details')!;
+  expect(details?.querySelector('summary')?.textContent).toBe('About site detection');
+  expect(details?.open).toBe(false);
+  expect(site.querySelector('[data-site-status]')?.closest('details')).toBeNull();
+  for (const action of ['site-enable', 'site-disable']) {
+    const button = site.querySelector(`button[data-action="${action}"]`)!;
+    expect(button).not.toBeNull();
+    expect(button.closest('details')).toBeNull();
+  }
+});
+
 it('opens suggestion confirmation after subscriptions mount and invalidates unsaved suggestion on history refresh', async () => {
   vi.resetModules(); document.body.innerHTML = '<div id="app"></div>';
   const item = { id: 'f_source', origin: 'https://merchant.test', kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt: 'Monthly plan $10.00', firstSeen: '2026-09-29T00:00:00.000Z', latestSeen: '2026-09-29T00:00:00.000Z', status: 'reviewed' };
@@ -134,7 +164,7 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-it('requests exact site permission synchronously on click, never on load or Analyze, and enables only after approval', async () => {
+it('sends the worker-owned exact site request synchronously on click, never on load or Analyze', async () => {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
   const calls: string[] = [];
@@ -145,7 +175,7 @@ it('requests exact site permission synchronously on click, never on load or Anal
   const sendMessage = vi.fn(async (message: { type: string }) => {
     calls.push(message.type);
     if (message.type === 'CLEARCHOICE_SITE_STATUS') return { ok: true, enabled: false, permitted: false };
-    if (message.type === 'CLEARCHOICE_SITE_ENABLE') return { ok: true, enabled: true, permitted: true };
+    if (message.type === 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION') return { ok: true, enabled: true, permitted: true };
     return { ok: true, status: 'unsupported-context', findingCount: 0 };
   });
   vi.stubGlobal('chrome', { tabs: { query, get }, permissions: { request, remove }, runtime: { sendMessage } });
@@ -157,10 +187,10 @@ it('requests exact site permission synchronously on click, never on load or Anal
   expect(request).not.toHaveBeenCalled();
   const before = calls.length;
   document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')?.click();
-  expect(calls[before]).toBe('request');
-  expect(request).toHaveBeenCalledWith({ origins: ['https://a.test/*'] });
-  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://a.test' }));
-  expect(document.querySelector('[data-site-status]')?.textContent).toContain('enabled');
+  expect(calls[before]).toBe('CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION');
+  expect(request).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION', origin: 'https://a.test', tabId: 42 }));
+  await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).toContain('enabled'));
   expect(document.body.textContent).toContain('supported English checkout');
   expect(document.body.textContent).not.toContain('automatic scanning is not available yet');
   expect(document.querySelector('[data-site-status]')?.textContent).toContain('not a completed scan');
@@ -192,32 +222,32 @@ it.each(['activated', 'updated', 'loading', 'removed'])('invalidates cached site
   expect(button.disabled).toBe(true);
   button.click();
   expect(request).not.toHaveBeenCalled();
-  expect(sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_SITE_ENABLE' }));
+  expect(sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION' }));
 });
 
-it('denial and tab navigation during the prompt never enable the worker', async () => {
+it('displays worker denial and rejects a stale worker completion after tab navigation', async () => {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
-  let finish!: (allowed: boolean) => void;
-  const request = vi.fn(() => new Promise<boolean>((resolve) => { finish = resolve; }));
+  let finish!: (response: unknown) => void;
+  const request = vi.fn();
   const query = vi.fn().mockResolvedValue([{ id: 42, url: 'https://a.test/path' }]);
   const get = vi.fn().mockResolvedValue({ id: 42, url: 'https://a.test/path' });
-  const sendMessage = vi.fn().mockResolvedValue({ ok: true, enabled: false, permitted: false });
+  const sendMessage = vi.fn((message: { type: string }) => message.type === 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION'
+    ? new Promise((resolve) => { finish = resolve; }) : Promise.resolve({ ok: true, enabled: false, permitted: false }));
   vi.stubGlobal('chrome', { tabs: { query, get }, permissions: { request }, runtime: { sendMessage } });
   await import('./main');
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')?.disabled).toBe(false));
   const button = document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')!;
   button.click(); button.click();
-  expect(request).toHaveBeenCalledTimes(1);
-  finish(false);
+  expect(sendMessage.mock.calls.filter(([message]) => message.type === 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION')).toHaveLength(1);
+  expect(request).not.toHaveBeenCalled();
+  finish({ ok: false, error: 'permission-denied' });
   await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).toContain('denied'));
-  expect(sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_SITE_ENABLE' }));
   button.click();
   query.mockResolvedValue([{ id: 42, url: 'https://b.test/path' }]);
   get.mockResolvedValue({ id: 42, url: 'https://b.test/path' });
-  finish(true);
+  finish({ ok: true, enabled: true, permitted: true });
   await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).toContain('changed'));
-  expect(sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_SITE_ENABLE' }));
 });
 
 it('does not present a stale enabled status after focus changes while worker enable is pending', async () => {
@@ -226,14 +256,14 @@ it('does not present a stale enabled status after focus changes while worker ena
   let finish!: (value: unknown) => void;
   const query = vi.fn().mockResolvedValue([{ id: 42 }]);
   const get = vi.fn().mockResolvedValue({ id: 42, url: 'https://a.test/path' });
-  const sendMessage = vi.fn((message: { type: string }) => message.type === 'CLEARCHOICE_SITE_ENABLE'
+  const sendMessage = vi.fn((message: { type: string }) => message.type === 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION'
     ? new Promise((resolve) => { finish = resolve; })
     : Promise.resolve({ ok: true, enabled: false, permitted: false }));
   vi.stubGlobal('chrome', { tabs: { query, get }, permissions: { request: vi.fn().mockResolvedValue(true) }, runtime: { sendMessage } });
   await import('./main');
   await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')?.disabled).toBe(false));
   document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')?.click();
-  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_SITE_ENABLE', origin: 'https://a.test' }));
+  await vi.waitFor(() => expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION', origin: 'https://a.test', tabId: 42 }));
   query.mockResolvedValue([{ id: 7 }]);
   get.mockResolvedValue({ id: 7, url: 'https://b.test/path' });
   finish({ ok: true, enabled: true, permitted: true });
@@ -318,7 +348,7 @@ it('keeps Disable available immediately when permission succeeds but worker regi
   const request = vi.fn().mockResolvedValue(true);
   vi.stubGlobal('chrome', {
     tabs: { query: vi.fn().mockResolvedValue([{ id: 42 }]), get: vi.fn().mockResolvedValue({ id: 42, url: 'https://a.test/checkout' }) },
-    permissions: { request }, runtime: { sendMessage },
+    permissions: { request, contains: vi.fn().mockResolvedValue(true) }, runtime: { sendMessage },
   });
   await import('./main');
   const enable = document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')!;
@@ -326,7 +356,8 @@ it('keeps Disable available immediately when permission succeeds but worker regi
   await vi.waitFor(() => expect(enable.disabled).toBe(false));
   enable.click();
   await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).toContain('Could not enable detection'));
-  expect(request).toHaveBeenCalledWith({ origins: ['https://a.test/*'] });
+  expect(request).not.toHaveBeenCalled();
+  expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION', origin: 'https://a.test', tabId: 42 });
   expect(disable.disabled).toBe(false);
 });
 
@@ -449,4 +480,95 @@ it('uses active current-tab injection for Restore without analyzing again', asyn
   expect(query).toHaveBeenCalledWith({ active: true, currentWindow: true });
   expect(executeScript).not.toHaveBeenCalled();
   expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_RESTORE' });
+});
+
+
+it.each(['enabled', 'unavailable', 'navigation', 'permission failure'])('recovers a lost enable acknowledgement: %s', async (outcome) => {
+  vi.resetModules(); document.body.innerHTML = '<div id="app"></div>';
+  let enabling = false;
+  let finishContains!: (value: boolean) => void;
+  const get = vi.fn().mockResolvedValue({ id: 42, url: 'https://a.test/checkout' });
+  const contains = vi.fn(() => outcome === 'navigation'
+    ? new Promise<boolean>((resolve) => { finishContains = resolve; })
+    : outcome === 'permission failure' ? Promise.reject(new Error('permission unavailable')) : Promise.resolve(true));
+  const remove = vi.fn().mockResolvedValue(true);
+  const sendMessage = vi.fn((message: { type: string }) => {
+    if (message.type === 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION') {
+      enabling = true;
+      return Promise.reject(new Error('acknowledgement lost'));
+    }
+    if (message.type === 'CLEARCHOICE_SITE_STATUS' && enabling) return outcome === 'unavailable'
+      ? Promise.reject(new Error('worker unavailable')) : Promise.resolve({ ok: true, enabled: true, permitted: true });
+    return Promise.resolve({ ok: true, enabled: false, permitted: false });
+  });
+  vi.stubGlobal('chrome', { tabs: { query: vi.fn().mockResolvedValue([{ id: 42 }]), get }, permissions: { contains, remove }, runtime: { sendMessage } });
+  await import('./main');
+  const enable = document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')!;
+  const disable = document.querySelector<HTMLButtonElement>('[data-action="site-disable"]')!;
+  const status = document.querySelector('[data-site-status]')!;
+  await vi.waitFor(() => expect(enable.disabled).toBe(false));
+  enable.click();
+  if (outcome === 'navigation') {
+    await vi.waitFor(() => expect(contains).toHaveBeenCalled());
+    get.mockResolvedValue({ id: 42, url: 'https://b.test/checkout' });
+    finishContains(true);
+    await vi.waitFor(() => expect(status.textContent).toContain('Active tab changed'));
+    expect(enable.disabled).toBe(true); expect(disable.disabled).toBe(true);
+    enable.click(); disable.click();
+    expect(remove).not.toHaveBeenCalled();
+    expect(sendMessage.mock.calls.filter(([message]) => message.type === 'CLEARCHOICE_SITE_STATUS')).toHaveLength(1);
+  } else {
+    await vi.waitFor(() => expect(status.textContent).toContain(outcome === 'enabled' ? 'Detection enabled' : 'completion is unknown'));
+    expect(status.textContent).not.toContain('remains off');
+    expect(enable.disabled).toBe(true);
+    if (outcome === 'permission failure') expect(status.textContent).toContain('Chrome settings');
+    else expect(disable.disabled).toBe(false);
+    if (outcome === 'unavailable') expect(status.textContent).toContain('browser site access remains');
+  }
+  expect(sendMessage.mock.calls.filter(([message]) => message.type === 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION')).toHaveLength(1);
+});
+
+
+it('keeps navigation invalidation when the enable caller receives an old tab snapshot', async () => {
+  vi.resetModules(); document.body.innerHTML = '<div id="app"></div>';
+  let activate!: (event: { tabId: number }) => void;
+  let finishEnable!: (value: unknown) => void;
+  let finishLookup!: (value: { id: number; url: string }) => void;
+  const query = vi.fn().mockResolvedValue([{ id: 42 }]);
+  const get = vi.fn().mockResolvedValue({ id: 42, url: 'https://a.test/checkout' });
+  const request = vi.fn();
+  const remove = vi.fn();
+  const contains = vi.fn();
+  const sendMessage = vi.fn((message: { type: string }) => message.type === 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION'
+    ? new Promise((resolve) => { finishEnable = resolve; })
+    : Promise.resolve({ ok: true, enabled: false, permitted: false }));
+  vi.stubGlobal('chrome', {
+    tabs: { query, get, onActivated: { addListener: (listener: typeof activate) => { activate = listener; } } },
+    permissions: { request, remove, contains }, runtime: { sendMessage },
+  });
+  await import('./main');
+  const enable = document.querySelector<HTMLButtonElement>('[data-action="site-enable"]')!;
+  const disable = document.querySelector<HTMLButtonElement>('[data-action="site-disable"]')!;
+  const status = document.querySelector('[data-site-status]')!;
+  // The final initialization status is rendered only after its sameSite lookup completes.
+  await vi.waitFor(() => expect(status.textContent).toBe('Detection off for https://a.test.'));
+  expect(enable.disabled).toBe(false);
+  get.mockImplementationOnce(() => new Promise((resolve) => { finishLookup = resolve; }));
+  enable.click();
+  finishEnable({ ok: true, enabled: true, permitted: true });
+  await vi.waitFor(() => expect(finishLookup).toBeTypeOf('function'));
+  activate({ tabId: 7 });
+  expect(status.textContent).toContain('Active tab changed');
+  finishLookup({ id: 42, url: 'https://a.test/checkout' });
+  // Drain the caller continuation, including its finally block, before checking the UI.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(status.textContent).toContain('Active tab changed');
+  expect(status.textContent).not.toContain('Detection enabled');
+  expect(enable.disabled).toBe(true); expect(disable.disabled).toBe(true);
+  enable.click(); disable.click();
+  expect(sendMessage.mock.calls.filter(([message]) => message.type.startsWith('CLEARCHOICE_SITE_')).map(([message]) => message)).toEqual([
+    { type: 'CLEARCHOICE_SITE_STATUS', origin: 'https://a.test' },
+    { type: 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION', origin: 'https://a.test', tabId: 42 },
+  ]);
+  expect(request).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled(); expect(contains).not.toHaveBeenCalled();
 });

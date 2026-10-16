@@ -5,16 +5,35 @@ import { PackagedRuntime } from './packaged-runtime';
 
 type Popup = Awaited<ReturnType<PackagedRuntime['popup']>>;
 
+// Closed details may still expose layout boxes during native inspection. Only
+// the first summary subtree escapes each closed ancestor's rendering boundary.
+const visibilityPredicate = `e => {
+  if (e.closest('[hidden]')) return false;
+  for (let ancestor = e.parentElement; ancestor; ancestor = ancestor.parentElement) {
+    if (ancestor.tagName !== 'DETAILS' || ancestor.open) continue;
+    const summary = [...ancestor.children].find(child => child.tagName === 'SUMMARY');
+    if (!summary || !summary.contains(e)) return false;
+  }
+  if (typeof e.checkVisibility === 'function' &&
+      !e.checkVisibility({visibilityProperty:true, opacityProperty:true})) return false;
+  if (!e.getClientRects().length || getComputedStyle(e).visibility !== 'visible') return false;
+  for (let ancestor = e; ancestor; ancestor = ancestor.parentElement) {
+    const style = getComputedStyle(ancestor);
+    if (style.display === 'none' || Number(style.opacity) === 0) return false;
+  }
+  return true;
+}`;
+
 // Shared rendered geometry checks. Only runtime.popup() supplies evidence for
 // native action-popup width; static payload snapshots below test reflow only.
 const layoutMeasurements = `(() => {
   const width = document.documentElement.clientWidth;
-  const visible = e => e.getClientRects().length && !e.closest('[hidden]');
+  const visible = ${visibilityPredicate};
   return {
     width,
     bodyWidth: document.body.getBoundingClientRect().width,
     scrollWidth: Math.max(document.documentElement.scrollWidth, document.body.scrollWidth),
-    clippedControls: [...document.querySelectorAll('button,select,input,textarea,a[href]')]
+    clippedControls: [...document.querySelectorAll('button,select,input,textarea,a[href],summary')]
       .filter(visible).filter(e => {
         const r = e.getBoundingClientRect();
         return r.left < -1 || r.right > width + 1 || e.scrollWidth > e.clientWidth + 1;
@@ -86,9 +105,9 @@ const measurements = `(() => {
   };
   const lum = c => c.slice(0,3).map(x=>x/255).map(x=>x<=0.04045?x/12.92:((x+0.055)/1.055)**2.4).reduce((a,x,i)=>a+x*[0.2126,0.7152,0.0722][i],0);
   const contrast = (a,b) => (Math.max(lum(a),lum(b))+0.05)/(Math.min(lum(a),lum(b))+0.05);
-  const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility==='visible' && !e.closest('[hidden]');
+  const visible = ${visibilityPredicate};
   const identity = e => ({tag:e.tagName, name:e.getAttribute('aria-label') || e.getAttribute('name') || e.textContent.trim().slice(0,100), action:e.dataset.action || e.dataset.subscriptionAction || null});
-  const controls=[...document.querySelectorAll('button,select,input,textarea,a[href]')].filter(visible);
+  const controls=[...document.querySelectorAll('button,select,input,textarea,a[href],summary')].filter(visible);
   const disabled=controls.filter(e=>e.matches(':disabled')).map(identity);
   const text=[];
   for(const e of document.querySelectorAll('body *')) {
@@ -143,7 +162,7 @@ async function key(popup: Popup, keyName: 'Tab' | 'Enter', shift = false) {
 }
 
 async function keyboardCancel(popup: Popup) {
-  const count = await popup.evaluate<number>(`document.querySelectorAll('button,select,input,textarea,a[href]').length`);
+  const count = await popup.evaluate<number>(`document.querySelectorAll('button,select,input,textarea,a[href],summary').length`);
   for (let step = 0; step <= count; step++) {
     if (await popup.evaluate(`document.activeElement.matches('[data-subscription-action="cancel"]')`)) {
       await key(popup, 'Enter');
@@ -154,8 +173,14 @@ async function keyboardCancel(popup: Popup) {
   throw Error('Cancel unreachable via native popup keyboard traversal');
 }
 
+async function attachNativeScreenshot(popup: Popup, theme: string, state: string) {
+  const screenshot = await popup.send('Page.captureScreenshot', { format: 'png' });
+  await test.info().attach(`${theme}-${state}-native-popup`, { body: Buffer.from(screenshot.data as string, 'base64'), contentType: 'image/png' });
+}
+
 async function audit(popup: Popup, theme: string, state: string) {
   await auditLayout(popup, `${theme}-${state}`, true);
+  await attachNativeScreenshot(popup, theme, state);
   const measured = await popup.evaluate<Measures>(measurements);
   await test.info().attach(`${theme}-${state}-computed`, { body: JSON.stringify(measured, null, 2), contentType: 'application/json' });
   expect.soft(measured.theme).toBe(theme);
@@ -169,7 +194,8 @@ async function audit(popup: Popup, theme: string, state: string) {
 
 async function keyboardReview(popup: Popup, theme: string, state: string) {
   const count = await popup.evaluate<number>(`(() => {
-    const controls=[...document.querySelectorAll('button,select,input,textarea,a[href]')].filter(e=>!e.disabled && e.getClientRects().length && getComputedStyle(e).visibility==='visible');
+    const visible = ${visibilityPredicate};
+    const controls=[...document.querySelectorAll('button,select,input,textarea,a[href],summary')].filter(e=>!e.disabled && visible(e));
     controls.forEach((e,i)=>e.dataset.a11yOrder=String(i));
     controls[0].focus(); return controls.length;
   })()`);
@@ -219,6 +245,73 @@ async function keyboardReview(popup: Popup, theme: string, state: string) {
   await test.info().attach(`${theme}-${state}-keyboard`, { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' });
 }
 
+async function keyboardDisclosure(popup: Popup, theme: string) {
+  const summary = '.site-detection details > summary';
+  const reachSummary = async () => {
+    const count = await popup.evaluate<number>(`document.querySelectorAll('button,select,input,textarea,a[href],summary').length`);
+    for (let step = 0; step <= count; step++) {
+      if (await popup.evaluate(`document.activeElement.matches('${summary}')`)) return;
+      await key(popup, 'Tab');
+    }
+    throw Error('Site detection disclosure unreachable via native keyboard traversal');
+  };
+  const checkState = async (open: boolean) => {
+    expect(await popup.evaluate(`document.querySelector('.site-detection details').open`)).toBe(open);
+    expect(await popup.evaluate(`document.activeElement.matches('${summary}')`), 'Enter retains disclosure focus').toBe(true);
+    const result = await popup.evaluate<Measures>(measurements);
+    expect(result.focus?.name).toBe('About site detection');
+    expect(result.focus?.visible).toBe(true);
+    expect(result.focus?.inViewport).toBe(true);
+    expect(result.focus?.hit).toBe(true);
+    expect(result.focus?.outlineStyle).not.toBe('none');
+    expect(result.focus?.outlineWidth).toBeGreaterThanOrEqual(1);
+    expect(result.focus?.ratio).toBeGreaterThanOrEqual(3);
+    expect(result.text.some(t => t.name.startsWith('Optional detection on supported English')), 'Disclosure content included only when open').toBe(open);
+    const visibility = await popup.evaluate<{
+      paragraph: boolean; nested: boolean; summary: boolean;
+      nativeParagraph: boolean | null; nativeNested: boolean | null; nativeSummary: boolean | null;
+    }>(`(() => {
+      const visible = ${visibilityPredicate};
+      const details = document.querySelector('.site-detection details');
+      const paragraph = details.querySelector(':scope > p');
+      const summary = details.querySelector(':scope > summary');
+      // Wrap existing text without adding controls or changing its styling.
+      const nested = document.createElement('span');
+      while (paragraph.firstChild) nested.append(paragraph.firstChild);
+      paragraph.append(nested);
+      const native = e => typeof e.checkVisibility === 'function'
+        ? e.checkVisibility({visibilityProperty:true, opacityProperty:true}) : null;
+      try {
+        return {paragraph:visible(paragraph), nested:visible(nested), summary:visible(summary),
+          nativeParagraph:native(paragraph), nativeNested:native(nested), nativeSummary:native(summary)};
+      } finally {
+        nested.replaceWith(...nested.childNodes);
+      }
+    })()`);
+    expect(visibility.paragraph, 'Paragraph rendered only when open').toBe(open);
+    expect(visibility.nested, 'Nested paragraph descendant rendered only when open').toBe(open);
+    expect(visibility.summary, 'First summary remains rendered when closed').toBe(true);
+    if (visibility.nativeParagraph !== null) {
+      expect(visibility.nativeParagraph, 'Native painted paragraph visibility agrees with disclosure state').toBe(open);
+      expect(visibility.nativeNested, 'Native nested descendant visibility agrees with disclosure state').toBe(open);
+      expect(visibility.nativeSummary, 'Native first summary visibility').toBe(true);
+    }
+  };
+  await reachSummary();
+  await checkState(false);
+  await key(popup, 'Enter');
+  await checkState(true);
+  await audit(popup, theme, 'review-help-disclosure-open');
+  await keyboardReview(popup, theme, 'review-help-disclosure-open');
+  await reachSummary();
+  await key(popup, 'Enter');
+  await checkState(false);
+  // Traverse the closed disclosure too: its contents must add no Tab stops,
+  // while the surrounding status, warning and action checks remain in audit.
+  await audit(popup, theme, 'review-help-disclosure-closed');
+  await keyboardReview(popup, theme, 'review-help-disclosure-closed');
+}
+
 for (const theme of ['light', 'dark'] as const) {
   test(`native packaged ${theme}: rendered review/help, manual editor and delete confirmation accessibility (NOT human QA)`, async () => {
     test.setTimeout(90_000);
@@ -238,6 +331,7 @@ for (const theme of ['light', 'dark'] as const) {
       await popup.wait(`document.querySelectorAll('[data-review-id]').length === 1`);
       await popup.click('[data-action="review-as-subscription"]');
       await auditLayout(popup, `${theme}-review-editor`, true);
+      await attachNativeScreenshot(popup, theme, 'review-editor');
       for (const [name, value] of Object.entries({ merchant: 'Fake local membership', amount: '12.00', currency: 'USD', cadence: 'monthly' })) await popup.fill(name, value);
       await popup.click('[data-subscription-editor] [type="submit"]');
       await popup.wait(`document.querySelector('[aria-label="Subscriptions"] > [role="status"]').textContent === 'Subscription saved locally.'`);
@@ -248,6 +342,7 @@ for (const theme of ['light', 'dark'] as const) {
       // Reserved mock origins are deliberately not provider sites. Exercise the
       // genuine no-link help fallback without forging a provider or opening one.
       expect(await popup.evaluate(`document.querySelectorAll('[data-subscription-list] a').length`)).toBe(0);
+      await keyboardDisclosure(popup, theme);
       const reviewHelpPayload = await capturePayloadLayout(popup);
       await audit(popup, theme, 'review-help');
       await keyboardReview(popup, theme, 'review-help');
@@ -281,7 +376,7 @@ for (const theme of ['light', 'dark'] as const) {
       const narrow = await runtime.context.newPage();
       await narrow.setViewportSize({ width: 320, height: 720 });
       await narrow.emulateMedia({ colorScheme: theme });
-      const narrowPopup = { evaluate: <T>(expression: string) => narrow.evaluate<T, never>(expression) };
+      const narrowPopup = { evaluate: <T>(expression: string) => narrow.evaluate<T, undefined>(expression, undefined) };
       for (const [state, payload] of [['review-help', reviewHelpPayload], ['manual-editor', manualEditorPayload]] as const) {
         expect(payload.css, `${state} actual built popup CSS`).not.toBe('');
         await narrow.setContent(payload.html);

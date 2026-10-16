@@ -215,3 +215,14 @@ it('validates versioned paginated history independently of scan DTOs', () => {
     expect(isWorkerRequest({ type: 'CLEARCHOICE_REVIEW_RETENTION', version: 1, policy })).toBe(true);
   expect(isWorkerRequest({ type: 'CLEARCHOICE_REVIEW_RETENTION', version: 1, policy: 31 })).toBe(false);
 });
+
+it('validates the exact worker-owned permission schema and honest operation errors', () => {
+  const request = { type: 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION', origin: 'https://merchant.test', tabId: 42 };
+  expect(messages.isWorkerRequest(request)).toBe(true);
+  for (const change of [{ tabId: undefined }, { tabId: -1 }, { tabId: Infinity }, { tabId: 1.5 }, { tabId: '42' }, { origin: 'https://merchant.test/path' }, { origin: 'https://Merchant.test' }, { windowId: 1 }])
+    expect(messages.isWorkerRequest({ ...request, ...change })).toBe(false);
+  for (const error of ['permission-denied', 'operation-expired']) {
+    expect(messages.isSiteResponse({ ok: false, error })).toBe(true);
+    expect(messages.isSiteResponse({ ok: false, error, enabled: true })).toBe(false);
+  }
+});

@@ -1,3 +1,4 @@
+import { resolveCapacityDebugger } from './capacity-debugger';
 import { expect, test } from 'playwright/test';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -164,13 +165,10 @@ async function observeCapacityBranch(runtime: PackagedRuntime) {
     else if (message.method === 'Debugger.paused') pause(message.params);
   });
   const source = await readFile(runtime.extension + '/worker.js', 'utf8');
-  const statement = 'throw new q("Review history capacity exceeded")';
-  const offset = source.indexOf(statement);
-  if (offset < 0 || source.indexOf(statement, offset + 1) !== -1) throw Error('Packaged capacity throw changed');
-  const lines = source.slice(0, offset).split('\n');
+  const capacity = resolveCapacityDebugger(source);
   await send('Debugger.enable');
   const breakpoint = await send('Debugger.setBreakpointByUrl', { url: runtime.worker.url(),
-    lineNumber: lines.length - 1, columnNumber: lines.at(-1)!.length });
+    lineNumber: capacity.lineNumber, columnNumber: capacity.columnNumber });
   let timer: ReturnType<typeof setTimeout>;
   const proof = new Promise<Branch>((resolve, reject) => {
     timer = setTimeout(() => reject(Error('Production capacity throw not observed')), 15_000);
@@ -178,7 +176,7 @@ async function observeCapacityBranch(runtime: PackagedRuntime) {
       try {
         if (!event.hitBreakpoints.includes(breakpoint.breakpointId as string)) throw Error('Unexpected worker pause');
         const result = await send('Debugger.evaluateOnCallFrame', { callFrameId: event.callFrames[0].callFrameId,
-          expression: '({requestId:n.requestId,origin:o,candidateCount:l.length})', returnByValue: true, throwOnSideEffect: true });
+          expression: `({requestId:${capacity.request}.requestId,origin:${capacity.origin},candidateCount:${capacity.candidates}.length})`, returnByValue: true, throwOnSideEffect: true });
         if (result.exceptionDetails) throw Error('Capacity branch locals unavailable');
         await send('Debugger.resume');
         clearTimeout(timer);

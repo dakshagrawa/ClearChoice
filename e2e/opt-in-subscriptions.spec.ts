@@ -1,3 +1,4 @@
+import { resolveCapacityDebugger } from './capacity-debugger';
 import { expect, test } from 'playwright/test';
 import { readFile } from 'node:fs/promises';
 import { PackagedRuntime } from './packaged-runtime';
@@ -50,10 +51,11 @@ async function capacityRejectionProof(runtime: PackagedRuntime) {
   };
   const workerSource = await readFile(runtime.extension + '/worker.js', 'utf8');
   const contentSource = await readFile(runtime.extension + '/content.js', 'utf8');
+  const capacity = resolveCapacityDebugger(workerSource);
   await send('Debugger.enable');
   await page.send('Debugger.enable');
   const branch = await send('Debugger.setBreakpointByUrl', {
-    url: runtime.worker.url(), ...position(workerSource, 'throw new q("Review history capacity exceeded")'),
+    url: runtime.worker.url(), lineNumber: capacity.lineNumber, columnNumber: capacity.columnNumber,
   });
   const settlement = await page.send('Debugger.setBreakpointByUrl', {
     url: `chrome-extension://${runtime.extensionId}/content.js`,
@@ -70,7 +72,7 @@ async function capacityRejectionProof(runtime: PackagedRuntime) {
       try {
         if (!event.hitBreakpoints.includes(branch.breakpointId as string)) throw Error('Unexpected worker pause');
         const result = await send('Debugger.evaluateOnCallFrame', { callFrameId: event.callFrames[0].callFrameId,
-          expression: '({requestId:n.requestId,origin:o,candidateCount:l.length,findings:n.findings.map(f=>({opaqueFingerprint:f.opaqueFingerprint,ordinal:f.ordinal}))})', returnByValue: true, throwOnSideEffect: true });
+          expression: `({requestId:${capacity.request}.requestId,origin:${capacity.origin},candidateCount:${capacity.candidates}.length,findings:${capacity.request}.findings.map(f=>({opaqueFingerprint:f.opaqueFingerprint,ordinal:f.ordinal}))})`, returnByValue: true, throwOnSideEffect: true });
         if (result.exceptionDetails) throw Error('Capacity branch locals unavailable');
         await send('Debugger.resume');
         resolve((result.result as { value: Identity & { candidateCount: number } }).value);

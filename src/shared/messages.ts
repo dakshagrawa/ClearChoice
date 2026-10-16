@@ -165,17 +165,18 @@ export const CLEARCHOICE_ANALYZE = 'CLEARCHOICE_ANALYZE' as const;
 export const CLEARCHOICE_RESTORE = 'CLEARCHOICE_RESTORE' as const;
 export const CLEARCHOICE_DISABLE = 'CLEARCHOICE_DISABLE' as const;
 export const CLEARCHOICE_SITE_STATUS = 'CLEARCHOICE_SITE_STATUS' as const;
+export const CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION = 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION' as const;
 export const CLEARCHOICE_SITE_ENABLE = 'CLEARCHOICE_SITE_ENABLE' as const;
 export const CLEARCHOICE_SITE_REVOKE = 'CLEARCHOICE_SITE_REVOKE' as const;
 export type SiteResponse = { ok: true; enabled: boolean; permitted: boolean }
-  | { ok: false; error: 'request-failed' | 'revocation-unsafe' };
+  | { ok: false; error: 'request-failed' | 'revocation-unsafe' | 'permission-denied' | 'operation-expired' };
 
 export function isSiteResponse(value: unknown): value is SiteResponse {
   if (!isRecord(value)) return false;
   return (hasExactKeys(value, ['ok', 'enabled', 'permitted']) && value.ok === true
     && typeof value.enabled === 'boolean' && typeof value.permitted === 'boolean')
     || (hasExactKeys(value, ['ok', 'error']) && value.ok === false
-      && (value.error === 'request-failed' || value.error === 'revocation-unsafe'));
+      && (value.error === 'request-failed' || value.error === 'revocation-unsafe' || value.error === 'permission-denied' || value.error === 'operation-expired'));
 }
 
 export interface AnalyzeRequest {
@@ -210,6 +211,8 @@ export function isContentRequest(value: unknown): value is ContentRequest {
 
 export function isWorkerRequest(value: unknown): boolean {
   if (!isRecord(value)) return false;
+  if (hasExactKeys(value, ['type', 'origin', 'tabId']) && value.type === CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION)
+    return isGrantOrigin(value.origin) && Number.isSafeInteger(value.tabId) && (value.tabId as number) >= 0;
   if (hasExactKeys(value, ['type', 'version']) && value.type === CLEARCHOICE_SUBSCRIPTION_LIST) return value.version === 1;
   if (hasExactKeys(value, ['type', 'version', 'fields']) && value.type === CLEARCHOICE_SUBSCRIPTION_CREATE)
     return value.version === 1 && isSubscriptionFields(value.fields);

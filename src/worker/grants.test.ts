@@ -243,3 +243,29 @@ it('grant work shares the serialized finding mutation queue', async () => {
   release(); await first; await pending;
   expect(f.registerContentScripts).toHaveBeenCalledTimes(1);
 });
+
+it('checks cancellation inside the queue before touching registration or storage', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*');
+  const store = createWorkerStore(); const grants = createGrantManager(store);
+  let release!: () => void;
+  const blocked = store.enqueue(() => new Promise<void>((resolve) => { release = resolve; }));
+  await vi.waitFor(() => expect(release).toBeDefined());
+  let active = true;
+  const enable = grants.enable('https://a.test', async () => active);
+  active = false; release(); await blocked;
+  await expect(enable).rejects.toThrow('Active site changed');
+  expect(f.registerContentScripts).not.toHaveBeenCalled();
+  expect(f.set).not.toHaveBeenCalled();
+});
+
+it('does not bypass cancellation through the already-enabled early return', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*');
+  const grants = createGrantManager(createWorkerStore());
+  await grants.enable('https://a.test');
+  const before = structuredClone(f.data);
+  let active = true;
+  f.getRegisteredContentScripts.mockImplementationOnce(async () => { active = false; return structuredClone(f.scripts); });
+  await expect(grants.enable('https://a.test', async () => active)).rejects.toThrow('Active site changed');
+  expect(f.data).toEqual(before);
+  expect(await grants.isEnabled('https://a.test', 1)).toBe(true);
+});

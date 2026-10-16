@@ -1,3 +1,9 @@
+# 1.0.0-rc.3 (unreleased)
+
+- Prepare RC3 identity while retaining Chrome numeric version `1.0.0`; preserve published RC1/RC2 history and the immutable 0.4 prototype.
+- Document worker-owned native permission completion and truthful unknown-state recovery, plus the 520px popup layout and existing-control refinements.
+- Diagnostic Allow/Deny evidence is synthetic automation on Chromium 141 Linux, not human attestation or final RC3 verification. M1 re-review, full final checks, artifact binding, CI, and human acceptance remain pending; human QA is stopped.
+
 # 1.0.0-rc.2 (unreleased)
 
 - Use neutral unsupported-checkout guidance for Analyze without implying a language failure.

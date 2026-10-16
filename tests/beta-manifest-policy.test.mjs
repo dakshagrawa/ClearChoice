@@ -5,7 +5,7 @@ import { expect, test } from 'vitest';
 import { generateManifest } from '../scripts/build-manifest.mjs';
 
 const repositoryRoot = resolve(process.cwd());
-const candidatePackageVersion = '1.0.0-rc.2';
+const candidatePackageVersion = '1.0.0-rc.3';
 const candidateChromeVersion = '1.0.0';
 const chromeVersionPattern = /^\d+(?:\.\d+){0,3}$/;
 const betaPermissions = ['activeTab', 'scripting', 'storage'];

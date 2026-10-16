@@ -1,6 +1,22 @@
-# ClearChoice 1.0.0-rc.2 production acceptance checklist
+# ClearChoice 1.0.0-rc.3 production acceptance checklist
 
-This is the unreleased `1.0.0-rc.2` production release candidate, not release-ready or published. Chrome numeric version is `1.0.0`. Production acceptance remains blocked; human QA is stopped. Existing privacy and permission requirements and all uncompleted gates below apply to promotion. See [production readiness](../production-readiness.md).
+This is the unreleased `1.0.0-rc.3` production release candidate, not release-ready or published. Chrome numeric version is `1.0.0`. Production acceptance remains blocked; human QA is stopped. Existing privacy and permission requirements and all uncompleted gates below apply to promotion. See [production readiness](../production-readiness.md).
+
+## Current RC3 scope and pending gates
+
+One extension **Enable detection for this site** click starts a worker-owned operation; native Chrome **Allow** lets that operation complete. Popup disappearance does not own completion. The popup calls `sendMessage` synchronously before awaiting, and the worker calls `permissions.request` synchronously before awaiting. Completion is bound to the exact sender, origin, and tab through a cancelable in-memory operation that expires after 120 seconds. Arbitrary `permissions.onAdded` events and persisted pending consent cannot enable detection.
+
+Unexpected worker termination or lost operation state can leave browser access without detection. Reopen the popup to inspect status, or remove site access in Chrome Settings. Recovery must report an unknown outcome truthfully; permission presence alone must not replay Enable or be treated as an application grant. Permission, registration, and storage steps are not an atomic transaction.
+
+The popup is 520px wide, uses light/dark design tokens, and makes **Analyze** the primary action. Subscriptions appear before history; explanations expand through a keyboard-focusable summary. These changes refine existing behavior and do not establish final polish or stable approval.
+
+Current automated native evidence is limited to Chromium 141 on Linux; other platforms and Chrome versions are unverified. Published RC2's native Allow diagnostic left browser permission true, the application grant absent, and zero registered scripts. A working diagnostic artifact before M1 acknowledgement-recovery metadata revision 3 verified fresh Allow → application grant true with the correct isolated script, and Deny → no access, application grant, or script. The popup closed and reopened without a second Enable click. This used synthetic automated native OS input, not human attestation, a final RC3 artifact binding, or a full gate pass.
+
+The parent broad run had 918 unit tests green before M1; M1's focused parent run had 36 green. The E2E run passed 20/22, with two brittle capacity-probe aliases being fixed by another owner. M1 source is complete but re-review and full final verification remain pending. Fresh RC3 CI, final artifact verification, and final human acceptance are unresolved. The user stopped human QA; no stable approval or publication is claimed.
+
+- [ ] Complete M1 re-review and capacity-probe repairs.
+- [ ] Verify the final RC3 source, package, and CI; bind final assets separately.
+- [ ] Resolve final human acceptance; human QA remains stopped.
 
 The beta identity and execution results below are historical baseline evidence.
 

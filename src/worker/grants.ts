@@ -93,6 +93,7 @@ export function createGrantManager(store: Queue) {
     enable(origin: string, stillActive?: () => Promise<boolean>): Promise<{ generation: number; newlyEnabled: boolean }> {
       return store.enqueue(async () => {
         if (!isGrantOrigin(origin)) throw new Error('Invalid HTTPS origin');
+        if (stillActive && !await stillActive()) throw new Error('Active site changed');
         const id = await scriptId(origin);
         const state = await loadGrantState();
         if (!await chrome.permissions.contains({ origins: [match(origin)] })) {
@@ -100,7 +101,10 @@ export function createGrantManager(store: Queue) {
           else await unregister(id);
           throw new Error('Origin permission not granted');
         }
-        if (state.sites[origin]?.enabled && !locallyDisabled.has(origin) && await registered(origin, id)) return { generation: state.sites[origin].generation, newlyEnabled: false };
+        if (state.sites[origin]?.enabled && !locallyDisabled.has(origin) && await registered(origin, id)) {
+          if (stillActive && !await stillActive()) throw new Error('Active site changed');
+          return { generation: state.sites[origin].generation, newlyEnabled: false };
+        }
         // Never leave a mismatched/old registration active while enabling.
         await unregister(id);
         const previous = state.sites[origin]?.generation ?? 0;

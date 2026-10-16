@@ -1,7 +1,7 @@
 import { mountReview } from './review';
 import { mountSubscriptions } from './subscriptions';
 import type { AnalyzeResponse, SiteResponse } from '../shared/messages';
-import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE, CLEARCHOICE_SITE_REVOKE, isAnalyzeResponse, isRestoreResponse, isSiteResponse } from '../shared/messages';
+import { CLEARCHOICE_ANALYZE, CLEARCHOICE_RESTORE, CLEARCHOICE_SITE_STATUS, CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION, CLEARCHOICE_SITE_REVOKE, isAnalyzeResponse, isRestoreResponse, isSiteResponse } from '../shared/messages';
 import { isGrantOrigin } from '../shared/storage';
 
 const app = document.querySelector<HTMLElement>('#app');
@@ -10,15 +10,20 @@ if (!app) throw new Error('ClearChoice popup root is missing.');
 
 app.innerHTML = `
   <main>
+    <header class="popup-header">
     <h1>ClearChoice</h1>
     <p>Review the active page for possible recurring charges and preselected paid options.</p>
+    </header>
     <div class="actions">
       <button type="button" data-action="analyze">Analyze</button>
       <button type="button" data-action="restore">Restore</button>
     </div>
-    <p aria-live="polite" role="status">Analyze this tab locally.</p>
-    <section aria-label="Site detection">
+    <p data-analysis-status aria-live="polite" role="status">Analyze this tab locally.</p>
+    <section class="site-detection" aria-label="Site detection">
+      <details>
+        <summary>About site detection</summary>
       <p>Optional detection on supported English checkout pages only. Observations stay local; panels appear only after findings are saved. Enabling a site does not confirm a completed scan.</p>
+      </details>
       <button type="button" data-action="site-enable" disabled>Enable detection for this site</button>
       <button type="button" data-action="site-disable" disabled>Disable detection for this site</button>
       <p data-site-status role="status" aria-live="polite">Checking this site…</p>
@@ -27,15 +32,14 @@ app.innerHTML = `
 `;
 
 const reviewRoot = document.createElement('div');
-app.querySelector('main')!.append(reviewRoot);
 const subscriptionsRoot = document.createElement('div');
-app.querySelector('main')!.append(subscriptionsRoot);
+app.querySelector('main')!.append(subscriptionsRoot, reviewRoot);
 const subscriptions = mountSubscriptions(subscriptionsRoot);
 const review = mountReview(reviewRoot, (item, control) => subscriptions.reviewAsSubscription(item, control), subscriptions.invalidateSuggestion);
 
 const analyzeButton = app.querySelector<HTMLButtonElement>('[data-action="analyze"]');
 const restoreButton = app.querySelector<HTMLButtonElement>('[data-action="restore"]');
-const status = app.querySelector<HTMLParagraphElement>('[role="status"]');
+const status = app.querySelector<HTMLParagraphElement>('[data-analysis-status]');
 
 if (!analyzeButton || !restoreButton || !status) throw new Error('ClearChoice popup controls are missing.');
 
@@ -118,35 +122,68 @@ void (async () => {
   } catch { siteStatus.textContent = 'Could not check this site. Reopen the popup.'; }
 })();
 
+async function recoverEnable(target: { id: number; origin: string }, unsafe = false): Promise<void> {
+  async function current(): Promise<boolean> {
+    let matches = false;
+    try { matches = await sameSite(target); } catch { /* Cannot verify the target. */ }
+    if (site !== target || !matches) { invalidateSite(); return false; }
+    return true;
+  }
+  if (!await current()) return;
+  let access: boolean | undefined;
+  try { access = await chrome.permissions.contains({ origins: [`${target.origin}/*`] }); }
+  catch { /* Unknown browser access needs a settings remedy. */ }
+  if (!await current()) return;
+  const response = await siteMessage(CLEARCHOICE_SITE_STATUS, target.origin);
+  if (!await current()) return;
+  // Browser access alone cannot establish whether the independent enable completed.
+  if (access !== undefined) permitted = access;
+  if (access === true && response.ok && response.enabled && response.permitted && !unsafe) {
+    enabled = true;
+    workerUnavailable = false;
+    siteStatus.textContent = `Detection enabled for ${target.origin}; supported English checkout detection is enabled, not a completed scan.`;
+    return;
+  }
+  workerUnavailable = true;
+  siteStatus.textContent = unsafe || (!response.ok && response.error === 'revocation-unsafe')
+    ? `Detection state is unsafe for ${target.origin}. Remove site access in Chrome settings before restarting the browser.`
+    : `Could not enable detection with confirmation for ${target.origin}; enable completion is unknown. ${access === true
+      ? 'browser site access remains; use Disable below or remove access in Chrome settings.'
+      : access === false ? 'Browser site access is currently absent. Reopen the popup to check detection.'
+        : 'Browser site access could not be checked. Check or remove access in Chrome settings.'}`;
+}
+
 enableButton.addEventListener('click', () => {
   if (busy || !site || enableButton.disabled) return;
   const target = site;
   busy = true; revision++;
   controls();
   siteStatus.textContent = `Requesting access to ${target.origin}…`;
-  // This call must occur on the click stack: an awaited tab lookup loses Chrome's user gesture.
-  let permission: Promise<boolean>;
-  try { permission = chrome.permissions.request({ origins: [`${target.origin}/*`] }); }
-  catch { permission = Promise.reject(new Error('Permission request failed')); }
+  // Synchronous send preserves Chrome's gesture for the worker's request call.
+  let completion: Promise<unknown>;
+  try { completion = chrome.runtime.sendMessage({ type: CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION, origin: target.origin, tabId: target.id }); }
+  catch { completion = Promise.reject(new Error('Enable request failed')); }
   void (async () => {
     try {
-      const allowed = await permission;
-      if (!allowed) { siteStatus.textContent = `Access denied for ${target.origin}; detection remains off.`; return; }
-      permitted = true;
-      if (site !== target || !await sameSite(target)) { site = undefined; siteStatus.textContent = `Active tab changed. Detection was not enabled for ${target.origin}; browser site access may remain. Remove it in Chrome settings if unwanted.`; return; }
-      const response = await siteMessage(CLEARCHOICE_SITE_ENABLE, target.origin);
-      if (site !== target || !await sameSite(target)) {
+      const result = await completion;
+      const response: SiteResponse = isSiteResponse(result) ? result : { ok: false, error: 'request-failed' };
+      const matches = await sameSite(target);
+      if (site !== target || !matches) {
         site = undefined;
         siteStatus.textContent = `Active tab changed after the enable request for ${target.origin}. Check this site's detection and access in Chrome settings.`;
         return;
       }
-      if (!response.ok && response.error === 'revocation-unsafe') { siteStatus.textContent = `Detection state is unsafe for ${target.origin}. Remove site access in Chrome settings before restarting the browser.`; return; }
-      if (!response.ok || !response.enabled || !response.permitted) { siteStatus.textContent = `Could not enable detection for ${target.origin}. Browser site access may remain; use Disable below or Chrome settings.`; return; }
+      if (!response.ok && response.error === 'permission-denied') { siteStatus.textContent = `Access denied for ${target.origin}; detection remains off.`; return; }
+      if (!response.ok && response.error === 'operation-expired') { invalidateSite(); siteStatus.textContent = 'Enable request expired or the active tab changed. Reopen the popup to check detection.'; return; }
+      if (!response.ok || !response.enabled || !response.permitted) {
+        await recoverEnable(target, !response.ok && response.error === 'revocation-unsafe');
+        return;
+      }
       enabled = true;
       permitted = response.permitted;
       siteStatus.textContent = `Detection enabled for ${target.origin}; supported English checkout detection is enabled, not a completed scan.`;
       controls();
-    } catch { siteStatus.textContent = `Access request failed for ${target.origin}; detection remains off.`; }
+    } catch { await recoverEnable(target); }
     finally { busy = false; controls(); }
   })();
 });
