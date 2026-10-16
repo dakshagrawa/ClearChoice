@@ -5,16 +5,18 @@ export function mountReview(root: HTMLElement, reviewAsSubscription?: (item: Rev
   // Fixed extension-owned template; record content is assigned with textContent below.
   root.innerHTML = `<section aria-labelledby="review-heading">
     <h2 id="review-heading">Needs review</h2>
-    <p>Local observations are not confirmed subscriptions. Marking reviewed does not create a subscription. Turning detection off does not delete history.</p>
+    <p>Local observations are not confirmed subscriptions.</p>
     <p data-review-count>Review count unavailable.</p>
     <button type="button" data-action="review-refresh">Refresh history</button>
     <p data-review-status role="status" aria-live="polite">Loading local history…</p>
+    <details><summary>History and retention</summary><p>Marking reviewed does not create a subscription. Turning detection off does not delete history.</p>
     <label for="review-retention">Keep local observations</label>
     <select id="review-retention" data-review-retention disabled>
       <option value="7">7 days</option><option value="30">30 days</option>
       <option value="90">90 days</option><option value="never">Never expire</option>
     </select>
     <p>Expiry is based on latest seen. Shorter retention can permanently remove older observations.</p>
+    <div data-retention-confirmation></div></details>
     <ol data-review-items></ol>
     <nav aria-label="Review history pages">
       <button type="button" data-action="review-previous" disabled>Previous page</button>
@@ -29,9 +31,12 @@ export function mountReview(root: HTMLElement, reviewAsSubscription?: (item: Rev
   const retention = root.querySelector<HTMLSelectElement>('[data-review-retention]')!;
   const refreshButton = root.querySelector<HTMLButtonElement>('[data-action="review-refresh"]')!;
   let mutating = false;
+  let loading = false;
+  let confirmedPolicy: ReviewListResponse['retentionPolicy'] | undefined;
   let refreshPending = false;
   let revision = 0;
   function controls(): void {
+    root.querySelector('section')!.setAttribute('aria-busy', String(mutating || loading));
     refreshButton.disabled = mutating;
     retention.disabled = mutating || !snapshot;
     previous.disabled = mutating || !snapshot || snapshot.offset === 0;
@@ -65,11 +70,19 @@ export function mountReview(root: HTMLElement, reviewAsSubscription?: (item: Rev
   function render(item: ReviewItem): HTMLElement {
     const row = document.createElement('li');
     row.dataset.reviewId = item.id;
-    for (const text of [item.origin, item.status === 'needs-review' ? 'Needs review' : 'Reviewed', `ID: ${item.id}`, `${item.kind} — ${item.reason}`, item.screenedExcerpt, `First seen: ${item.firstSeen}`, `Latest seen: ${item.latestSeen}`]) {
-      const paragraph = document.createElement('p');
-      paragraph.textContent = text;
-      row.append(paragraph);
+    const heading = document.createElement('h3'); heading.textContent = item.origin;
+    const state = document.createElement('p'); state.textContent = item.status === 'needs-review' ? 'Needs review' : 'Reviewed';
+    const signal = document.createElement('p'); signal.textContent = item.kind === 'recurring-charge' ? 'Possible recurring charge' : 'Preselected paid option';
+    const excerpt = document.createElement('p'); excerpt.textContent = item.screenedExcerpt;
+    const details = document.createElement('details');
+    const summary = document.createElement('summary'); summary.textContent = 'Details'; details.append(summary);
+    const diagnostic = document.createElement('p'); diagnostic.textContent = `ID: ${item.id} · ${item.kind} — ${item.reason}`; details.append(diagnostic);
+    for (const [label, instant] of [['First seen', item.firstSeen], ['Latest seen', item.latestSeen]]) {
+      const paragraph = document.createElement('p'); const time = document.createElement('time');
+      time.dateTime = instant; time.textContent = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(instant));
+      paragraph.append(`${label}: `, time); details.append(paragraph);
     }
+    row.append(heading, state, signal, excerpt, details);
     const mark = document.createElement('button');
     mark.type = 'button'; mark.dataset.action = 'review-mark'; mark.dataset.reviewMutation = '';
     mark.dataset.reviewed = String(item.status === 'reviewed');
@@ -96,8 +109,10 @@ export function mountReview(root: HTMLElement, reviewAsSubscription?: (item: Rev
   async function load(offset: number): Promise<void> {
     invalidateSuggestion?.();
     const current = ++revision;
+    loading = true;
+    root.querySelector('[data-retention-confirmation]')!.replaceChildren();
     snapshot = undefined;
-    retention.selectedIndex = -1;
+    if (confirmedPolicy === undefined) retention.selectedIndex = -1;
     controls();
     count.textContent = 'Review count unavailable while refreshing.';
     status.textContent = 'Loading local history…';
@@ -109,7 +124,7 @@ export function mountReview(root: HTMLElement, reviewAsSubscription?: (item: Rev
         || response.findings.length !== Math.min(100, Math.max(0, response.total - offset))) throw new Error('Invalid history response');
       // Retention may remove a page between requests. Return to a valid first page.
       if (response.total > 0 && offset >= response.total) { await load(0); return; }
-      snapshot = response;
+      snapshot = response; confirmedPolicy = response.retentionPolicy; loading = false;
       count.textContent = `${response.needsReviewCount} observation${response.needsReviewCount === 1 ? '' : 's'} ${response.needsReviewCount === 1 ? 'needs' : 'need'} review.`;
       list.start = offset + 1;
       list.replaceChildren(...response.findings.map(render));
@@ -118,6 +133,7 @@ export function mountReview(root: HTMLElement, reviewAsSubscription?: (item: Rev
       status.textContent = response.total === 0 ? 'No retained observations.' : `Showing ${offset + 1}–${offset + response.findings.length} of ${response.total} retained observations (including reviewed).`;
     } catch {
       if (current !== revision) return;
+      loading = false;
       count.textContent = 'Review count unavailable.';
       status.textContent = 'Could not load local history. Try refreshing.';
       controls();
@@ -132,7 +148,19 @@ export function mountReview(root: HTMLElement, reviewAsSubscription?: (item: Rev
     const policy = retention.value === 'never' ? 'never' : Number(retention.value);
     retention.value = String(snapshot.retentionPolicy);
     if (policy === 7 || policy === 30 || policy === 90 || policy === 'never') {
-      void mutate({ type: CLEARCHOICE_REVIEW_RETENTION, version: 1, policy });
+      const confirmation = root.querySelector<HTMLElement>('[data-retention-confirmation]')!;
+      confirmation.replaceChildren();
+      if (policy !== 'never' && (snapshot.retentionPolicy === 'never' || policy < snapshot.retentionPolicy)) {
+        confirmation.innerHTML = '<p>Apply shorter retention? Older observations may be permanently deleted. This cannot be undone.</p><button type="button" data-action="retention-cancel">Cancel</button><button type="button" data-action="retention-apply">Apply shorter retention</button>';
+        confirmation.querySelector('p')!.textContent = `Keep observations for ${policy} days? Older observations may be permanently deleted. This cannot be undone.`;
+        const cancel = confirmation.querySelector<HTMLButtonElement>('[data-action="retention-cancel"]')!;
+        cancel.addEventListener('click', () => { confirmation.replaceChildren(); retention.focus(); });
+        confirmation.querySelector('[data-action="retention-apply"]')!.addEventListener('click', (event) => {
+          if (mutating || !snapshot || !confirmation.contains(event.currentTarget as Node)) return;
+          retention.focus(); confirmation.replaceChildren(); void mutate({ type: CLEARCHOICE_REVIEW_RETENTION, version: 1, policy });
+        });
+        cancel.focus();
+      } else { void mutate({ type: CLEARCHOICE_REVIEW_RETENTION, version: 1, policy }); }
     }
   });
   root.querySelector('[data-action="review-refresh"]')!.addEventListener('click', () => { void refresh(); });

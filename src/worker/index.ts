@@ -136,6 +136,7 @@ async function enableSiteNow(origin: string, tabId: number, currentSite: () => P
     if (typeof started !== 'object' || started === null || Object.keys(started).length !== 1
       || !('ok' in started) || started.ok !== true || !await currentSite()
       || !await grants.isEnabled(origin, generation) || !await currentSite()) throw new Error('Bootstrap start refused');
+    if (newlyEnabled) await grants.completeEnable(origin, generation);
   } catch {
     if (newlyEnabled) {
       try { await grants.rollbackEnable(origin, generation); }

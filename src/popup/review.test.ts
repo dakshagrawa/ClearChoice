@@ -100,6 +100,7 @@ it('rolls retention back on failure and reads back success rather than claiming 
   const select = document.querySelector<HTMLSelectElement>('[data-review-retention]')!;
   expect(Array.from(select.options, (option) => option.value)).toEqual(['7', '30', '90', 'never']);
   select.value = '7'; select.dispatchEvent(new Event('change'));
+  button('retention-apply').click();
   await vi.waitFor(() => expect(select.value).toBe('30'));
   expect(document.querySelector('[data-review-status]')?.textContent).toContain('Could not save');
   succeed = true;
@@ -199,9 +200,28 @@ it('loads local review history independently of unavailable site detection and n
   const record = document.querySelector('[data-review-id="legacy-record"]');
   expect(record?.textContent).toContain('https://shop.test');
   expect(record?.textContent).toContain('Renews monthly');
-  expect(record?.textContent).toContain('2026-09-28T01:00:00.000Z');
+  expect(record?.querySelector('time[datetime="2026-09-28T01:00:00.000Z"]')).not.toBeNull();
   expect(record?.textContent).toContain('Needs review');
   expect(document.body.textContent).toContain('not confirmed subscriptions');
   expect(send.mock.calls.every(([message]) => message.type === 'CLEARCHOICE_REVIEW_LIST' || message.type === 'CLEARCHOICE_SUBSCRIPTION_LIST')).toBe(true);
   expect(button('analyze')).toBe(document.querySelector('button'));
+});
+
+it('stages shorter retention with cancel and applies only the confirmed exact policy', async () => {
+  let policy = 30;
+  const send = await setup((message) => {
+    if (message.type === 'CLEARCHOICE_REVIEW_RETENTION') { policy = Number(message.policy); return { ok: true }; }
+    return { ...page(), retentionPolicy: policy };
+  });
+  const select = document.querySelector<HTMLSelectElement>('[data-review-retention]')!;
+  await vi.waitFor(() => expect(select.disabled).toBe(false));
+  select.value = '7'; select.dispatchEvent(new Event('change'));
+  expect(select.value).toBe('30');
+  expect(document.querySelector('[data-retention-confirmation]')?.textContent).toContain('7 days');
+  expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_REVIEW_RETENTION' }));
+  button('retention-cancel').click();
+  expect(send).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'CLEARCHOICE_REVIEW_RETENTION' }));
+  select.value = '7'; select.dispatchEvent(new Event('change')); button('retention-apply').click();
+  await vi.waitFor(() => expect(select.value).toBe('7'));
+  expect(send).toHaveBeenCalledWith({ type: 'CLEARCHOICE_REVIEW_RETENTION', version: 1, policy: 7 });
 });

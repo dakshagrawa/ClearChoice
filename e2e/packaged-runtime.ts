@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash, X509Certificate } from 'node:crypto';
 import { resolve, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { waitForPackagedWorker } from './worker-readiness';
 
 export class PackagedRuntime {
   context!: BrowserContext;
@@ -23,18 +24,7 @@ export class PackagedRuntime {
   // Tests may opt into the human runner's native (non-emulated) viewport.
   viewport: { width: number; height: number } | null | undefined;
   async wakeWorker() {
-    const existing = this.context.serviceWorkers().find(worker => worker.url().startsWith(`chrome-extension://${this.extensionId}/`));
-    if (existing) { this.worker = existing; return; }
-    // An extension-owned page wakes a dormant worker through genuine runtime APIs.
-    // It is not used as the trusted action-popup sender in integration assertions.
-    const ready = this.context.waitForEvent('serviceworker', {
-      predicate: worker => worker.url().startsWith(`chrome-extension://${this.extensionId}/`), timeout: 10_000,
-    });
-    const wake = await this.context.newPage();
-    try {
-      await wake.goto(`chrome-extension://${this.extensionId}/popup/index.html`);
-      this.worker = await ready;
-    } finally { await wake.close(); }
+    this.worker = await waitForPackagedWorker(this.context, this.extensionId);
   }
   async launch(installExtension = false) {
     this.context = await chromium.launchPersistentContext(this.profile, {

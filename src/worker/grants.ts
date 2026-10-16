@@ -29,17 +29,25 @@ async function unregister(id: string): Promise<void> {
 export function createGrantManager(store: Queue) {
   // A failed browser/storage cleanup must not authorize an old scan in this worker.
   const locallyDisabled = new Set<string>();
+  // Never restored from storage. The journal records unfinished work, not consent.
+  const provisionalOwners = new Map<string, { generation: number; current: () => Promise<boolean> }>();
   async function enabled(origin: string, generation: number): Promise<boolean> {
     if (!isGrantOrigin(origin) || locallyDisabled.has(origin) || !Number.isSafeInteger(generation) || generation < 1) return false;
     const state = await loadGrantState();
-    return state.sites[origin]?.enabled === true && state.sites[origin].generation === generation
+    const grant = state.sites[origin];
+    const owner = provisionalOwners.get(origin);
+    const current = async () => !locallyDisabled.has(origin) && ((!grant?.provisional && !owner)
+      || (owner?.generation === generation && provisionalOwners.get(origin) === owner && await owner.current()
+        && provisionalOwners.get(origin) === owner && !locallyDisabled.has(origin)));
+    return grant?.enabled === true && grant.generation === generation && await current()
       && await chrome.permissions.contains({ origins: [match(origin)] })
-      && await registered(origin, await scriptId(origin));
+      && await registered(origin, await scriptId(origin)) && await current();
   }
 
   async function disable(origin: string): Promise<void> {
     if (!isGrantOrigin(origin)) throw new Error('Invalid HTTPS origin');
     locallyDisabled.add(origin);
+    provisionalOwners.delete(origin);
     let failure: unknown;
     let failed = false;
     let storageFailed = false;
@@ -89,7 +97,7 @@ export function createGrantManager(store: Queue) {
   }
 
   return {
-    /** Caller must already hold the exact-origin browser permission from a popup click. */
+    /** Caller must hold exact-origin permission; newly enabled grants require completeEnable after bootstrap. */
     enable(origin: string, stillActive?: () => Promise<boolean>): Promise<{ generation: number; newlyEnabled: boolean }> {
       return store.enqueue(async () => {
         if (!isGrantOrigin(origin)) throw new Error('Invalid HTTPS origin');
@@ -101,7 +109,7 @@ export function createGrantManager(store: Queue) {
           else await unregister(id);
           throw new Error('Origin permission not granted');
         }
-        if (state.sites[origin]?.enabled && !locallyDisabled.has(origin) && await registered(origin, id)) {
+        if (state.sites[origin]?.enabled && !state.sites[origin].provisional && !locallyDisabled.has(origin) && await registered(origin, id)) {
           if (stillActive && !await stillActive()) throw new Error('Active site changed');
           return { generation: state.sites[origin].generation, newlyEnabled: false };
         }
@@ -113,7 +121,8 @@ export function createGrantManager(store: Queue) {
           if (stillActive && !await stillActive()) throw new Error('Active site changed');
           await chrome.scripting.registerContentScripts([{ id, matches: [match(origin)], js: ['content.js'], allFrames: false, persistAcrossSessions: true, world: 'ISOLATED' }]);
           if (stillActive && !await stillActive()) throw new Error('Active site changed');
-          await saveGrantState({ version: 1, sites: { ...state.sites, [origin]: { enabled: true, generation: previous + 1 } } });
+          await saveGrantState({ version: 1, sites: { ...state.sites, [origin]: { enabled: true, generation: previous + 1, provisional: true } } });
+          provisionalOwners.set(origin, { generation: previous + 1, current: stillActive ?? (async () => true) });
           locallyDisabled.delete(origin);
           return { generation: previous + 1, newlyEnabled: true };
         } catch (error) {
@@ -127,7 +136,35 @@ export function createGrantManager(store: Queue) {
         }
       });
     },
+    completeEnable(origin: string, generation: number): Promise<void> {
+      return store.enqueue(async () => {
+        const state = await loadGrantState();
+        const grant = state.sites[origin];
+        const owner = provisionalOwners.get(origin);
+        if (!owner || owner.generation !== generation || !grant?.provisional || grant.generation !== generation || !await enabled(origin, generation))
+          throw new Error('Enable no longer authorized');
+        await saveGrantState({ version: 1, sites: { ...state.sites, [origin]: { enabled: true, generation } } });
+        // The completion write is not atomic with cancellation. Keep its captured
+        // owner authoritative until the post-write checkpoint has passed.
+        if (provisionalOwners.get(origin) !== owner || !await owner.current().catch(() => false)
+          || provisionalOwners.get(origin) !== owner) {
+          if (provisionalOwners.get(origin) === owner) locallyDisabled.add(origin);
+          const latest = await loadGrantState();
+          if (latest.sites[origin]?.generation === generation) {
+            // Already inside the queue: enqueueing rollback here would deadlock.
+            await disable(origin);
+          }
+          throw new Error('Enable no longer authorized');
+        }
+        provisionalOwners.delete(origin);
+      });
+    },
     rollbackEnable(origin: string, generation: number): Promise<void> {
+      // Veto reads immediately, even when cleanup waits behind history work.
+      if (provisionalOwners.get(origin)?.generation === generation) {
+        locallyDisabled.add(origin);
+        provisionalOwners.delete(origin);
+      }
       return store.enqueue(async () => {
         const state = await loadGrantState();
         // A newer operation owns this site now; never revoke that operation's grant.
@@ -153,7 +190,7 @@ export function createGrantManager(store: Queue) {
         }
         const scripts = await chrome.scripting.getRegisteredContentScripts();
         for (const [origin, grant] of Object.entries(state.sites)) {
-          if (grant.enabled && (!await chrome.permissions.contains({ origins: [match(origin)] })
+          if (grant.enabled && (grant.provisional || !await chrome.permissions.contains({ origins: [match(origin)] })
             || !await registered(origin, await scriptId(origin)))) await disable(origin);
         }
         const updated = await loadGrantState();

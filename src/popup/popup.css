@@ -1,6 +1,6 @@
 :root {
   color-scheme: light dark;
-  font: 14px/1.5 system-ui, sans-serif;
+  font: 87.5%/1.5 system-ui, sans-serif;
   color: #262b2a;
   background: #faf9f6;
   --surface: #ffffff;
@@ -19,9 +19,9 @@
 body { margin: 0; width: 520px; max-width: 100%; }
 main { padding: 20px; }
 h1, h2, h3 { line-height: 1.25; overflow-wrap: anywhere; }
-h1 { margin: 0 0 var(--space-small); font-size: 26px; letter-spacing: -.035em; font-weight: 700; }
-h2 { font-size: 18px; margin: 0 0 var(--space-small); letter-spacing: -.015em; }
-h3 { font-size: 15px; }
+h1 { margin: 0 0 var(--space-small); font-size: 1.85rem; letter-spacing: -.035em; font-weight: 700; }
+h2 { font-size: 1.3rem; margin: 0 0 var(--space-small); letter-spacing: -.015em; }
+h3 { font-size: 1.075rem; }
 p { margin: var(--space-small) 0; overflow-wrap: anywhere; }
 .popup-header p { color: var(--text-muted); margin: 0; max-width: 48ch; }
 .actions { margin-top: var(--space-medium); }
@@ -46,7 +46,7 @@ button, select, input, textarea {
 button { cursor: pointer; font-weight: 600; white-space: normal; overflow-wrap: anywhere; }
 .actions button { margin: 0; }
 [data-action="analyze"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); flex: 1 1 160px; }
-[data-action="restore"] { flex: 0 1 112px; }
+[data-action="restore"] { flex: 1 1 12rem; }
 button:hover:not(:disabled) { border-color: var(--focus); }
 button:disabled, select:disabled { cursor: default; opacity: .65; }
 input, textarea { display: block; width: 100%; }
@@ -65,7 +65,6 @@ label { display: block; font-weight: 600; margin-top: 12px; }
 [data-review-items] p { margin: 4px 0; }
 @media (max-width: 360px) {
   main { padding: 12px; }
-  .site-detection > button { width: 100%; margin-right: 0; }
   .actions button { flex: 1 1 100%; }
 }
 @media (prefers-color-scheme: dark) {
@@ -81,4 +80,37 @@ label { display: block; font-weight: 600; margin-top: 12px; }
     --accent-text: #102b25;
     --focus: #8ee8d7;
   }
+}
+
+/* Quiet utility: restrained surfaces, visible actions, no entrance motion. */
+:root { --danger: #a52828; }
+h3 { margin: 0 0 .5rem; }
+h1, h2, h3 { text-wrap: balance; }
+button, summary, a { touch-action: manipulation; }
+button:hover:not(:disabled) { background: var(--surface-muted); }
+button:active:not(:disabled) { background: var(--divider); border-color: var(--focus); }
+[data-action="analyze"], [data-subscription-editor] button[type="submit"] {
+  background: var(--accent); color: var(--accent-text); border-color: var(--accent);
+}
+[data-action="analyze"]:hover:not(:disabled), [data-subscription-editor] button[type="submit"]:hover:not(:disabled) { background: var(--accent); outline: 1px solid var(--accent); }
+[data-action="analyze"]:active:not(:disabled), [data-subscription-editor] button[type="submit"]:active:not(:disabled) { outline: 2px solid var(--accent); }
+[data-subscription-action="confirm-delete"], [data-action="review-delete"], [data-action="retention-apply"] { color: var(--danger); border-color: var(--danger); }
+[data-subscription-list] article > p:not(.subscription-amount) { color: var(--text-muted); }
+.subscription-amount { font-weight: 600; }
+[data-site-origin] { font-size: .925rem; color: var(--text-muted); }
+.site-detection details { margin: 0; flex: 1 1 10rem; }
+.site-actions { display: flex; flex-wrap: wrap; gap: .5rem; align-items: start; }
+.site-actions > button { margin: 0; }
+.site-actions summary { padding: 11px .25rem; }
+.site-actions details[open] { flex-basis: 100%; }
+.site-detection h2 { margin-bottom: .25rem; }
+[data-site-origin]:empty { display: none; }
+[data-field-error] { display: block; color: var(--danger); font-weight: 400; margin: .25rem 0 .75rem; overflow-wrap: anywhere; }
+[aria-invalid="true"] { border-color: var(--danger); }
+[hidden] { display: none !important; }
+@media (prefers-color-scheme: dark) { :root { --danger: #ffb4ab; } }
+@media (forced-colors: active) {
+  :root { --surface: Canvas; --surface-muted: Canvas; --text-muted: CanvasText; --border: ButtonText; --divider: CanvasText; --accent: Highlight; --accent-text: HighlightText; --focus: Highlight; --danger: LinkText; }
+  button:disabled, select:disabled { opacity: 1; color: GrayText; border-color: GrayText; }
+  button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visible, summary:focus-visible { outline-color: Highlight; }
 }

@@ -47,3 +47,28 @@ button {
 button:focus-visible { outline: 3px solid #0969da; outline-offset: 2px; }
 .evidence { padding: 8px; border-left: 3px solid #9a6700; background: #fff8c5; }
 .reason { color: #424a53; }
+
+.clearchoice-panel { overscroll-behavior: contain; overflow-wrap: anywhere; color-scheme: light dark; font-size: .875rem; }
+.clearchoice-panel * { min-width: 0; }
+.clearchoice-header button { flex-shrink: 0; }
+h2, h3, h4 { text-wrap: balance; }
+button { touch-action: manipulation; }
+button:hover { background: #eaeef2; border-color: #24292f; }
+button:active { background: #d0d7de; }
+@media (prefers-color-scheme: dark) {
+  .clearchoice-panel { background: #202622; color: #f1f3ef; border-color: #c3a65b; box-shadow: 0 8px 24px rgb(0 0 0 / 25%); }
+  button { background: #2b342e; color: #f1f3ef; border-color: #91a096; }
+  button:hover { background: #3b483f; border-color: #c3cec7; }
+  button:active { background: #4c5c51; }
+  button:focus-visible { outline-color: #8ee8d7; }
+  .evidence { background: #38331f; border-color: #c3a65b; }
+  .reason { color: #c5cec8; }
+}
+@media (forced-colors: active) {
+  .clearchoice-panel { background: Canvas; color: CanvasText; border-color: CanvasText; box-shadow: none; }
+  button { background: ButtonFace; color: ButtonText; border-color: ButtonText; }
+  button:hover, button:active { background: Highlight; color: HighlightText; }
+  button:focus-visible { outline-color: Highlight; }
+  .evidence { background: Canvas; border-color: CanvasText; }
+  .reason { color: CanvasText; }
+}

@@ -21,11 +21,17 @@ function fixture() {
   return { data, scripts, allowed, session, tabs, sendMessage, setBadgeText, get, set, registerContentScripts, unregisterContentScripts, getRegisteredContentScripts, contains };
 }
 
+async function completedEnable(grants: ReturnType<typeof createGrantManager>, origin: string) {
+  const result = await grants.enable(origin);
+  if (result.newlyEnabled) await grants.completeEnable(origin, result.generation);
+  return result;
+}
+
 it('enables exactly a previously granted HTTPS site, never a second site', async () => {
   const f = fixture();
   const grants = createGrantManager(createWorkerStore());
   f.allowed.add('https://a.test/*');
-  await grants.enable('https://a.test');
+  await completedEnable(grants, 'https://a.test');
   expect(await grants.isEnabled('https://a.test', 1)).toBe(true);
   expect(await grants.isEnabled('https://b.test', 1)).toBe(false);
   expect(f.scripts).toEqual([{ id: expect.stringMatching(/^clearchoice-site-/), matches: ['https://a.test/*'], js: ['content.js'], allFrames: false, persistAcrossSessions: true, world: 'ISOLATED' }]);
@@ -58,7 +64,7 @@ it('registration failure and storage failure leave no enabled script or grant', 
 it('revocation advances generation and only unregisters the specified site', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test'); await grants.enable('https://b.test');
+  await completedEnable(grants, 'https://a.test'); await completedEnable(grants, 'https://b.test');
   await grants.revoke('https://a.test');
   expect(f.data.grantState).toEqual({ version: 1, sites: {
     'https://a.test': { enabled: false, generation: 2 }, 'https://b.test': { enabled: true, generation: 1 },
@@ -67,7 +73,7 @@ it('revocation advances generation and only unregisters the specified site', asy
   expect(await grants.isEnabled('https://b.test', 1)).toBe(true);
   expect(f.scripts.map((script) => script.matches)).toEqual([['https://b.test/*']]);
   expect(f.allowed.has('https://a.test/*')).toBe(true);
-  await grants.enable('https://a.test');
+  await completedEnable(grants, 'https://a.test');
   expect(await grants.isEnabled('https://a.test', 1)).toBe(false);
   expect(await grants.isEnabled('https://a.test', 3)).toBe(true);
 });
@@ -75,7 +81,7 @@ it('revocation advances generation and only unregisters the specified site', asy
 it('permission removal cleans an automatic document with hidden tab URL and leaves B untouched', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test'); await grants.enable('https://b.test');
+  await completedEnable(grants, 'https://a.test'); await completedEnable(grants, 'https://b.test');
   f.tabs[0].url = undefined as unknown as string;
   f.session['clearchoice.automatic.12'] = { tabId: 12, documentId: 'doc-A', origin: 'https://a.test' };
   f.session['clearchoice.automatic.13'] = { tabId: 13, documentId: 'doc-B', origin: 'https://b.test' };
@@ -90,7 +96,7 @@ it('permission removal cleans an automatic document with hidden tab URL and leav
 it('external permission removal disables A while B remains active', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test'); await grants.enable('https://b.test');
+  await completedEnable(grants, 'https://a.test'); await completedEnable(grants, 'https://b.test');
   f.allowed.delete('https://a.test/*'); await grants.onRemoved(['https://a.test/*']);
   expect(await grants.isEnabled('https://a.test', 1)).toBe(false);
   expect(await grants.isEnabled('https://b.test', 1)).toBe(true);
@@ -101,7 +107,7 @@ it('external permission removal disables A while B remains active', async () => 
 it('external broad-pattern permission removal checks each site rather than comparing event text', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test'); await grants.enable('https://b.test');
+  await completedEnable(grants, 'https://a.test'); await completedEnable(grants, 'https://b.test');
   f.allowed.delete('https://a.test/*');
   await grants.onRemoved(['https://*/*']);
   expect((f.data.grantState as { sites: Record<string, { enabled: boolean; generation: number }> }).sites).toEqual({
@@ -113,7 +119,7 @@ it('external broad-pattern permission removal checks each site rather than compa
 it('startup reconciliation disables stale grants and removes owned orphans', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test'); await grants.enable('https://b.test');
+  await completedEnable(grants, 'https://a.test'); await completedEnable(grants, 'https://b.test');
   f.allowed.delete('https://a.test/*');
   f.scripts.splice(f.scripts.findIndex((script) => script.matches?.[0] === 'https://b.test/*'), 1);
   f.scripts.push({ id: 'clearchoice-site-orphan', matches: ['https://orphan.test/*'], js: ['content.js'] });
@@ -127,7 +133,7 @@ it('startup reconciliation disables stale grants and removes owned orphans', asy
 it('a failed revoke write still unregisters the script and rejects the old generation', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*');
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test');
+  await completedEnable(grants, 'https://a.test');
   f.set.mockRejectedValueOnce(new Error('disk failure'));
   await expect(grants.revoke('https://a.test')).rejects.toThrow('disk failure');
   expect(f.scripts).toHaveLength(0);
@@ -139,7 +145,7 @@ it('a failed unregister still attempts badge and document cleanup after disablin
   const f = fixture(); f.allowed.add('https://a.test/*');
   f.session['clearchoice.document.12'] = { tabId: 12, documentId: 'doc-A', origin: 'https://a.test' };
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test');
+  await completedEnable(grants, 'https://a.test');
   f.unregisterContentScripts.mockRejectedValueOnce(new Error('unregister failed'));
   await expect(grants.revoke('https://a.test')).rejects.toThrow('unregister failed');
   expect(f.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '' });
@@ -150,7 +156,7 @@ it('a failed unregister still attempts badge and document cleanup after disablin
 it('failed persistence and unregister still vetoes authorization in this worker', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*');
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test');
+  await completedEnable(grants, 'https://a.test');
   f.set.mockRejectedValueOnce(new Error('disk failure'));
   f.unregisterContentScripts.mockRejectedValueOnce(new Error('unregister failed'));
   await expect(grants.revoke('https://a.test')).rejects.toThrow(/Chrome settings.*site access.*https:\/\/a\.test/i);
@@ -161,7 +167,7 @@ it('failed persistence and unregister still vetoes authorization in this worker'
 it('dual revoke failure reports irrecoverable site access and honestly exposes restart limitation', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test'); await grants.enable('https://b.test');
+  await completedEnable(grants, 'https://a.test'); await completedEnable(grants, 'https://b.test');
   f.set.mockRejectedValueOnce(new Error('disk failure'));
   f.unregisterContentScripts.mockRejectedValueOnce(new Error('unregister failed'));
   await expect(grants.revoke('https://a.test')).rejects.toThrow(/Chrome settings.*site access.*https:\/\/a\.test/i);
@@ -177,7 +183,7 @@ it('dual revoke failure reports irrecoverable site access and honestly exposes r
 it('startup with corrupt grant state unregisters every owned script but leaves foreign scripts untouched', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test'); await grants.enable('https://b.test');
+  await completedEnable(grants, 'https://a.test'); await completedEnable(grants, 'https://b.test');
   f.scripts.push({ id: 'foreign-script', matches: ['https://other.test/*'], js: ['foreign.js'] });
   f.data.grantState = { version: 1, sites: { 'https://a.test/path': { enabled: true, generation: 1 } } };
   await expect(createGrantManager(createWorkerStore()).reconcile()).rejects.toThrow('Corrupt grant state');
@@ -200,7 +206,7 @@ it('revoke clears only the site badge and targets a known document for best-effo
   f.session['clearchoice.document.12'] = { tabId: 12, documentId: 'doc-A', origin: 'https://a.test' };
   f.session['clearchoice.document.13'] = { tabId: 13, documentId: 'doc-B', origin: 'https://b.test' };
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test'); await grants.revoke('https://a.test');
+  await completedEnable(grants, 'https://a.test'); await grants.revoke('https://a.test');
   expect(f.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '' });
   expect(f.setBadgeText).not.toHaveBeenCalledWith({ tabId: 13, text: '' });
   expect(f.sendMessage).toHaveBeenCalledWith(12, { type: 'CLEARCHOICE_DISABLE' }, { documentId: 'doc-A' });
@@ -210,7 +216,7 @@ it('revoke clears only the site badge and targets a known document for best-effo
 it('a generation check inside the queued history commit does not deadlock', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*');
   const store = createWorkerStore(); const grants = createGrantManager(store);
-  await grants.enable('https://a.test');
+  await completedEnable(grants, 'https://a.test');
   // The worker's Task 9 beforeCommit callback runs inside this same queue.
   const checked = store.enqueue(() => grants.isEnabled('https://a.test', 1));
   await expect(Promise.race([checked, new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 100))])).resolves.toBe(true);
@@ -261,11 +267,128 @@ it('checks cancellation inside the queue before touching registration or storage
 it('does not bypass cancellation through the already-enabled early return', async () => {
   const f = fixture(); f.allowed.add('https://a.test/*');
   const grants = createGrantManager(createWorkerStore());
-  await grants.enable('https://a.test');
+  await completedEnable(grants, 'https://a.test');
   const before = structuredClone(f.data);
   let active = true;
   f.getRegisteredContentScripts.mockImplementationOnce(async () => { active = false; return structuredClone(f.scripts); });
   await expect(grants.enable('https://a.test', async () => active)).rejects.toThrow('Active site changed');
   expect(f.data).toEqual(before);
   expect(await grants.isEnabled('https://a.test', 1)).toBe(true);
+});
+
+it('provisional authorization needs a live worker owner and stops before queued rollback', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*');
+  const store = createWorkerStore(); const grants = createGrantManager(store);
+  let active = true;
+  const { generation } = await grants.enable('https://a.test', async () => active);
+  expect(f.data.grantState).toEqual({ version: 1, sites: { 'https://a.test': { enabled: true, generation, provisional: true } } });
+  expect(await grants.isEnabled('https://a.test', generation)).toBe(true);
+  const restarted = createGrantManager(createWorkerStore());
+  expect(await restarted.isEnabled('https://a.test', generation)).toBe(false);
+  active = false;
+  expect(await grants.isEnabled('https://a.test', generation)).toBe(false);
+  let release!: () => void;
+  const blocked = store.enqueue(() => new Promise<void>((resolve) => { release = resolve; }));
+  await vi.waitFor(() => expect(release).toBeDefined());
+  const rollback = grants.rollbackEnable('https://a.test', generation);
+  active = true;
+  expect(await grants.isEnabled('https://a.test', generation)).toBe(false);
+  release(); await blocked; await rollback;
+});
+
+it('stale completion and rollback cannot change a newer generation', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*');
+  const grants = createGrantManager(createWorkerStore());
+  const old = await grants.enable('https://a.test');
+  await grants.rollbackEnable('https://a.test', old.generation);
+  const next = await grants.enable('https://a.test');
+  const before = structuredClone(f.data.grantState);
+  await expect(grants.completeEnable('https://a.test', old.generation)).rejects.toThrow();
+  await grants.rollbackEnable('https://a.test', old.generation);
+  expect(f.data.grantState).toEqual(before);
+  expect(await grants.isEnabled('https://a.test', next.generation)).toBe(true);
+  await grants.completeEnable('https://a.test', next.generation);
+  await createGrantManager(createWorkerStore()).reconcile();
+  expect(await createGrantManager(createWorkerStore()).isEnabled('https://a.test', next.generation)).toBe(true);
+});
+
+it('completion storage failure retains unfinished state and rollback remains fail closed', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*');
+  const grants = createGrantManager(createWorkerStore());
+  const { generation } = await grants.enable('https://a.test');
+  f.set.mockRejectedValueOnce(new Error('disk failure'));
+  await expect(grants.completeEnable('https://a.test', generation)).rejects.toThrow('disk failure');
+  f.set.mockRejectedValueOnce(new Error('disk failure'));
+  f.unregisterContentScripts.mockRejectedValueOnce(new Error('unregister failure'));
+  await expect(grants.rollbackEnable('https://a.test', generation)).rejects.toThrow('Revocation could not be confirmed');
+  expect(await grants.isEnabled('https://a.test', generation)).toBe(false);
+  const restarted = createGrantManager(createWorkerStore());
+  expect(await restarted.isEnabled('https://a.test', generation)).toBe(false);
+  await restarted.reconcile();
+  expect(f.scripts).toHaveLength(0);
+});
+
+it.each(['none', 'storage', 'both'])('cleans cancelled completion inside its queue with %s cleanup failure', async (failure) => {
+  const f = fixture(); f.allowed.add('https://a.test/*'); f.allowed.add('https://b.test/*');
+  const grants = createGrantManager(createWorkerStore());
+  await completedEnable(grants, 'https://b.test');
+  let active = true;
+  const { generation } = await grants.enable('https://a.test', async () => active);
+  let release!: () => void;
+  f.set.mockImplementationOnce(async (value) => {
+    await new Promise<void>((resolve) => { release = resolve; });
+    Object.assign(f.data, structuredClone(value));
+  });
+  const result = grants.completeEnable('https://a.test', generation);
+  const rejected = expect(result).rejects.toThrow(failure === 'both' ? 'Revocation could not be confirmed'
+    : failure === 'storage' ? 'cleanup write failed' : 'Enable no longer authorized');
+  await vi.waitFor(() => expect(release).toBeDefined());
+  active = false;
+  if (failure !== 'none') f.set.mockRejectedValueOnce(new Error('cleanup write failed'));
+  if (failure === 'both') f.unregisterContentScripts.mockRejectedValueOnce(new Error('cleanup unregister failed'));
+  release(); await rejected;
+  expect(await grants.isEnabled('https://a.test', generation)).toBe(false);
+  expect(await grants.isEnabled('https://b.test', 1)).toBe(true);
+  expect(f.setBadgeText).toHaveBeenCalledWith({ tabId: 12, text: '' });
+  const restarted = createGrantManager(createWorkerStore());
+  // Dual API failure cannot guarantee revocation survives a fresh worker.
+  expect(await restarted.isEnabled('https://a.test', generation)).toBe(failure === 'both');
+  if (failure === 'none') expect(f.data.grantState).toMatchObject({ sites: { 'https://a.test': { enabled: false, generation: generation + 1 } } });
+});
+
+it('retains the owner veto after the completion write while its final predicate is pending', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*');
+  const grants = createGrantManager(createWorkerStore());
+  let completing = false;
+  let release!: (active: boolean) => void;
+  const { generation } = await grants.enable('https://a.test', async () => {
+    if (!completing) return true;
+    return new Promise<boolean>((resolve) => { release = resolve; });
+  });
+  f.set.mockImplementationOnce(async (value) => { Object.assign(f.data, structuredClone(value)); completing = true; });
+  const result = grants.completeEnable('https://a.test', generation);
+  const rejected = expect(result).rejects.toThrow('Enable no longer authorized');
+  await vi.waitFor(() => expect(release).toBeDefined());
+  const rollback = grants.rollbackEnable('https://a.test', generation);
+  expect(await grants.isEnabled('https://a.test', generation)).toBe(false);
+  release(true); await rejected; await rollback;
+  expect(await createGrantManager(createWorkerStore()).isEnabled('https://a.test', generation)).toBe(false);
+});
+
+it('does not revoke a newer persisted generation when cancelled completion resumes', async () => {
+  const f = fixture(); f.allowed.add('https://a.test/*');
+  const grants = createGrantManager(createWorkerStore());
+  let active = true;
+  const { generation } = await grants.enable('https://a.test', async () => active);
+  f.set.mockImplementationOnce(async (value) => {
+    Object.assign(f.data, structuredClone(value));
+    // Model a newer durable owner becoming visible before this callback resumes.
+    f.data.grantState = { version: 1, sites: { 'https://a.test': { enabled: true, generation: generation + 1 } } };
+    active = false;
+  });
+  await expect(grants.completeEnable('https://a.test', generation)).rejects.toThrow('Enable no longer authorized');
+  await grants.rollbackEnable('https://a.test', generation);
+  expect(f.data.grantState).toEqual({ version: 1, sites: { 'https://a.test': { enabled: true, generation: generation + 1 } } });
+  expect(f.unregisterContentScripts).not.toHaveBeenCalled();
+  expect(await createGrantManager(createWorkerStore()).isEnabled('https://a.test', generation + 1)).toBe(true);
 });

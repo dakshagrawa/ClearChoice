@@ -5,7 +5,7 @@ import type { FindingRecord, RetentionPolicy, Subscription } from './models';
 export const LOCAL_STATE_VERSION = 1 as const;
 export const GRANT_STATE_VERSION = 1 as const;
 
-export interface SiteGrant { enabled: boolean; generation: number }
+export interface SiteGrant { enabled: boolean; generation: number; provisional?: true }
 export interface GrantState { version: typeof GRANT_STATE_VERSION; sites: Record<string, SiteGrant> }
 
 /** The permission-grant schema is separate from review data; unknown/corrupt grants fail closed. */
@@ -28,7 +28,9 @@ export function isGrantState(value: unknown): value is GrantState {
   return Object.entries(sites).every(([origin, entry]) => {
     if (!isGrantOrigin(origin) || typeof entry !== 'object' || entry === null || Array.isArray(entry)) return false;
     const grant = entry as Record<string, unknown>;
-    return Object.keys(grant).length === 2 && typeof grant.enabled === 'boolean'
+    return (Object.keys(grant).length === 2 || (Object.keys(grant).length === 3
+      && Object.hasOwn(grant, 'provisional') && grant.provisional === true && grant.enabled === true))
+      && Object.hasOwn(grant, 'enabled') && Object.hasOwn(grant, 'generation') && typeof grant.enabled === 'boolean'
       && Number.isSafeInteger(grant.generation) && (grant.generation as number) > 0;
   });
 }

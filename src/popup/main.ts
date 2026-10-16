@@ -16,17 +16,21 @@ app.innerHTML = `
     </header>
     <div class="actions">
       <button type="button" data-action="analyze">Analyze</button>
-      <button type="button" data-action="restore">Restore</button>
+      <button type="button" data-action="restore">Restore dismissed findings</button>
     </div>
     <p data-analysis-status aria-live="polite" role="status">Analyze this tab locally.</p>
     <section class="site-detection" aria-label="Site detection">
+      <h2>Site detection</h2>
+      <p data-site-origin></p>
+      <p data-site-status role="status" aria-live="polite">Checking this site…</p>
+      <div class="site-actions">
+      <button type="button" data-action="site-enable" aria-label="Enable detection for this site" disabled>Enable</button>
+      <button type="button" data-action="site-disable" aria-label="Disable detection for this site" disabled>Disable</button>
       <details>
         <summary>About site detection</summary>
       <p>Optional detection on supported English checkout pages only. Observations stay local; panels appear only after findings are saved. Enabling a site does not confirm a completed scan.</p>
       </details>
-      <button type="button" data-action="site-enable" disabled>Enable detection for this site</button>
-      <button type="button" data-action="site-disable" disabled>Disable detection for this site</button>
-      <p data-site-status role="status" aria-live="polite">Checking this site…</p>
+      </div>
     </section>
   </main>
 `;
@@ -48,6 +52,7 @@ const disableButton = app.querySelector<HTMLButtonElement>('[data-action="site-d
 const siteStatus = app.querySelector<HTMLParagraphElement>('[data-site-status]')!;
 let site: { id: number; origin: string } | undefined;
 let busy = false;
+let analysisPending = false;
 let revision = 0;
 let enabled = false;
 let permitted = false;
@@ -75,6 +80,8 @@ async function siteMessage(type: string, origin: string): Promise<SiteResponse> 
   } catch { return { ok: false, error: 'request-failed' }; }
 }
 function controls(): void {
+  app!.querySelector('.site-detection')!.setAttribute('aria-busy', String(busy));
+  restoreButton!.disabled = busy || analysisPending;
   enableButton.disabled = busy || !site || workerUnavailable || enabled;
   disableButton.disabled = busy || !site || (!enabled && !permitted);
 }
@@ -94,6 +101,7 @@ void (async () => {
     const target = await activeSite();
     if (busy || revision !== 0) return;
     site = target;
+    app.querySelector('[data-site-origin]')!.textContent = target?.origin ?? '';
     if (!target) { siteStatus.textContent = 'Site detection is available only on an HTTPS site.'; return; }
     const response = await siteMessage(CLEARCHOICE_SITE_STATUS, target.origin);
     if (busy || revision !== 0) return;
@@ -108,17 +116,19 @@ void (async () => {
       siteStatus.textContent = response.error === 'revocation-unsafe'
         ? `Detection state is unsafe for ${target.origin}. Remove site access in Chrome settings before restarting the browser.`
         : permitted
-        ? `Could not check detection for ${target.origin}, but browser site access remains. Use Disable below or remove access in Chrome settings.`
+        ? `Could not check detection for ${target.origin}, but browser site access remains. Use Disable or remove access in Chrome settings.`
         : 'Could not check site detection. Reopen the popup; check Chrome settings if site access remains.';
       return;
     }
     enabled = response.enabled;
     permitted = response.permitted;
     controls();
-    siteStatus.textContent = response.enabled
-      ? `Detection enabled for ${target.origin}; supported English checkout detection is enabled, not a completed scan.`
-      : response.permitted ? `Detection off for ${target.origin}; browser site access remains. You can remove it below.`
-        : `Detection off for ${target.origin}.`;
+    siteStatus.textContent = response.enabled && !response.permitted
+      ? 'Detection preference enabled; browser site access is absent. Use Disable to reset, then Enable.'
+      : response.enabled
+      ? `Detection enabled for ${target.origin}; browser access granted, not a completed scan.`
+      : response.permitted ? 'Detection off; browser site access remains. Use Disable to remove it.'
+        : 'Detection off; no browser site access.';
   } catch { siteStatus.textContent = 'Could not check this site. Reopen the popup.'; }
 })();
 
@@ -141,14 +151,14 @@ async function recoverEnable(target: { id: number; origin: string }, unsafe = fa
   if (access === true && response.ok && response.enabled && response.permitted && !unsafe) {
     enabled = true;
     workerUnavailable = false;
-    siteStatus.textContent = `Detection enabled for ${target.origin}; supported English checkout detection is enabled, not a completed scan.`;
+    siteStatus.textContent = `Detection enabled for ${target.origin}; browser access granted, not a completed scan.`;
     return;
   }
   workerUnavailable = true;
   siteStatus.textContent = unsafe || (!response.ok && response.error === 'revocation-unsafe')
     ? `Detection state is unsafe for ${target.origin}. Remove site access in Chrome settings before restarting the browser.`
     : `Could not enable detection with confirmation for ${target.origin}; enable completion is unknown. ${access === true
-      ? 'browser site access remains; use Disable below or remove access in Chrome settings.'
+      ? 'browser site access remains; use Disable or remove access in Chrome settings.'
       : access === false ? 'Browser site access is currently absent. Reopen the popup to check detection.'
         : 'Browser site access could not be checked. Check or remove access in Chrome settings.'}`;
 }
@@ -181,7 +191,7 @@ enableButton.addEventListener('click', () => {
       }
       enabled = true;
       permitted = response.permitted;
-      siteStatus.textContent = `Detection enabled for ${target.origin}; supported English checkout detection is enabled, not a completed scan.`;
+      siteStatus.textContent = `Detection enabled for ${target.origin}; browser access granted, not a completed scan.`;
       controls();
     } catch { await recoverEnable(target); }
     finally { busy = false; controls(); }
@@ -251,19 +261,24 @@ async function restoreActiveTab() {
 }
 
 analyzeButton.addEventListener('click', async () => {
-  analyzeButton.disabled = true;
+  if (analysisPending) return;
+  analysisPending = true; analyzeButton.disabled = true; restoreButton.disabled = true;
+  status.setAttribute('aria-busy', 'true');
   status.textContent = 'Analyzing this tab locally…';
 
   try {
     status.textContent = analysisStatus(await analyzeActiveTab());
   } finally {
-    analyzeButton.disabled = false;
+    analysisPending = false; analyzeButton.disabled = false; controls();
+    status.setAttribute('aria-busy', 'false');
     void review.refresh();
   }
 });
 
 restoreButton.addEventListener('click', async () => {
-  restoreButton.disabled = true;
+  if (busy || analysisPending) return;
+  analysisPending = true; restoreButton.disabled = true; analyzeButton.disabled = true;
+  status.setAttribute('aria-busy', 'true');
   status.textContent = 'Restoring dismissed findings…';
 
   try {
@@ -272,6 +287,7 @@ restoreButton.addEventListener('click', async () => {
       ? 'Dismissal restored. Analyze again to show findings.'
       : 'ClearChoice could not restore dismissed findings. Reload and try again.';
   } finally {
-    restoreButton.disabled = false;
+    analysisPending = false; analyzeButton.disabled = false; controls();
+    status.setAttribute('aria-busy', 'false');
   }
 });

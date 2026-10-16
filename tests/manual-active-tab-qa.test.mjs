@@ -133,7 +133,22 @@ test.each([true, false])('fresh extracted runtime (headless=%s) executes isolate
   const result = await runSyntheticEvidence(initial, { opaqueFingerprint: fingerprint, kind: 'recurring-charge', reason: 'price-cadence', screenedExcerpt: 'Local mock membership renews at $12.00 per month.' }, {
     headless, instruct: text => { instructions.push(text); },
     // Test callbacks are synthetic, NOT human evidence or a saved marker.
-    selectPolicy: async popup => { originalPopup = popup; await popup.selectOption('[data-review-retention]', '7'); },
+    selectPolicy: async popup => {
+      originalPopup = popup;
+      await popup.evaluate(() => document.querySelector('[data-review-retention]').closest('details').querySelector('summary').click());
+      expect(await popup.evaluate(() => {
+        const select = document.querySelector('[data-review-retention]');
+        return select.checkVisibility() && !select.disabled && select.value === 'never';
+      })).toBe(true);
+      await popup.selectOption('[data-review-retention]', '7');
+      expect(await popup.evaluate(() => {
+        const apply = document.querySelector('[data-action="retention-apply"]');
+        return apply?.checkVisibility() && !apply.disabled
+          && document.querySelector('[data-review-retention]').value === 'never'
+          && document.querySelectorAll('[data-review-id]').length === 4;
+      })).toBe(true);
+      await (await popup.locator('[data-action="retention-apply"]').all())[0].click();
+    },
     acknowledge: async token => {
       if (token === 'SYNTHETIC_EXPIRY_REVIEWED') {
         await originalPopup.evaluate(() => { setTimeout(() => window.close(), 0); return true; });

@@ -351,6 +351,25 @@ for (const theme of ['light', 'dark'] as const) {
       const manualEditorPayload = await capturePayloadLayout(popup);
       await audit(popup, theme, 'manual-editor');
       await keyboardReview(popup, theme, 'manual-editor');
+      // Genuine native form errors: visible associations and first-invalid focus.
+      await popup.click('[data-subscription-editor] [type="submit"]');
+      expect(await popup.evaluate(`document.activeElement.name`)).toBe('merchant');
+      expect(await popup.evaluate(`(() => {
+        const field = document.activeElement;
+        return field.getAttribute('aria-invalid') === 'true' &&
+          !!document.getElementById(field.getAttribute('aria-describedby'))?.textContent;
+      })()`)).toBe(true);
+      expect(await popup.evaluate(`document.querySelector('[name="customDescription"]').closest('label').hidden`)).toBe(true);
+      await audit(popup, theme, 'manual-editor-errors');
+      await popup.send('Emulation.setEmulatedMedia', { features: [
+        { name: 'prefers-color-scheme', value: theme },
+        { name: 'forced-colors', value: 'active' },
+        { name: 'prefers-reduced-motion', value: 'reduce' },
+      ] });
+      expect(await popup.evaluate(`matchMedia('(forced-colors: active)').matches && matchMedia('(prefers-reduced-motion: reduce)').matches`)).toBe(true);
+      await auditLayout(popup, `${theme}-forced-colors-reduced-motion-editor`, true);
+      await attachNativeScreenshot(popup, theme, 'forced-colors-reduced-motion-editor');
+      await popup.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] });
       await keyboardCancel(popup);
       expect(await popup.evaluate(`document.activeElement.dataset.subscriptionAction`)).toBe('add');
       expect((await runtime.storage()).subscriptions).toEqual(saved);
@@ -390,6 +409,8 @@ for (const theme of ['light', 'dark'] as const) {
         expect(rootClientWidth).toBeLessThanOrEqual(320);
         await auditLayout(narrowPopup, `${theme}-320px-${state}-payload-layout-ONLY`, false);
         expect(await narrow.evaluate(() => document.body.getBoundingClientRect().width)).toBeLessThanOrEqual(320);
+        await narrow.addStyleTag({ content: ':root { font-size: 175% !important; }' });
+        await auditLayout(narrowPopup, `${theme}-320px-200percent-text-${state}-payload-layout-ONLY`, false);
       }
       await narrow.close();
     } finally {

@@ -1332,3 +1332,80 @@ it('independently checks exact permission and original active tab after a true r
   expect(await dispatch(ownedEnable, popup)).toEqual({ ok: false, error: 'operation-expired' });
   expect(registerContentScripts).not.toHaveBeenCalled(); expect(executeScript).not.toHaveBeenCalled();
 });
+
+// Deliberately never resolve the discarded worker's probe: only durable state survives.
+it.each([true, false])('retires unfinished persisted enable on worker recreation (reload=%s)', async (reload) => {
+  await boot(); grantedOrigins.add('https://merchant.test/*'); permissionRequest.mockResolvedValue(true);
+  let probing = false;
+  executeScript.mockImplementationOnce(() => { probing = true; return new Promise(() => {}); });
+  listeners[0](ownedEnable, popup, vi.fn());
+  await vi.waitFor(() => expect(probing).toBe(true));
+  expect(state.grantState).toMatchObject({ sites: { [ownedEnable.origin]: { enabled: true } } });
+  if (reload) {
+    updated[0](42, { status: 'loading' });
+    // The paused probe cannot perform rollback; cancellation alone must veto scans.
+    expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: false, error: 'request-failed' });
+  }
+  listeners.length = 0; activated.length = 0; updated.length = 0; removedTabs.length = 0; permissionRemoved.length = 0;
+  for (const key of Object.keys(sessionState)) delete sessionState[key];
+  vi.resetModules(); await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_STATUS', origin: ownedEnable.origin }, popup)).toMatchObject({ enabled: false, permitted: true });
+  expect(registeredScripts).toHaveLength(0);
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: false, error: 'request-failed' });
+});
+
+it('preserves a completed owned enable across worker recreation and failed redundant bootstrap', async () => {
+  await boot(); grantedOrigins.add('https://merchant.test/*'); permissionRequest.mockResolvedValue(true);
+  expect(await dispatch(ownedEnable, popup)).toMatchObject({ ok: true, enabled: true });
+  const completed = structuredClone(state.grantState);
+  listeners.length = 0; activated.length = 0; updated.length = 0; removedTabs.length = 0; permissionRemoved.length = 0;
+  vi.resetModules(); await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_STATUS', origin: ownedEnable.origin }, popup)).toMatchObject({ enabled: true });
+  executeScript.mockRejectedValueOnce(new Error('probe failed'));
+  expect(await dispatch(ownedEnable, popup)).toMatchObject({ ok: true, enabled: true });
+  expect(state.grantState).toEqual(completed);
+});
+
+it('preserves prior completed consent when a redundant bootstrap worker is terminated', async () => {
+  await boot(); grantedOrigins.add('https://merchant.test/*'); permissionRequest.mockResolvedValue(true);
+  expect(await dispatch(ownedEnable, popup)).toMatchObject({ enabled: true });
+  const completed = structuredClone(state.grantState);
+  let probing = false;
+  executeScript.mockImplementationOnce(() => { probing = true; return new Promise(() => {}); });
+  listeners[0](ownedEnable, popup, vi.fn());
+  await vi.waitFor(() => expect(probing).toBe(true));
+  updated[0](42, { status: 'loading' });
+  listeners.length = 0; activated.length = 0; updated.length = 0; removedTabs.length = 0; permissionRemoved.length = 0;
+  vi.resetModules(); await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_STATUS', origin: ownedEnable.origin }, popup)).toMatchObject({ enabled: true });
+  expect(state.grantState).toEqual(completed);
+  expect(registeredScripts).toHaveLength(1);
+});
+
+it.each(['loading', 'activation'])('rejects cancellation during the exact completion write (%s)', async (event) => {
+  await boot(); grantedOrigins.add('https://merchant.test/*'); permissionRequest.mockResolvedValue(true);
+  let release!: () => void;
+  set.mockImplementation(async (value: Record<string, unknown>) => {
+    const next = value.grantState as { sites?: Record<string, object> } | undefined;
+    const previous = state.grantState as { sites?: Record<string, { provisional?: boolean }> } | undefined;
+    const grant = next?.sites?.[ownedEnable.origin];
+    if (previous?.sites?.[ownedEnable.origin]?.provisional === true && grant
+      && Object.keys(grant).length === 2 && 'enabled' in grant && grant.enabled === true) {
+      await new Promise<void>((resolve) => { release = resolve; });
+    }
+    Object.assign(state, structuredClone(value));
+  });
+  const result = dispatch(ownedEnable, popup);
+  await vi.waitFor(() => expect(release).toBeDefined());
+  if (event === 'loading') updated[0](42, { status: 'loading' });
+  else activated[0]({ tabId: 7, windowId: 1 });
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: false, error: 'request-failed' });
+  release();
+  expect(await result).toEqual({ ok: false, error: 'request-failed' });
+  expect(state.grantState).toMatchObject({ sites: { [ownedEnable.origin]: { enabled: false, generation: 2 } } });
+  expect(registeredScripts).toHaveLength(0);
+  expect(await dispatch({ type: 'CLEARCHOICE_AUTO_STATUS' }, content)).toEqual({ ok: false, error: 'request-failed' });
+  listeners.length = 0; activated.length = 0; updated.length = 0; removedTabs.length = 0; permissionRemoved.length = 0;
+  vi.resetModules(); await boot();
+  expect(await dispatch({ type: 'CLEARCHOICE_SITE_STATUS', origin: ownedEnable.origin }, popup)).toMatchObject({ enabled: false });
+});

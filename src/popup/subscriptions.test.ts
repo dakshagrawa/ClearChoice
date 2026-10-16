@@ -27,7 +27,7 @@ async function mount() {
   document.body.innerHTML = '<div id="subscriptions"></div>';
   const root = document.querySelector<HTMLElement>('#subscriptions')!;
   const view = mountSubscriptions(root);
-  await vi.waitFor(() => expect(root.textContent).not.toContain('Loading subscriptions'));
+  await vi.waitFor(() => expect(root.querySelector('[data-subscription-list]')?.getAttribute('aria-busy')).toBe('false'));
   return { root, view };
 }
 function value(root: HTMLElement, name: string, value: string) {
@@ -46,7 +46,7 @@ function fill(root: HTMLElement) {
 function click(root: HTMLElement, action: string) { root.querySelector<HTMLButtonElement>(`[data-subscription-action="${action}"]`)!.click(); }
 function submit(root: HTMLElement) { root.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); }
 
-afterEach(() => { vi.unstubAllGlobals(); document.body.innerHTML = ''; });
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.innerHTML = ''; });
 
 it.each(['https://netflix.com', 'https://spotify.com', 'https://unknown.test', 'https://netflix.com.evil.test', undefined])('reveals help only after click using retained origin %s, never merchant guesses', async (origin) => {
   const { data, sendMessage } = await install();
@@ -76,7 +76,7 @@ it.each(['https://netflix.com', 'https://spotify.com', 'https://unknown.test', '
 
 it('makes explicit that local deletion never cancels billing', async () => {
   await install(); const { root } = await mount();
-  expect(root.textContent).toContain('Delete removes the local record only; it does not cancel billing.');
+  expect(root.textContent).toContain('Deleting a record does not cancel billing.');
 });
 
 it.each(['refresh', 'delete', 'replace', 'unmount'])('discards delayed help after %s without detached DOM or focus side effects', async (operation) => {
@@ -213,6 +213,7 @@ it('switches suggestion sources without saving a detached old form or carrying o
   const source = { id: 'f_first', origin: 'https://merchant.test', kind: 'recurring-charge' as const, reason: 'price-cadence' as const, screenedExcerpt: 'Monthly plan $10.00', firstSeen: new Date().toISOString(), latestSeen: new Date().toISOString(), status: 'needs-review' as const };
   const control = document.createElement('button'); document.body.append(control);
   view.reviewAsSubscription(source, control); fill(root); const oldForm = root.querySelector('form')!;
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
   view.reviewAsSubscription({ ...source, id: 'f_second', screenedExcerpt: 'Annual plan $20.00' }, control);
   expect(root.textContent).toContain('Annual plan $20.00'); expect(root.textContent).not.toContain('Monthly plan $10.00');
   expect(root.querySelector<HTMLInputElement>('[name="merchant"]')!.value).toBe('');
@@ -425,4 +426,71 @@ it('edits fields explicitly and retains identity across worker recreation', asyn
   expect((data.subscriptions as Subscription[])[0]).not.toHaveProperty('notes');
   await restart(); ({ root } = await mount());
   expect(root.textContent).toContain('Every six weeks');
+});
+
+it('associates field errors and focuses the first invalid field without losing input', async () => {
+  await install(); const { root } = await mount(); click(root, 'add'); fill(root);
+  value(root, 'amount', '0.00'); value(root, 'currency', 'ZZZ'); submit(root);
+  const amount = root.querySelector<HTMLInputElement>('[name="amount"]')!;
+  expect(document.activeElement).toBe(amount);
+  expect(amount.getAttribute('aria-invalid')).toBe('true');
+  expect(document.getElementById(amount.getAttribute('aria-describedby')!)?.textContent).toContain('two decimal');
+  expect(root.querySelector<HTMLInputElement>('[name="merchant"]')!.value).toBe('  Acme  ');
+});
+
+it('requires discard approval before replacing a dirty editor and preserves custom cadence input', async () => {
+  await install(); const { root } = await mount(); click(root, 'add'); fill(root);
+  value(root, 'cadence', 'custom'); value(root, 'customDescription', 'Every six weeks');
+  value(root, 'cadence', 'monthly'); value(root, 'cadence', 'custom');
+  expect(root.querySelector<HTMLInputElement>('[name="customDescription"]')!.value).toBe('Every six weeks');
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  click(root, 'add'); expect(confirm).toHaveBeenCalled();
+  expect(root.querySelector<HTMLInputElement>('[name="merchant"]')!.value).toBe('  Acme  ');
+  confirm.mockReturnValue(true); click(root, 'add');
+  expect(root.querySelector<HTMLInputElement>('[name="merchant"]')!.value).toBe('');
+  confirm.mockRestore();
+});
+
+it('announces saving immediately and marks its editor busy', async () => {
+  const { sendMessage } = await install(); const { root } = await mount(); click(root, 'add'); fill(root);
+  sendMessage.mockImplementationOnce(() => new Promise(() => {})); submit(root);
+  expect(root.textContent).toContain('Saving subscription…');
+  expect(root.querySelector('[data-subscription-editor]')?.getAttribute('aria-busy')).toBe('true');
+});
+
+it.each(['edit', 'delete', 'observation'])('keeps dirty input when %s replacement is declined, then replaces only on approval', async (action) => {
+  const { data, sendMessage } = await install(); const { root, view } = await mount();
+  click(root, 'add'); fill(root); submit(root);
+  await vi.waitFor(() => expect(root.textContent).toContain('Subscription saved locally.'));
+  click(root, 'edit'); value(root, 'merchant', 'Unsaved change');
+  const originalForm = root.querySelector('form'); const snapshot = structuredClone(data);
+  const source = { id: 'f_new', origin: 'https://merchant.test', kind: 'recurring-charge' as const, reason: 'price-cadence' as const, screenedExcerpt: 'Monthly plan $10.00', firstSeen: new Date().toISOString(), latestSeen: new Date().toISOString(), status: 'needs-review' as const };
+  const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+  const replace = () => action === 'observation' ? view.reviewAsSubscription(source, root.querySelector('button')!) : click(root, action);
+  const calls = sendMessage.mock.calls.length;
+  replace(); expect(root.querySelector('form')).toBe(originalForm);
+  expect(root.querySelector<HTMLInputElement>('[name="merchant"]')!.value).toBe('Unsaved change');
+  expect(confirm).toHaveBeenCalledOnce(); expect(sendMessage.mock.calls).toHaveLength(calls);
+  confirm.mockReturnValue(true); replace(); expect(originalForm?.isConnected).toBe(false);
+  expect(data).toEqual(snapshot); expect(sendMessage.mock.calls).toHaveLength(calls);
+});
+
+it('Cancel intentionally discards without a replacement prompt or a write', async () => {
+  const { sendMessage } = await install(); const { root } = await mount(); click(root, 'add'); fill(root);
+  const confirm = vi.spyOn(window, 'confirm'); const calls = sendMessage.mock.calls.length;
+  click(root, 'cancel'); expect(root.querySelector('form')).toBeNull();
+  expect(confirm).not.toHaveBeenCalled(); expect(sendMessage.mock.calls).toHaveLength(calls);
+  expect(document.activeElement).toBe(root.querySelector('[data-subscription-action="add"]'));
+});
+
+it('disables only the pending help button and does not move focus on settlement', async () => {
+  const { sendMessage } = await install(); const { root } = await mount(); click(root, 'add'); fill(root); submit(root);
+  await vi.waitFor(() => expect(root.textContent).toContain('Subscription saved locally.'));
+  let resolve!: (value: unknown) => void;
+  sendMessage.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+  click(root, 'help'); const help = root.querySelector<HTMLButtonElement>('[data-subscription-action="help"]')!;
+  expect(help.disabled).toBe(true); expect(root.querySelector('article [role="status"]')?.getAttribute('aria-busy')).toBe('true');
+  const add = root.querySelector<HTMLButtonElement>('[data-subscription-action="add"]')!;
+  expect(add.disabled).toBe(false); add.focus(); resolve(null);
+  await vi.waitFor(() => expect(help.disabled).toBe(false)); expect(document.activeElement).toBe(add);
 });

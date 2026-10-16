@@ -127,3 +127,31 @@ it('surfaces local storage errors', async () => {
 
   await expect(getDismissed()).rejects.toThrow('storage unavailable');
 });
+
+it('reads legacy completed and exact provisional grant records without migration writes', async () => {
+  for (const grant of [{ enabled: true, generation: 1 }, { enabled: false, generation: 2 }, { enabled: true, generation: 3, provisional: true }]) {
+    const grantState = { version: 1, sites: { 'https://a.test': grant } };
+    get.mockResolvedValue({ grantState });
+    expect(await loadGrantState()).toEqual(grantState);
+    await saveGrantState(await loadGrantState());
+    expect(set).toHaveBeenLastCalledWith({ grantState });
+  }
+});
+
+it('rejects malformed provisional markers on read and write', async () => {
+  for (const grant of [
+    { enabled: true, generation: 1, provisional: false },
+    { enabled: true, generation: 1, provisional: undefined },
+    { enabled: true, generation: 1, provisional: 1 },
+    { enabled: true, generation: 1, provisional: { generation: 1 } },
+    { enabled: false, generation: 1, provisional: true },
+    { enabled: true, generation: 1, provisional: true, extra: true },
+    { enabled: true, provisional: true },
+  ]) {
+    const grantState = { version: 1, sites: { 'https://a.test': grant } };
+    get.mockResolvedValue({ grantState });
+    await expect(loadGrantState()).rejects.toThrow('Corrupt grant state');
+    await expect(saveGrantState(grantState as Parameters<typeof saveGrantState>[0])).rejects.toThrow('Invalid grant state');
+  }
+  expect(set).not.toHaveBeenCalled();
+});

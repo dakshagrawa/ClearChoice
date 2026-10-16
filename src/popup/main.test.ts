@@ -12,7 +12,7 @@ it('mounts manual subscriptions separately from history without an active site a
   await vi.waitFor(() => expect(document.querySelector('[aria-label="Subscriptions"]')?.textContent).toContain('No subscriptions saved.'));
   expect(document.querySelector('#review-heading')).not.toBeNull();
   const buttons = [...document.querySelectorAll('button')];
-  expect(buttons.slice(0, 2).map((button) => button.textContent)).toEqual(['Analyze', 'Restore']);
+  expect(buttons.slice(0, 2).map((button) => button.textContent)).toEqual(['Analyze', 'Restore dismissed findings']);
   document.querySelector<HTMLButtonElement>('[data-subscription-action="add"]')!.click();
   expect(document.querySelector('[name="merchant"]')).not.toBeNull(); expect(request).not.toHaveBeenCalled();
 });
@@ -551,7 +551,7 @@ it('keeps navigation invalidation when the enable caller receives an old tab sna
   const disable = document.querySelector<HTMLButtonElement>('[data-action="site-disable"]')!;
   const status = document.querySelector('[data-site-status]')!;
   // The final initialization status is rendered only after its sameSite lookup completes.
-  await vi.waitFor(() => expect(status.textContent).toBe('Detection off for https://a.test.'));
+  await vi.waitFor(() => expect(status.textContent).toBe('Detection off; no browser site access.'));
   expect(enable.disabled).toBe(false);
   get.mockImplementationOnce(() => new Promise((resolve) => { finishLookup = resolve; }));
   enable.click();
@@ -571,4 +571,29 @@ it('keeps navigation invalidation when the enable caller receives an old tab sna
     { type: 'CLEARCHOICE_SITE_ENABLE_WITH_PERMISSION', origin: 'https://a.test', tabId: 42 },
   ]);
   expect(request).not.toHaveBeenCalled(); expect(remove).not.toHaveBeenCalled(); expect(contains).not.toHaveBeenCalled();
+});
+
+it('distinguishes an enabled preference from missing browser permission', async () => {
+  vi.resetModules(); document.body.innerHTML = '<div id="app"></div>';
+  vi.stubGlobal('chrome', {
+    tabs: { query: vi.fn().mockResolvedValue([{ id: 42 }]), get: vi.fn().mockResolvedValue({ id: 42, url: 'https://a.test/checkout' }) },
+    runtime: { sendMessage: vi.fn().mockResolvedValue({ ok: true, enabled: true, permitted: false }) },
+  });
+  await import('./main');
+  await vi.waitFor(() => expect(document.querySelector('[data-site-status]')?.textContent).not.toContain('Checking'));
+  expect(document.querySelector('[data-site-origin]')?.textContent).toBe('https://a.test');
+  expect(document.querySelector('[data-site-status]')?.textContent).toContain('browser site access is absent');
+  expect(document.querySelector('[data-site-status]')?.textContent).not.toContain('access granted');
+});
+
+it('keeps Restore disabled during Analyze and exposes pending status without moving focus', async () => {
+  const { app, resolve } = await renderPopupBeforeResponse();
+  const restore = app.querySelector<HTMLButtonElement>('[data-action="restore"]')!;
+  expect(restore.disabled).toBe(true);
+  expect(app.querySelector('[data-analysis-status]')?.getAttribute('aria-busy')).toBe('true');
+  const summary = app.querySelector<HTMLElement>('summary')!; summary.focus();
+  resolve({ ok: true, status: 'supported', findingCount: 0 });
+  await vi.waitFor(() => expect(restore.disabled).toBe(false));
+  expect(document.activeElement).toBe(summary);
+  expect(app.querySelector('[data-analysis-status]')?.getAttribute('aria-busy')).toBe('false');
 });
