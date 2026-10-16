@@ -481,7 +481,7 @@ test('pre-granted identical findings stay distinct; actual unsupported Analyze i
     await runtime.page.goto(runtime.a+'/outside');
     popup = await runtime.popup();
     await popup.click('[data-action="analyze"]');
-    await popup.wait(`document.querySelector('main > [role="status"]').textContent === 'This page does not look like a supported English checkout page.'`);
+    await popup.wait(`document.querySelector('main > [role="status"]').textContent === 'This isn’t a supported checkout page. Open a checkout page to use Analyze.'`);
     await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(0);
     expect(await badge(runtime)).toBe('');
     expect((await runtime.storage()).reviewHistory).toEqual(records);
