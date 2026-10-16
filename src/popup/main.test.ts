@@ -422,9 +422,9 @@ it('uses the exact zero and plural successful finding statuses', async () => {
   expect(plural.querySelector('[role="status"]')?.textContent).toBe('2 possible signals found.');
 });
 
-it('uses the exact unsupported context status', async () => {
+it('uses a neutral unsupported checkout message without implying a language failure', async () => {
   const app = await renderPopup({ ok: true, status: 'unsupported-context', findingCount: 0 });
-  expect(app.querySelector('[role="status"]')?.textContent).toBe('This page does not look like a supported English checkout page.');
+  expect(app.querySelector('[role="status"]')?.textContent).toBe('This isn’t a supported checkout page. Open a checkout page to use Analyze.');
 });
 
 it('uses the exact restricted-page status', async () => {

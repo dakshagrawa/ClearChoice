@@ -8,7 +8,7 @@ import { readCandidateVersionMapping } from '../scripts/release-artifact.mjs';
 
 const verifier = resolve(process.cwd(), 'scripts/verify-package.mjs');
 const repositoryRoot = process.cwd();
-const candidatePackageVersion = '1.0.0-rc.1';
+const candidatePackageVersion = '1.0.0-rc.2';
 const candidateChromeVersion = '1.0.0';
 const candidateArchive = `ClearChoice-v${candidatePackageVersion}-unpacked.zip`;
 

@@ -196,7 +196,7 @@ function analysisStatus(response: AnalyzeResponse): string {
     if (response.error === 'injection-failed') return 'ClearChoice could not analyze this tab. Reload it and try again.';
     return 'ClearChoice could not analyze this page. Reload and try again.';
   }
-  if (response.status === 'unsupported-context') return 'This page does not look like a supported English checkout page.';
+  if (response.status === 'unsupported-context') return 'This isn’t a supported checkout page. Open a checkout page to use Analyze.';
   return findingStatus(response.findingCount);
 }
 

@@ -19,7 +19,7 @@ const officialChromeReferences = [
 test('current production candidate documents exact opt-in permissions and screened local persistence', () => {
   for (const path of currentCandidateDocuments) {
     const document = read(path);
-    for (const term of ['1.0.0-rc.1', 'https://*/*', 'activeTab', 'Needs review', '30']) expect(document).toContain(term);
+    for (const term of ['1.0.0-rc.2', 'https://*/*', 'activeTab', 'Needs review', '30']) expect(document).toContain(term);
     expect(document).toMatch(/exact HTTPS origin/i);
     expect(document).toMatch(/no telemetry, accounts, or uploads/i);
     expect(document).toMatch(/never automatically confirms/i);

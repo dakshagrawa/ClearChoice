@@ -1,6 +1,6 @@
-# ClearChoice 1.0.0-rc.1 production acceptance checklist
+# ClearChoice 1.0.0-rc.2 production acceptance checklist
 
-This is the unreleased `1.0.0-rc.1` production release candidate, not release-ready or published. Chrome numeric version is `1.0.0`. Production acceptance remains blocked; human QA is stopped. Existing privacy and permission requirements and all uncompleted gates below apply to promotion. See [production readiness](../production-readiness.md).
+This is the unreleased `1.0.0-rc.2` production release candidate, not release-ready or published. Chrome numeric version is `1.0.0`. Production acceptance remains blocked; human QA is stopped. Existing privacy and permission requirements and all uncompleted gates below apply to promotion. See [production readiness](../production-readiness.md).
 
 The beta identity and execution results below are historical baseline evidence.
 

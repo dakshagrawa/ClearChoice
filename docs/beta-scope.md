@@ -1,6 +1,6 @@
-# ClearChoice 1.0.0-rc.1 production candidate scope
+# ClearChoice 1.0.0-rc.2 production candidate scope
 
-This is the unreleased `1.0.0-rc.1` production release candidate candidate, not release-ready or published. Notices are advisory-only; false positives and false negatives remain possible. ClearChoice makes no legal, compliance, safety, or deceptive-site conclusion and does not automate purchases, payments, account actions, cancellations, refunds, or form submission. Chrome Web Store review and submission are future separate work, not complete. Production acceptance remains blocked; human QA is stopped. See [production readiness](../production-readiness.md).
+This is the unreleased `1.0.0-rc.2` production release candidate candidate, not release-ready or published. Notices are advisory-only; false positives and false negatives remain possible. ClearChoice makes no legal, compliance, safety, or deceptive-site conclusion and does not automate purchases, payments, account actions, cancellations, refunds, or form submission. Chrome Web Store review and submission are future separate work, not complete. Production acceptance remains blocked; human QA is stopped. See [production readiness](../production-readiness.md).
 
 ## Supported behavior
 
