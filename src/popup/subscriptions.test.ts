@@ -494,3 +494,50 @@ it('disables only the pending help button and does not move focus on settlement'
   expect(add.disabled).toBe(false); add.focus(); resolve(null);
   await vi.waitFor(() => expect(help.disabled).toBe(false)); expect(document.activeElement).toBe(add);
 });
+
+
+it.each([
+  ['clipped Notes', 20, -6.109375, 480, 88, true],
+  ['clipped top focus ring', 20, 4, 480, 88, true],
+  ['clipped bottom focus ring', 20, 508, 480, 88, true],
+  ['clipped left focus ring', 4, 20, 480, 88, true],
+  ['clipped right focus ring', 52, 20, 480, 88, true],
+  ['fully visible Notes', 20, 20, 480, 88, false],
+  ['Notes taller than viewport', 20, -10, 480, 601, false],
+  ['Notes wider than viewport', -10, 20, 536, 88, false],
+] as const)('reveals %s only when the control and ring can fit', async (_label, x, y, width, height, reveal) => {
+  await install(); const { root } = await mount();
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => frames.push(callback)));
+  vi.stubGlobal('innerWidth', 535); vi.stubGlobal('innerHeight', 600);
+  click(root, 'add'); fill(root);
+  const notes = root.querySelector<HTMLTextAreaElement>('[name="notes"]')!;
+  const geometry = vi.spyOn(notes, 'getBoundingClientRect').mockReturnValue(new DOMRect(x, y, width, height));
+  const scroll = vi.fn(); notes.scrollIntoView = scroll;
+  root.querySelector<HTMLButtonElement>('[type="submit"]')!.focus();
+  notes.focus();
+  expect(scroll).not.toHaveBeenCalled(); expect(geometry).not.toHaveBeenCalled();
+  for (const frame of frames.splice(0)) frame(0);
+  expect(geometry).toHaveBeenCalledOnce();
+  expect(scroll).toHaveBeenCalledTimes(reveal ? 1 : 0);
+  if (reveal) expect(scroll).toHaveBeenCalledWith({ block: 'nearest', inline: 'nearest' });
+  expect(document.activeElement).toBe(notes); expect(notes.value).toBe('Family plan');
+  expect(root.textContent).toContain('Do not enter payment or account details.');
+});
+
+it.each(['focus changed', 'editor removed'] as const)('does not reveal an outdated Notes target after %s before the frame', async (operation) => {
+  await install(); const { root } = await mount();
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => frames.push(callback)));
+  click(root, 'add');
+  const notes = root.querySelector<HTMLTextAreaElement>('[name="notes"]')!;
+  const geometry = vi.spyOn(notes, 'getBoundingClientRect').mockReturnValue(new DOMRect(20, -6.109375, 480, 88));
+  const scroll = vi.fn(); notes.scrollIntoView = scroll;
+  notes.focus();
+  if (operation === 'focus changed') root.querySelector<HTMLButtonElement>('[type="submit"]')!.focus();
+  else click(root, 'cancel');
+  const current = document.activeElement;
+  for (const frame of frames.splice(0)) frame(0);
+  expect(geometry).not.toHaveBeenCalled(); expect(scroll).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(current);
+});

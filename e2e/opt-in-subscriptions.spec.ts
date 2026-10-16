@@ -1,9 +1,29 @@
+import { resolveContentReplyDebugger } from './content-reply-debugger';
 import { resolveCapacityDebugger } from './capacity-debugger';
 import { expect, test } from 'playwright/test';
 import { readFile } from 'node:fs/promises';
 import { PackagedRuntime } from './packaged-runtime';
 import { createHash } from 'node:crypto';
 import { isFindingHistory, type FindingRecord } from '../src/shared/models';
+
+async function selectRetention(runtime: PackagedRuntime, popup: Awaited<ReturnType<PackagedRuntime['popup']>>, policy: string) {
+  // Open the owning disclosure through its actual summary before interacting.
+  const summary = '[aria-labelledby="review-heading"] details:has([data-review-retention]) > summary';
+  if (!await popup.evaluate(`document.querySelector('[data-review-retention]').closest('details').open`)) await popup.click(summary);
+  await popup.wait(`!document.querySelector('[data-review-retention]').disabled`);
+  const before = await runtime.storage();
+  const confirmed = await popup.evaluate<string>(`document.querySelector('[data-review-retention]').value`);
+  expect(confirmed).toBe(String(before.retentionPolicy));
+  await popup.evaluate(`document.querySelector('[data-review-retention]').value=${JSON.stringify(policy)};document.querySelector('[data-review-retention]').dispatchEvent(new Event('change',{bubbles:true}));`);
+  if (policy !== 'never' && (confirmed === 'never' || Number(policy) < Number(confirmed))) {
+    await popup.wait(`document.querySelector('[data-action="retention-apply"]')?.textContent === 'Apply shorter retention'`);
+    expect(await popup.evaluate(`document.querySelector('[data-review-retention]').value`)).toBe(confirmed);
+    expect(await runtime.storage()).toEqual(before); // Policy, records and receipts remain confirmed until Apply.
+    await popup.click('[data-action="retention-apply"]');
+  }
+  await popup.wait(`document.querySelector('[data-review-retention]').value === ${JSON.stringify(policy)} && !document.querySelector('[data-review-retention]').disabled`);
+  await expect.poll(async () => (await runtime.storage()).retentionPolicy).toBe(policy === 'never' ? 'never' : Number(policy));
+}
 
 async function badge(runtime: PackagedRuntime) {
   return runtime.worker.evaluate(async () => {
@@ -43,15 +63,10 @@ async function capacityRejectionProof(runtime: PackagedRuntime) {
     await browser.send('Target.sendMessageToTarget', { sessionId, message: JSON.stringify({ id, method, params }) });
     return result;
   };
-  const position = (source: string, statement: string) => {
-    const offset = source.indexOf(statement);
-    if (offset < 0 || source.indexOf(statement, offset + 1) !== -1) throw Error('Capacity diagnostic statement changed');
-    const prefix = source.slice(0, offset).split('\n');
-    return { lineNumber: prefix.length - 1, columnNumber: prefix.at(-1)!.length };
-  };
   const workerSource = await readFile(runtime.extension + '/worker.js', 'utf8');
   const contentSource = await readFile(runtime.extension + '/content.js', 'utf8');
   const capacity = resolveCapacityDebugger(workerSource);
+  const content = resolveContentReplyDebugger(contentSource);
   await send('Debugger.enable');
   await page.send('Debugger.enable');
   const branch = await send('Debugger.setBreakpointByUrl', {
@@ -59,8 +74,8 @@ async function capacityRejectionProof(runtime: PackagedRuntime) {
   });
   const settlement = await page.send('Debugger.setBreakpointByUrl', {
     url: `chrome-extension://${runtime.extensionId}/content.js`,
-    ...position(contentSource, 'if(typeof i=="object"&&i!==null&&Object.keys(i).length===2'),
-    condition: 'r.type === "CLEARCHOICE_AUTO_SUBMIT" && i?.ok === false',
+    lineNumber: content.lineNumber, columnNumber: content.columnNumber,
+    condition: content.rejectionCondition,
   });
   type Identity = { requestId: string; origin: string; generation?: number; findings: { opaqueFingerprint: string; ordinal: number }[] };
   const bounded = <T>(label: string, install: (resolve: (value: T) => void, reject: (error: Error) => void) => void) => new Promise<T>((resolve, reject) => {
@@ -87,7 +102,7 @@ async function capacityRejectionProof(runtime: PackagedRuntime) {
       try {
         if (!event.hitBreakpoints?.includes(settlement.breakpointId)) throw Error('Unexpected content pause');
         const result = await page.send('Debugger.evaluateOnCallFrame', { callFrameId: event.callFrames[0].callFrameId,
-          expression: '({requestId:t.requestId,origin:location.origin,generation:r.generation,findings:t.findings.map(f=>({opaqueFingerprint:f.opaqueFingerprint,ordinal:f.ordinal})),reply:i,pending:S.has(t.requestId),aborted:!!n?.aborted})', returnByValue: true, throwOnSideEffect: true });
+          expression: content.identityExpression, returnByValue: true, throwOnSideEffect: true });
         if (result.exceptionDetails) throw Error('Content settlement locals unavailable');
         await page.send('Debugger.resume');
         resolve(result.result.value);
@@ -167,7 +182,7 @@ test('pre-granted reserved mock setup: native production opt-in, quiet zero, exp
     await runtime.page.evaluate(()=>{document.querySelector('main')!.append(document.createElement('span'));});
     await runtime.page.waitForTimeout(400);
     expect((await runtime.storage()).reviewHistory).toHaveLength(1);
-    await runtime.page.evaluate(()=>{history.pushState(null,'','/outside');document.querySelector('main')!.textContent='Local mock article';window.dispatchEvent(new PopStateEvent('popstate'));});
+    await runtime.page.evaluate(()=>{window.history.pushState(null,'','/outside');document.querySelector('main')!.textContent='Local mock article';window.dispatchEvent(new PopStateEvent('popstate'));});
     await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(0);
     await runtime.page.goto(runtime.b+'/checkout/recurring');
     await runtime.page.waitForTimeout(400);
@@ -245,8 +260,7 @@ test('native packaged popup: real manual CRUD, help fallback, focus and Axe, ret
     const edited = (await runtime.storage()).subscriptions as {id:string;merchant:string}[];
     expect(edited[0].id).toBe(saved[0].id);
     expect(edited[0].merchant).toBe('Fake edited merchant');
-    await popup.evaluate(`document.querySelector('[data-review-retention]').value='7';document.querySelector('[data-review-retention]').dispatchEvent(new Event('change',{bubbles:true}));`);
-    await popup.wait(`document.querySelector('[data-review-retention]').value === '7' && !document.querySelector('[data-review-retention]').disabled`);
+    await selectRetention(runtime, popup, '7');
     expect((await runtime.storage()).retentionPolicy).toBe(7);
     await popup.close();
     await runtime.restart();
@@ -336,8 +350,7 @@ test('pre-granted packaged pruning of synthetic aged production finding preserve
     expect((await runtime.storage()).reviewHistory).toEqual(aged);
     expect(aged[0].id).toBe(original[0].id);
     popup = await runtime.popup();
-    await popup.evaluate(`document.querySelector('[data-review-retention]').value='7';document.querySelector('[data-review-retention]').dispatchEvent(new Event('change',{bubbles:true}));`);
-    await popup.wait(`document.querySelector('[data-review-retention]').value === '7' && !document.querySelector('[data-review-retention]').disabled`);
+    await selectRetention(runtime, popup, '7');
     const pruned = await runtime.storage();
     expect(pruned.reviewHistory).toEqual([]);
     expect(pruned.retentionPolicy).toBe(7);
@@ -376,8 +389,7 @@ test('pre-granted packaged synthetic 500-record capacity rejects real distinct o
     await expect(runtime.page.locator('[data-clearchoice-panel]')).toHaveCount(1);
     const seed = ((await runtime.storage()).reviewHistory as FindingRecord[])[0];
     popup = await runtime.popup();
-    await popup.evaluate(`document.querySelector('[data-review-retention]').value='never';document.querySelector('[data-review-retention]').dispatchEvent(new Event('change',{bubbles:true}));`);
-    await popup.wait(`document.querySelector('[data-review-retention]').value === 'never' && !document.querySelector('[data-review-retention]').disabled`);
+    await selectRetention(runtime, popup, 'never');
     expect((await runtime.storage()).retentionPolicy).toBe('never');
     await popup.close();
     await runtime.page.goto(runtime.a+'/checkout/clean');

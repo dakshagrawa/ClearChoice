@@ -141,6 +141,21 @@ export function mountSubscriptions(root: HTMLElement) {
     status.textContent = 'Save explicitly to confirm changes.';
     editor.innerHTML = '<form novalidate autocomplete="off"><h3>Add subscription</h3><p>Do not enter payment or account details.</p><label>Merchant<input name="merchant" maxlength="120" required></label><label>Amount (positive, two decimal places)<input name="amount" placeholder="12.99" inputmode="decimal" required></label><label>Currency (ISO code)<input name="currency" spellcheck="false" maxlength="3" value="USD" required></label><label>Cadence<select name="cadence"><option>weekly</option><option selected>monthly</option><option>quarterly</option><option>yearly</option><option>custom</option></select></label><label>Custom cadence description<input name="customDescription" maxlength="120"></label><label>Next billing date (YYYY-MM-DD, optional)<input name="nextBillingDate" placeholder="YYYY-MM-DD"></label><label>Notes (optional)<textarea name="notes" maxlength="500"></textarea></label><button type="button" data-subscription-action="cancel">Cancel</button><button type="submit">Save subscription</button></form>';
     const element = editor.querySelector('form')!;
+    element.addEventListener('focusin', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement) || !target.matches('input, select, textarea, button')) return;
+      requestAnimationFrame(() => {
+        if (!target.isConnected || !element.contains(target) || document.activeElement !== target) return;
+        // Native textarea focus can reveal only the caret, clipping the box and ring.
+        const box = target.getBoundingClientRect();
+        const margin = 8; // 3px outline + 3px offset, with breathing room.
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        if (box.width <= 0 || box.height <= 0 || box.width + margin * 2 > width || box.height + margin * 2 > height) return;
+        if (box.top < margin || box.left < margin || box.bottom > height - margin || box.right > width - margin)
+          target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      });
+    });
     element.querySelector('[data-subscription-action="cancel"]')!.addEventListener('click', () => { if (busy) return; suggestionOpen = false; editor.replaceChildren(); status.textContent = 'Editor closed; no additional save requested.'; (returnControl?.isConnected ? returnControl : add).focus(); });
     if (source) {
       element.querySelector('h3')!.textContent = 'Confirm observation as subscription';

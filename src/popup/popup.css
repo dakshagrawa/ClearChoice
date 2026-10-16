@@ -51,6 +51,7 @@ button:hover:not(:disabled) { border-color: var(--focus); }
 button:disabled, select:disabled { cursor: default; opacity: .65; }
 input, textarea { display: block; width: 100%; }
 textarea { min-height: 88px; resize: vertical; }
+[data-subscription-editor] :is(input, select, textarea, button) { scroll-margin: 8px; }
 [data-subscription-list] article, [data-review-items] li { background: var(--surface); border: 1px solid var(--divider); border-radius: 10px; padding: 12px; margin: 12px 0; }
 button:focus-visible, select:focus-visible, input:focus-visible, textarea:focus-visible,
 a:focus-visible, summary:focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }

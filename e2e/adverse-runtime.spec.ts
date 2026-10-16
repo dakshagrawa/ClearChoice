@@ -1,3 +1,5 @@
+import { resolveContentReplyDebugger } from './content-reply-debugger';
+import ts from 'typescript';
 import { expect, test, type CDPSession } from 'playwright/test';
 import { readFile } from 'node:fs/promises';
 import { PackagedRuntime } from './packaged-runtime';
@@ -7,12 +9,13 @@ import { PackagedRuntime } from './packaged-runtime';
 async function contentProbe(runtime: PackagedRuntime) {
   const session = await runtime.context.newCDPSession(runtime.page);
   const source = await readFile(runtime.extension + '/content.js', 'utf8');
+  const reply = resolveContentReplyDebugger(source);
   await session.send('Debugger.enable');
   const events: Parameters<Parameters<CDPSession['on']>[1]>[0][] = [];
   session.on('Debugger.paused', event => events.push(event));
-  const breakpoint = async (statement: string, condition: string) => {
-    const offset = source.indexOf(statement);
-    if (offset < 0 || source.indexOf(statement, offset + 1) !== -1) throw Error('Packaged diagnostic statement changed: ' + statement);
+  const breakpoint = async (statement: string | number, condition: string) => {
+    const offset = typeof statement === 'number' ? statement : source.indexOf(statement);
+    if (offset < 0 || (typeof statement === 'string' && source.indexOf(statement, offset + 1) !== -1)) throw Error('Packaged diagnostic statement changed: ' + statement);
     const lines = source.slice(0, offset).split('\n');
     return session.send('Debugger.setBreakpointByUrl', {
       url: `chrome-extension://${runtime.extensionId}/content.js`,
@@ -35,15 +38,27 @@ async function contentProbe(runtime: PackagedRuntime) {
     const aliases = [...source.matchAll(/(?:const|,)([A-Za-z_$][\w$]*)="(CLEARCHOICE_[A-Z_]+)"/g)]
       .filter(match => match[2] === messageType);
     if (aliases.length !== 1) throw Error('Packaged protocol constant unavailable: ' + messageType);
-    return `if(a.type===${aliases[0][1]}){`;
+    const file = ts.createSourceFile('content.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+    const branches: ts.IfStatement[] = [];
+    const visit = (node: ts.Node) => {
+      if (ts.isIfStatement(node) && ts.isBinaryExpression(node.expression)
+        && node.expression.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+        && ts.isPropertyAccessExpression(node.expression.left) && node.expression.left.name.text === 'type'
+        && ts.isIdentifier(node.expression.left.expression)
+        && node.expression.right.getText(file) === aliases[0][1]) branches.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    if (branches.length !== 1) throw Error('Packaged challenge branch missing or ambiguous');
+    const branch = branches[0];
+    const message = ((branch.expression as ts.BinaryExpression).left as ts.PropertyAccessExpression).expression.getText(file);
+    return { statement: source.slice(branch.getStart(file), branch.thenStatement.getStart(file)), message };
   };
-  return { session, breakpoint, protocolBranch, next, close: async () => {
+  return { session, breakpoint, protocolBranch, next, reply, close: async () => {
     await session.send('Debugger.disable');
     await session.detach();
   } };
 }
-const settlementStatement = 'if(typeof i=="object"&&i!==null&&Object.keys(i).length===2';
-const settlementExpression = '({requestId:t.requestId,generation:r.generation,findings:t.findings.length,reply:i,pending:S.has(t.requestId),aborted:!!n?.aborted})';
 async function badge(runtime: PackagedRuntime) {
   return runtime.worker.evaluate(async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -73,11 +88,12 @@ test('packaged in-flight real challenge is vetoed by native-popup revoke before 
     const enabled = await runtime.storage();
     const probe = await contentProbe(runtime);
     try {
-      const challenge = await probe.breakpoint(probe.protocolBranch('CLEARCHOICE_FINDINGS_CHALLENGE'), 'S.has(a.requestId)');
-      const settlement = await probe.breakpoint(settlementStatement, 'r.type === "CLEARCHOICE_AUTO_SUBMIT"');
+      const protocol = probe.protocolBranch('CLEARCHOICE_FINDINGS_CHALLENGE');
+      const challenge = await probe.breakpoint(protocol.statement, `${probe.reply.pending}.has(${protocol.message}.requestId)`);
+      const settlement = await probe.breakpoint(probe.reply.offset, probe.reply.condition);
       await positiveMutation(runtime);
       const inFlight = await probe.next(challenge.breakpointId,
-        '({requestId:a.requestId,pending:S.has(a.requestId),origin:location.origin,nonce:a.nonce})');
+        `({requestId:${protocol.message}.requestId,pending:${probe.reply.pending}.has(${protocol.message}.requestId),origin:location.origin,nonce:${protocol.message}.nonce})`);
       expect(inFlight).toMatchObject({ pending: true, origin: runtime.a, requestId: expect.any(String), nonce: expect.any(String) });
       expect(inFlight.requestId).not.toBe('');
       expect((await runtime.storage()).reviewHistory ?? []).toEqual([]);
@@ -91,7 +107,7 @@ test('packaged in-flight real challenge is vetoed by native-popup revoke before 
       await expect.poll(async () => (await runtime.permissions()).scripts).toEqual([]);
       await probe.session.send('Debugger.removeBreakpoint', { breakpointId: challenge.breakpointId });
       await probe.session.send('Debugger.resume');
-      const reply = await probe.next(settlement.breakpointId, settlementExpression);
+      const reply = await probe.next(settlement.breakpointId, probe.reply.expression);
       expect(reply).toMatchObject({ requestId: inFlight.requestId, generation: 1, findings: 1,
         reply: { ok: false, error: 'request-failed' } });
       await probe.session.send('Debugger.removeBreakpoint', { breakpointId: settlement.breakpointId });
@@ -148,9 +164,9 @@ test('packaged real Chrome storage quota rejects atomic finding/receipt write an
     expect(quota.error).toMatch(/QUOTA_BYTES|quota/i);
     const probe = await contentProbe(runtime);
     try {
-      const settlement = await probe.breakpoint(settlementStatement, 'r.type === "CLEARCHOICE_AUTO_SUBMIT"');
+      const settlement = await probe.breakpoint(probe.reply.offset, probe.reply.condition);
       await positiveMutation(runtime);
-      const failed = await probe.next(settlement.breakpointId, settlementExpression);
+      const failed = await probe.next(settlement.breakpointId, probe.reply.expression);
       expect(failed).toMatchObject({ generation: 1, findings: 1, pending: true, aborted: false,
         reply: { ok: false, error: 'retryable-failure' } });
       const rejected = await runtime.worker.evaluate(async (key) => {
@@ -171,7 +187,7 @@ test('packaged real Chrome storage quota rejects atomic finding/receipt write an
       expect(panels.nodeIds).toEqual([]);
       expect(await badge(runtime)).toBe('');
       await probe.session.send('Debugger.resume');
-      const retried = await probe.next(settlement.breakpointId, settlementExpression);
+      const retried = await probe.next(settlement.breakpointId, probe.reply.expression);
       expect(retried).toMatchObject({ generation: 1, findings: 1, pending: true, aborted: false,
         reply: { ok: true, findingCount: 1 } });
       expect(retried.requestId).not.toBe(failed.requestId);

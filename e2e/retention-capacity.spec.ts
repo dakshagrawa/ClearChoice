@@ -1,3 +1,4 @@
+import { resolveContentReplyDebugger } from './content-reply-debugger';
 import { resolveCapacityDebugger } from './capacity-debugger';
 import { expect, test } from 'playwright/test';
 import { createHash } from 'node:crypto';
@@ -45,9 +46,23 @@ async function attachSnapshots(name: string, snapshots: Record<string, unknown>)
   }, null, 2), contentType: 'application/json' });
 }
 
-async function selectRetention(popup: Awaited<ReturnType<PackagedRuntime['popup']>>, policy: string) {
+async function selectRetention(runtime: PackagedRuntime, popup: Awaited<ReturnType<PackagedRuntime['popup']>>, policy: string) {
+  // Open the owning disclosure through its actual summary before interacting.
+  const summary = '[aria-labelledby="review-heading"] details:has([data-review-retention]) > summary';
+  if (!await popup.evaluate(`document.querySelector('[data-review-retention]').closest('details').open`)) await popup.click(summary);
+  await popup.wait(`!document.querySelector('[data-review-retention]').disabled`);
+  const before = await runtime.storage();
+  const confirmed = await popup.evaluate<string>(`document.querySelector('[data-review-retention]').value`);
+  expect(confirmed).toBe(String(before.retentionPolicy));
   await popup.evaluate(`document.querySelector('[data-review-retention]').value=${JSON.stringify(policy)};document.querySelector('[data-review-retention]').dispatchEvent(new Event('change',{bubbles:true}));`);
+  if (policy !== 'never' && (confirmed === 'never' || Number(policy) < Number(confirmed))) {
+    await popup.wait(`document.querySelector('[data-action="retention-apply"]')?.textContent === 'Apply shorter retention'`);
+    expect(await popup.evaluate(`document.querySelector('[data-review-retention]').value`)).toBe(confirmed);
+    expect(await runtime.storage()).toEqual(before); // Policy, records and receipts remain confirmed until Apply.
+    await popup.click('[data-action="retention-apply"]');
+  }
   await popup.wait(`document.querySelector('[data-review-retention]').value === ${JSON.stringify(policy)} && !document.querySelector('[data-review-retention]').disabled`);
+  await expect.poll(async () => (await runtime.storage()).retentionPolicy).toBe(policy === 'never' ? 'never' : Number(policy));
 }
 
 test('TEST-ONLY STORAGE FIXTURE: Never and 90 retain aged records; 7 expires old source without deleting confirmed subscription', async () => {
@@ -66,7 +81,7 @@ test('TEST-ONLY STORAGE FIXTURE: Never and 90 retain aged records; 7 expires old
     await popup.wait(`document.querySelectorAll('[data-review-id]').length === 2`);
     const never = await runtime.storage();
     expect(never).toEqual(seeded); // Production read must not silently prune fixture.
-    await selectRetention(popup, '90');
+    await selectRetention(runtime, popup, '90');
     const ninety = await runtime.storage();
     expect(ninety).toEqual({ ...seeded, retentionPolicy: 90 });
     await popup.close();
@@ -74,7 +89,7 @@ test('TEST-ONLY STORAGE FIXTURE: Never and 90 retain aged records; 7 expires old
     popup = await runtime.popup();
     await popup.wait(`document.querySelectorAll('[data-review-id]').length === 2`);
     expect(await runtime.storage()).toEqual(ninety);
-    await selectRetention(popup, '7');
+    await selectRetention(runtime, popup, '7');
     await popup.wait(`document.querySelectorAll('[data-review-id]').length === 1`);
     const pruned = await runtime.storage();
     expect(pruned).toEqual({ ...seeded, retentionPolicy: 7, reviewHistory: [fresh] });
@@ -99,14 +114,11 @@ test('TEST-ONLY STORAGE FIXTURE: Never and 90 retain aged records; 7 expires old
 async function observeCapacityReply(runtime: PackagedRuntime) {
   const session = await runtime.context.newCDPSession(runtime.page);
   const source = await readFile(runtime.extension + '/content.js', 'utf8');
-  const statement = 'if(typeof i=="object"&&i!==null&&Object.keys(i).length===2';
-  const offset = source.indexOf(statement);
-  if (offset < 0 || source.indexOf(statement, offset + 1) !== -1) throw Error('Packaged capacity diagnostic statement changed');
-  const lines = source.slice(0, offset).split('\n');
+  const content = resolveContentReplyDebugger(source);
   await session.send('Debugger.enable');
   const breakpoint = await session.send('Debugger.setBreakpointByUrl', {
-    url: `chrome-extension://${runtime.extensionId}/content.js`, lineNumber: lines.length - 1,
-    columnNumber: lines.at(-1)!.length, condition: 'r.type === "CLEARCHOICE_AUTO_SUBMIT" && i?.ok === false',
+    url: `chrome-extension://${runtime.extensionId}/content.js`, lineNumber: content.lineNumber,
+    columnNumber: content.columnNumber, condition: content.rejectionCondition,
   });
   type ReplyProof = { requestId: string; origin: string; generation: number; reply: unknown;
     pending: boolean; aborted: boolean; findings: { opaqueFingerprint: string; ordinal: number }[] };
@@ -117,7 +129,7 @@ async function observeCapacityReply(runtime: PackagedRuntime) {
       try {
         if (!event.hitBreakpoints?.includes(breakpoint.breakpointId)) throw Error('Unexpected debugger pause');
         const result = await session.send('Debugger.evaluateOnCallFrame', { callFrameId: event.callFrames[0].callFrameId,
-          expression: '({requestId:t.requestId,origin:location.origin,generation:r.generation,findings:t.findings.map(f=>({opaqueFingerprint:f.opaqueFingerprint,ordinal:f.ordinal})),reply:i,pending:S.has(t.requestId),aborted:!!n?.aborted})',
+          expression: content.identityExpression,
           returnByValue: true, throwOnSideEffect: true });
         if (result.exceptionDetails) throw Error('Production response locals unavailable');
         await session.send('Debugger.resume');
