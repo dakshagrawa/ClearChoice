@@ -11,13 +11,13 @@
   max-height: min(70vh, 540px);
   overflow: auto;
   box-sizing: border-box;
-  padding: 16px;
-  border: 1px solid #9a6700;
-  border-radius: 12px;
-  background: #fffdf5;
-  color: #24292f;
-  box-shadow: 0 8px 24px rgb(31 35 40 / 18%);
-  font: 14px/1.45 system-ui, sans-serif;
+  padding: 20px;
+  border: 1px solid #c8d4d9;
+  border-radius: 14px;
+  background: #ffffff;
+  color: #172d38;
+  box-shadow: 0 12px 32px rgb(25 47 58 / 14%);
+  font: 14px/1.55 system-ui, sans-serif;
 }
 
 .clearchoice-header {
@@ -45,8 +45,14 @@ button {
   font: inherit;
 }
 button:focus-visible { outline: 3px solid #0969da; outline-offset: 2px; }
-.evidence { padding: 8px; border-left: 3px solid #9a6700; background: #fff8c5; }
-.reason { color: #424a53; }
+.evidence { padding: 12px; border: 1px solid #e4d8a5; border-radius: 8px; background: #fbf6e6; }
+.reason { color: #506570; }
+.clearchoice-header { padding-bottom: 12px; border-bottom: 1px solid #e3e9ed; }
+.clearchoice-header h2 { color: #24606a; padding-top: 9px; }
+h3 { margin-top: 18px; font-size: 15px; }
+h4 { margin-top: 14px; font-size: 12px; letter-spacing: .15px; }
+button { border-color: #c6d2d8; border-radius: 8px; font-size: 12px; padding: 6px 12px; }
+@media (prefers-color-scheme: dark) { .clearchoice-header { border-color: #4c5c51; } .clearchoice-header h2 { color: #a6ded6; } }
 
 .clearchoice-panel { overscroll-behavior: contain; overflow-wrap: anywhere; color-scheme: light dark; font-size: .875rem; }
 .clearchoice-panel * { min-width: 0; }
