@@ -131,7 +131,19 @@ export class PackagedRuntime {
     };
     const click=async(selector:string) => {
       await wait(`!!document.querySelector(${JSON.stringify(selector)}) && !document.querySelector(${JSON.stringify(selector)}).disabled`);
-      const point=await evaluate<{x:number;y:number}>(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.scrollIntoView({block:'center'});const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+      const point=await evaluate<{x:number;y:number}>(`(async()=>{
+        // Let pending focus-reveal callbacks finish before scrolling to the target.
+        await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+        const e=document.querySelector(${JSON.stringify(selector)});
+        e.scrollIntoView({block:'center'});
+        await new Promise(r=>requestAnimationFrame(r));
+        const box=e.getBoundingClientRect();
+        const x=box.x+box.width/2,y=box.y+box.height/2;
+        const hit=document.elementFromPoint(x,y);
+        if(!e.isConnected || e.disabled || box.width<=0 || box.height<=0 || x<0 || y<0 || x>=innerWidth || y>=innerHeight || !(hit===e || e.contains(hit)))
+          throw Error('Popup target is not pointer-reachable');
+        return {x,y};
+      })()`);
       await send('Input.dispatchMouseEvent',{type:'mousePressed',button:'left',clickCount:1,...point});
       await send('Input.dispatchMouseEvent',{type:'mouseReleased',button:'left',clickCount:1,...point});
     };
