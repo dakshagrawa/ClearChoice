@@ -111,6 +111,7 @@ test('physical split-window: built native Analyze keeps Dismiss inside the human
     await expect.poll(async () => (await runtime.storage()).dismissed).toBe(true);
     const restore = await runtime.popup();
     await restore.click('[data-action="restore"]');
+    await restore.wait(`document.querySelector('[data-analysis-status]').textContent === 'Dismissal is cleared. Analyze again to show findings.'`);
     await expect.poll(async () => (await runtime.storage()).dismissed).toBe(false);
     await restore.click('[data-action="analyze"]');
     await restore.wait(`document.querySelector('main > [role="status"]').textContent.includes('1')`);

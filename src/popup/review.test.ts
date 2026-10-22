@@ -12,6 +12,53 @@ async function setup(handler: (message: Record<string, unknown>) => unknown = ()
   await import('./main');
   return sendMessage;
 }
+it('hides pagination for confirmed empty history without hiding refresh or retention', async () => {
+  await setup(() => page([], 0));
+  await vi.waitFor(() => expect(document.querySelector('[data-review-status]')?.textContent).toBe('No retained observations.'));
+  expect(document.querySelector<HTMLElement>('nav[aria-label="Review history pages"]')!.hidden).toBe(true);
+  expect(button('review-previous').disabled).toBe(true);
+  expect(button('review-next').disabled).toBe(true);
+  expect(button('review-refresh').disabled).toBe(false);
+  expect(document.querySelector<HTMLSelectElement>('[data-review-retention]')!.disabled).toBe(false);
+});
+
+it('keeps pagination stable during reads and recovers through populated, failed and empty history', async () => {
+  let records: ReviewItem[] = [];
+  let fail = false;
+  let hold = false;
+  let finish!: (value: unknown) => void;
+  await setup((message) => {
+    if (fail) throw new Error('read unavailable');
+    const response = page(records.slice(Number(message.offset), Number(message.offset) + 100), records.length, Number(message.offset));
+    return hold ? new Promise((resolve) => { finish = resolve; }) : response;
+  });
+  const pagination = document.querySelector<HTMLElement>('nav[aria-label="Review history pages"]')!;
+  await vi.waitFor(() => expect(document.querySelector('[data-review-status]')?.textContent).toBe('No retained observations.'));
+  expect(pagination.hidden).toBe(true);
+  records = Array.from({ length: 101 }, (_, i) => item(`record-${i}`));
+  button('review-refresh').click();
+  await vi.waitFor(() => expect(button('review-next').disabled).toBe(false));
+  expect(pagination.hidden).toBe(false);
+  hold = true;
+  button('review-next').click();
+  expect(pagination.hidden).toBe(false);
+  expect(button('review-next').disabled).toBe(true);
+  finish(page(records.slice(100), 101, 100));
+  await vi.waitFor(() => expect(document.querySelector('[data-review-id="record-100"]')).not.toBeNull());
+  expect(pagination.hidden).toBe(false);
+  expect(button('review-previous').disabled).toBe(false);
+  hold = false; fail = true;
+  button('review-refresh').click();
+  await vi.waitFor(() => expect(document.querySelector('[data-review-status]')?.textContent).toContain('Could not load'));
+  expect(pagination.hidden).toBe(false);
+  expect(button('review-previous').disabled).toBe(true);
+  expect(button('review-next').disabled).toBe(true);
+  fail = false; records = [];
+  button('review-refresh').click();
+  await vi.waitFor(() => expect(document.querySelector('[data-review-status]')?.textContent).toBe('No retained observations.'));
+  expect(pagination.hidden).toBe(true);
+});
+
 it('paginates all 500 retained records with stable IDs, including pages beyond 100', async () => {
   const records = Array.from({ length: 500 }, (_, i) => item(`record-${i}`));
   const send = await setup((message) => page(records.slice(Number(message.offset), Number(message.offset) + 100), 500, Number(message.offset)));

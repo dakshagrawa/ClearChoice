@@ -284,7 +284,7 @@ restoreButton.addEventListener('click', async () => {
   try {
     const response = await restoreActiveTab();
     status.textContent = response.ok
-      ? 'Dismissal restored. Analyze again to show findings.'
+      ? 'Dismissal is cleared. Analyze again to show findings.'
       : 'ClearChoice could not restore dismissed findings. Reload and try again.';
   } finally {
     analysisPending = false; analyzeButton.disabled = false; controls();

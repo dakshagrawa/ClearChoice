@@ -320,6 +320,11 @@ for (const theme of ['light', 'dark'] as const) {
     try {
       await runtime.start();
       let popup = await runtime.popup();
+      await popup.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] });
+      await popup.wait(`document.querySelector('[data-review-status]').textContent === 'No retained observations.'`);
+      expect(await popup.evaluate(`document.querySelector('nav[aria-label="Review history pages"]').hidden`), 'Empty history hides pagination').toBe(true);
+      expect(await popup.evaluate(`document.querySelector('nav[aria-label="Review history pages"]').getBoundingClientRect().height`)).toBe(0);
+      expect(await popup.evaluate(`document.querySelector('[data-action="review-refresh"]').disabled`)).toBe(false);
       await popup.click('[data-action="site-enable"]');
       await popup.wait(`document.querySelector('[data-site-status]').textContent.startsWith('Detection enabled for')`);
       await popup.close();
@@ -329,6 +334,7 @@ for (const theme of ['light', 'dark'] as const) {
       await popup.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-color-scheme', value: theme }] });
       await popup.evaluate(await readFile('node_modules/axe-core/axe.min.js', 'utf8'));
       await popup.wait(`document.querySelectorAll('[data-review-id]').length === 1`);
+      expect(await popup.evaluate(`document.querySelector('nav[aria-label="Review history pages"]').hidden`), 'Retained history restores pagination').toBe(false);
       await popup.click('[data-action="review-as-subscription"]');
       await auditLayout(popup, `${theme}-review-editor`, true);
       await attachNativeScreenshot(popup, theme, 'review-editor');

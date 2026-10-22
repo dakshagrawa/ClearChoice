@@ -17,6 +17,21 @@ it('mounts manual subscriptions separately from history without an active site a
   expect(document.querySelector('[name="merchant"]')).not.toBeNull(); expect(request).not.toHaveBeenCalled();
 });
 
+it('reports the cleared dismissal state without claiming a prior dismissal existed', async () => {
+  vi.resetModules(); document.body.innerHTML = '<div id="app"></div>';
+  const sendMessage = vi.fn(async (message: { type: string }) => {
+    if (message.type === 'CLEARCHOICE_SUBSCRIPTION_LIST') return { type: message.type, version: 1, subscriptions: [] };
+    if (message.type === 'CLEARCHOICE_REVIEW_LIST') return { type: message.type, version: 1, offset: 0, total: 0, needsReviewCount: 0, findings: [], retentionPolicy: 30 };
+    return { ok: true };
+  });
+  vi.stubGlobal('chrome', { runtime: { sendMessage }, tabs: { query: vi.fn().mockResolvedValue([]) } });
+  await import('./main');
+  document.querySelector<HTMLButtonElement>('[data-action="restore"]')!.click();
+  await vi.waitFor(() => expect(document.querySelector('[data-analysis-status]')?.textContent).toBe('Dismissal is cleared. Analyze again to show findings.'));
+  expect(sendMessage).toHaveBeenCalledWith({ type: 'CLEARCHOICE_RESTORE' });
+  expect(document.querySelector<HTMLButtonElement>('[data-action="restore"]')!.disabled).toBe(false);
+});
+
 it('keeps an explicit analysis live region directly under main', async () => {
   const { app } = await renderPopupBeforeResponse();
   const status = app.querySelector('[data-analysis-status]');

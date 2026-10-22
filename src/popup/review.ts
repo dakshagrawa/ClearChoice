@@ -18,7 +18,7 @@ export function mountReview(root: HTMLElement, reviewAsSubscription?: (item: Rev
     <p>Expiry is based on latest seen. Shorter retention can permanently remove older observations.</p>
     <div data-retention-confirmation></div></details>
     <ol data-review-items></ol>
-    <nav aria-label="Review history pages">
+    <nav aria-label="Review history pages" hidden>
       <button type="button" data-action="review-previous" disabled>Previous page</button>
       <button type="button" data-action="review-next" disabled>Next page</button>
     </nav>
@@ -28,6 +28,7 @@ export function mountReview(root: HTMLElement, reviewAsSubscription?: (item: Rev
   const list = root.querySelector<HTMLOListElement>('[data-review-items]')!;
   const previous = root.querySelector<HTMLButtonElement>('[data-action="review-previous"]')!;
   const next = root.querySelector<HTMLButtonElement>('[data-action="review-next"]')!;
+  const pagination = root.querySelector<HTMLElement>('nav[aria-label="Review history pages"]')!;
   const retention = root.querySelector<HTMLSelectElement>('[data-review-retention]')!;
   const refreshButton = root.querySelector<HTMLButtonElement>('[data-action="review-refresh"]')!;
   let mutating = false;
@@ -129,6 +130,7 @@ export function mountReview(root: HTMLElement, reviewAsSubscription?: (item: Rev
       list.start = offset + 1;
       list.replaceChildren(...response.findings.map(render));
       retention.value = String(response.retentionPolicy);
+      pagination.hidden = response.total === 0;
       controls();
       status.textContent = response.total === 0 ? 'No retained observations.' : `Showing ${offset + 1}–${offset + response.findings.length} of ${response.total} retained observations (including reviewed).`;
     } catch {
