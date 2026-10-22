@@ -2,6 +2,8 @@ name: Release candidate verification
 on:
   push:
     branches: [release/v1-production]
+  pull_request:
+    branches: [release/v1-production]
 permissions:
   contents: read
 jobs:

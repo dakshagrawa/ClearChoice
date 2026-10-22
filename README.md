@@ -1,5 +1,9 @@
 # ClearChoice 1.0.0-rc.3 production release candidate
 
+## License and contributions
+
+Copyright (c) 2026 Daksh Agrawal. ClearChoice is **proprietary and source-available, not open source**. Personal, noncommercial evaluation, controlled beta testing, and preparing contributions are permitted only as described in [LICENSE](LICENSE). Reuse in another product, commercial exploitation, and redistribution outside those permissions require prior written permission. GitHub viewing/forking rights, applicable law, prior valid grants, and third-party licenses remain unaffected. Issues and PRs are welcome under [CONTRIBUTING.md](CONTRIBUTING.md).
+
 This is the unreleased `1.0.0-rc.3` production release candidate, not release-ready or published. Notices are advisory-only; false positives and false negatives remain possible. ClearChoice makes no legal, compliance, safety, or deceptive-site conclusion and does not automate purchases, payments, account actions, cancellations, refunds, or form submission. Chrome Web Store review and submission are future separate work, not complete. Production acceptance remains blocked; human QA is stopped. See [production readiness](./production-readiness.md).
 
 The popup is 520px wide, uses light/dark design tokens, and makes **Analyze** the primary action. Subscriptions appear before history; explanations expand through a keyboard-focusable summary. These changes refine existing behavior and do not establish final polish or stable approval.
