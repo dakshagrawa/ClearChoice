@@ -1,0 +1,47 @@
+ClearChoice Proprietary License
+
+Copyright (c) 2026 Daksh Agrawal. All rights reserved.
+
+1. Scope
+These terms apply only to original ClearChoice material owned by Daksh
+Agrawal. ClearChoice is proprietary, source-available software, not open-source
+software. Public visibility does not grant an unrestricted reuse license.
+
+2. Limited permission
+You may view the source, make local copies, and run or modify ClearChoice
+solely for personal, noncommercial evaluation, controlled beta testing, or
+preparing a contribution to this repository. Retain this license and applicable
+copyright notices in those copies. Beta testing must use fake data and
+controlled fixtures, not real accounts, purchases, or payment data.
+
+You may use GitHub's viewing, forking, issue, and pull-request features as
+permitted by GitHub's Terms of Service, including a fork needed to propose a
+contribution. These permissions do not authorize publishing a competing
+product or distributing ClearChoice outside those permitted activities.
+
+3. Rights reserved
+Except for the limited permissions above, applicable law, or a separate written
+permission from Daksh Agrawal, no permission is granted to distribute,
+sublicense, sell, commercially exploit, or reuse ClearChoice material in
+another project or product, whether modified or unmodified. Do not remove
+copyright notices or claim authorship of another person's work. No trademark
+or endorsement rights are granted.
+
+4. Contributions and third-party material
+Contributors retain ownership of their contributions unless separately agreed
+in writing. See CONTRIBUTING.md for the permission required before a
+contribution can be merged. Third-party code, dependencies, and other
+materials remain subject to their own licenses; these terms do not replace
+them or claim ownership of them. Preserve required third-party notices.
+
+5. Existing rights
+These terms do not revoke permissions validly granted for earlier versions,
+restrict rights that cannot lawfully be restricted, or override GitHub's Terms
+of Service. They do not change historical release artifacts or tags.
+
+6. No warranty
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE SOFTWARE IS PROVIDED "AS IS",
+WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. TO THE EXTENT
+PERMITTED BY APPLICABLE LAW, THE COPYRIGHT HOLDER IS NOT LIABLE FOR CLAIMS,
+DAMAGES, OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.

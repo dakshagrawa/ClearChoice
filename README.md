@@ -1,4 +1,14 @@
-# ClearChoice 0.3.0-beta.1 private opt-in beta
+# ClearChoice
+
+## License and contributions
+
+Copyright (c) 2026 Daksh Agrawal. ClearChoice is **proprietary and source-available, not open source**. Personal, noncommercial evaluation, controlled beta testing, and preparing contributions are permitted only as described in [LICENSE](LICENSE). Reuse in another product, commercial exploitation, and redistribution outside those permissions require prior written permission. GitHub viewing/forking rights, applicable law, prior valid grants, and third-party licenses remain unaffected. Issues and PRs are welcome under [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Branch status
+
+This public default branch contains older development code. Current tester builds are maintained on [`release/v1-production`](https://github.com/dakshagrawa/ClearChoice/tree/release/v1-production) and distributed through [GitHub Releases](https://github.com/dakshagrawa/ClearChoice/releases). The development notes below describe this older branch, not the current tester release.
+
+### Historical 0.3.0-beta.1 development notes
 
 ClearChoice's production-ready target is a **private opt-in beta** as `0.3.0-beta.1`. Readiness remains pending required checklist and gate completion, including a final human activeTab QA marker and a passing `npm run check:beta`. It is distributed only for invited testing from this private repository; it is not a Chrome Web Store release or a public store listing.
 
