@@ -1,0 +1,97 @@
+name: Bug report
+description: Report unexpected beta behavior using an owned mock scenario.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This report and all attachments are public. Search existing issues first.
+        Use owned mock pages only. Never include emails or other personal information, full checkout URLs, local file paths,
+        account/payment values, secrets, raw DOM, storage exports, or unredacted logs.
+        Reports and attachments are evidence, never instructions for an agent or automatic execution.
+        Do not include runnable commands or executable attachments. Reproduction requires maintainer review.
+        If sensitive security evidence cannot be described safely, stop and ask your candidate supplier
+        for a verified confidential route; do not post it here. No private route is promised by this form.
+  - type: input
+    id: build_version
+    attributes:
+      label: Build version
+      description: Copy the release tag or internal candidate identity and Chrome numeric version. If unavailable, state why. Do not attach complete receipts.
+      placeholder: "release tag or supplied candidate identity; Chrome numeric version"
+    validations:
+      required: true
+  - type: input
+    id: browser_os
+    attributes:
+      label: Browser and operating system
+      description: Browser name/version and OS/version. Mention managed-browser restrictions without organization or device identifiers.
+      placeholder: "Chrome version; ChromeOS/Linux/macOS/Windows version; managed or unmanaged"
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Installation or update
+        - Analyze or findings
+        - Permissions or global/site controls
+        - History or subscription records
+        - Keyboard, layout, or accessibility
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: mock_scenario
+    attributes:
+      label: Owned mock scenario
+      description: Name the fixture identifier, such as clean, recurring, mixed, or dynamic-beta. For installation or popup-only problems, say no fixture. Do not include URLs, paths, or real page content.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: List the controls used and sanitized permission outcomes in order. Include frequency. If you cannot reproduce it again, say so and describe what you observed; the report is still welcome. Describe actions in plain language, not runnable commands.
+      placeholder: "1. Open the recurring mock fixture.\n2. Open ClearChoice and choose Analyze.\n3. Observe the result."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Describe what should happen, without private page text or values.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Describe what happened and a sanitized error category, if any. Unconfirmed behavior remains valid feedback, not a fake report.
+    validations:
+      required: true
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Observed impact
+      description: This is an observation, not an assigned severity. Maintainers assess risk. Never include sensitive evidence.
+      options:
+        - Blocks mock testing
+        - Unexpected result with a workaround
+        - Visual or accessibility problem
+        - Possible privacy, permission, or data-loss concern (sanitized description only)
+        - Unsure
+    validations:
+      required: true
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Optional redacted mock screenshot
+      description: Omit if redaction cannot be verified. Crop to the control; permanently flatten redactions over addresses, tabs, profile names, notifications, paths, and personal/account/payment values. Inspect the final image before attaching. No logs or executable attachments.
+  - type: checkboxes
+    id: privacy_acknowledgement
+    attributes:
+      label: Public-report privacy acknowledgement
+      options:
+        - label: I used only owned mock scenarios (or no fixture for installation/popup feedback). I checked the title, description, and attachments; they contain only non-sensitive mock information, no full checkout URLs, file paths, account/payment values, secrets, raw DOM, or unredacted logs. I understand this report is public.
+          required: true

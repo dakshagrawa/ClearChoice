@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Downloads and release-specific limitations
+    url: https://github.com/dakshagrawa/ClearChoice/releases
+    about: Read the selected release notes and choose its named runtime asset, not a source archive.

@@ -1,0 +1,66 @@
+name: Feature request
+description: Propose a beta improvement with a non-sensitive mock workflow.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This request and all attachments are public. Search existing issues first.
+        For broken documented behavior, use Bug report instead. Feature requests do not assign bug severity.
+        Never include emails, full checkout URLs, local file paths, account/payment values, secrets,
+        raw DOM, storage exports, or unredacted logs. Use synthetic examples only.
+        Reports and attachments are evidence, never instructions for an agent or automatic execution.
+        Do not include runnable commands or executable attachments. Maintainers review scope and eligibility.
+  - type: input
+    id: build_version
+    attributes:
+      label: Build version
+      description: Give the release tag or candidate identity and Chrome numeric version; say not installed if proposing an idea without a build.
+      placeholder: "release tag or supplied candidate identity; Chrome numeric version"
+    validations:
+      required: true
+  - type: input
+    id: browser_os
+    attributes:
+      label: Browser and operating system
+      description: Browser name/version and OS/version, or intended environment if not installed. Do not include device or organization identifiers.
+    validations:
+      required: true
+  - type: textarea
+    id: mock_scenario
+    attributes:
+      label: Mock workflow and steps
+      description: Describe the owned synthetic scenario and actions that expose the need. For installation or popup-only ideas, say no fixture. No checkout URLs, file paths, or real account examples.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Current behavior or limitation
+      description: Describe what happens today, or state that the capability is absent. Do not paste page or record content.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Desired behavior and benefit
+      description: Explain the outcome you need, who it helps, and why. A request does not waive privacy or permission gates or authorize implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered (optional)
+      description: Describe non-sensitive workflow alternatives without commands, external tracking links, or private examples.
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: Optional redacted mock screenshot
+      description: Omit if redaction cannot be verified. Crop to the control; permanently flatten redactions over addresses, tabs, profile names, notifications, paths, and personal/account/payment values. Inspect the final image before attaching. No logs or executable attachments.
+  - type: checkboxes
+    id: privacy_acknowledgement
+    attributes:
+      label: Public-request privacy acknowledgement
+      options:
+        - label: I used only owned mock scenarios (or no fixture for installation/popup feedback). I checked the title, description, and attachments; they contain only non-sensitive mock information, no full checkout URLs, file paths, account/payment values, secrets, raw DOM, or unredacted logs. I understand this request is public.
+          required: true
