@@ -6,7 +6,9 @@ Copyright (c) 2026 Daksh Agrawal. ClearChoice is **proprietary and source-availa
 
 ## Branch status
 
-This public default branch contains older development code. Current tester builds are maintained on [`release/v1-production`](https://github.com/dakshagrawa/ClearChoice/tree/release/v1-production) and distributed through [GitHub Releases](https://github.com/dakshagrawa/ClearChoice/releases). The development notes below describe this older branch, not the current tester release.
+[Tester access and feedback](docs/TESTING.md): available historical build, pending candidate gates, mock-only safety, and public bug/feature reporting.
+
+This public default branch contains older development code. Release work is maintained on [`release/v1-production`](https://github.com/dakshagrawa/ClearChoice/tree/release/v1-production); a branch is not a published or qualified tester build. The available historical prerelease is beta 2, while the newer candidate remains unpublished and pending gates. The development notes below describe this older branch, not current tester access or release acceptance.
 
 ### Historical 0.3.0-beta.1 development notes
 
